@@ -62,6 +62,23 @@ const (
 	RegResult3GPPAndNon3GPP AMFRegistrationResult = 3
 )
 
+// AMFDirection ::= ENUMERATED — who initiated the procedure.
+type AMFDirection int
+
+const (
+	DirNetworkInitiated AMFDirection = 1
+	DirUEInitiated      AMFDirection = 2
+)
+
+// AccessType ::= ENUMERATED.
+type AccessType int
+
+const (
+	AccessThreeGPP    AccessType = 1
+	AccessNonThreeGPP AccessType = 2
+	AccessBoth        AccessType = 3
+)
+
 // FiveGGUTI ::= SEQUENCE. All members are IMPLICIT context-tagged.
 type FiveGGUTI struct {
 	MCC         string `asn1:"tag:1"` // NumericString(3)
@@ -79,6 +96,30 @@ type FiveGGUTI struct {
 type AMFRegistration struct {
 	RegistrationType   AMFRegistrationType   `asn1:"tag:1"`
 	RegistrationResult AMFRegistrationResult `asn1:"tag:2"`
+	SUPI               any                   `asn1:"tag:4,explicit,choice:supi"`
+	PEI                any                   `asn1:"tag:6,explicit,choice:pei,optional"`
+	GPSI               any                   `asn1:"tag:7,explicit,choice:gpsi,optional"`
+	GUTI               FiveGGUTI             `asn1:"tag:8"`
+}
+
+// AMFDeregistration is a slice of TS 33.128 AMFDeregistration: the mandatory
+// deregistrationDirection + accessType, plus the target-identifier optionals.
+// (sUPI/sUCI/pEI/gPSI/gUTI are all OPTIONAL in this record.)
+type AMFDeregistration struct {
+	DeregistrationDirection AMFDirection `asn1:"tag:1"`
+	AccessType              AccessType   `asn1:"tag:2"`
+	SUPI                    any          `asn1:"tag:3,explicit,choice:supi,optional"`
+	PEI                     any          `asn1:"tag:5,explicit,choice:pei,optional"`
+	GPSI                    any          `asn1:"tag:6,explicit,choice:gpsi,optional"`
+	GUTI                    FiveGGUTI    `asn1:"tag:7,optional"` // value+optional: zero-value omitted (lib has no pointer support)
+}
+
+// AMFStartOfInterceptionWithRegisteredUE is a slice of the same-named record,
+// generated when interception is activated for an already-registered UE.
+// Mandatory: registrationResult, sUPI, gUTI. registrationType is OPTIONAL here.
+type AMFStartOfInterceptionWithRegisteredUE struct {
+	RegistrationResult AMFRegistrationResult `asn1:"tag:1"`
+	RegistrationType   AMFRegistrationType   `asn1:"tag:2,optional"`
 	SUPI               any                   `asn1:"tag:4,explicit,choice:supi"`
 	PEI                any                   `asn1:"tag:6,explicit,choice:pei,optional"`
 	GPSI               any                   `asn1:"tag:7,explicit,choice:gpsi,optional"`
@@ -111,6 +152,8 @@ func NewContext() *asn1.Context {
 	})
 	_ = ctx.AddChoice("xiriEvent", []asn1.Choice{
 		{Type: reflect.TypeOf(AMFRegistration{}), Options: "tag:1"},
+		{Type: reflect.TypeOf(AMFDeregistration{}), Options: "tag:2"},
+		{Type: reflect.TypeOf(AMFStartOfInterceptionWithRegisteredUE{}), Options: "tag:4"},
 	})
 	return ctx
 }
