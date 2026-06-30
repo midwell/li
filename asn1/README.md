@@ -24,3 +24,10 @@ encode correctly, mirroring how `aper` treats a nil pointer as an absent
    `syntaxError("…'%s'…")` calls were missing their argument; the option name
    (`args[0]`) is now passed, matching the sibling calls. Needed for the module
    to pass `go vet`/`go test`. Also upstreamable.
+
+3. `decode.go` (`getRawValuesFromBytes`, marked `LOCAL PATCH (omec/li)`): the
+   upstream loop calls `decodeRawValue` on an empty reader and returns EOF, so
+   an empty SEQUENCE fails to decode. An empty SEQUENCE is valid when every
+   member is OPTIONAL and absent (e.g. TS 33.128 `Location`), so the patch
+   stops when the data is exhausted and decodes it into the zero value. Also
+   upstreamable.

@@ -266,6 +266,59 @@ func TestSMFModificationAndReleaseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLocationUpdateRoundTrip(t *testing.T) {
+	ctx := NewContext()
+	lu := AMFLocationUpdate{
+		SUPI: IMSI("262019876543210"),
+		GUTI: FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 9},
+	}
+	der, err := EncodeXIRI(ctx, lu)
+	if err != nil {
+		t.Fatalf("EncodeXIRI: %v", err)
+	}
+	var got XIRIPayload
+	if _, err := ctx.Decode(der, &got); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	r, ok := got.Event.(AMFLocationUpdate)
+	if !ok {
+		t.Fatalf("event decoded as %T, want AMFLocationUpdate", got.Event)
+	}
+	if supi, ok := r.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
+		t.Errorf("SUPI = %#v", r.SUPI)
+	}
+	if r.GUTI.MCC != "262" {
+		t.Errorf("GUTI not round-tripped: %+v", r.GUTI)
+	}
+}
+
+func TestUnsuccessfulProcedureRoundTrip(t *testing.T) {
+	ctx := NewContext()
+	up := AMFUnsuccessfulProcedure{
+		FailedProcedureType: FailedRegistration,
+		FailureCause:        FiveGMMCause(7),
+		SUPI:                IMSI("262019876543210"),
+	}
+	der, err := EncodeXIRI(ctx, up)
+	if err != nil {
+		t.Fatalf("EncodeXIRI: %v", err)
+	}
+	var got XIRIPayload
+	if _, err := ctx.Decode(der, &got); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	r, ok := got.Event.(AMFUnsuccessfulProcedure)
+	if !ok {
+		t.Fatalf("event decoded as %T, want AMFUnsuccessfulProcedure", got.Event)
+	}
+	if r.FailedProcedureType != FailedRegistration {
+		t.Errorf("failedProcedureType = %d", r.FailedProcedureType)
+	}
+	if c, ok := r.FailureCause.(FiveGMMCause); !ok || c != 7 {
+		t.Errorf("failureCause = %#v, want FiveGMMCause(7)", r.FailureCause)
+	}
+}
+
 // TestMissingMandatoryErrors verifies that a nil MANDATORY field is a loud error,
 // not a silently truncated record (the li/asn1 patch returns an error rather
 // than omitting or panicking).

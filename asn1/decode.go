@@ -25,7 +25,6 @@ type expectedFieldElement struct {
 // to the value that will hold the parsed data.
 //
 // See (*Context).DecodeWithOptions() for further details.
-//
 func (ctx *Context) Decode(data []byte, obj interface{}) (rest []byte, err error) {
 	return ctx.DecodeWithOptions(data, obj, "")
 }
@@ -131,7 +130,6 @@ func (ctx *Context) Decode(data []byte, obj interface{}) (rest []byte, err error
 //
 // Similarly, a struct marked with "set" always enforces that same order when
 // decoding in DER.
-//
 func (ctx *Context) DecodeWithOptions(data []byte, obj interface{}, options string) (rest []byte, err error) {
 
 	opts, err := parseOptions(options)
@@ -330,7 +328,6 @@ func (ctx *Context) getUniversalTagByKind(objType reflect.Type, opts *fieldOptio
 	return
 }
 
-//
 func (ctx *Context) getExpectedFieldElements(value reflect.Value) ([]expectedFieldElement, error) {
 	expectedValues := []expectedFieldElement{}
 	for i := 0; i < value.NumField(); i++ {
@@ -377,17 +374,24 @@ func (ctx *Context) getRawValuesFromBytes(data []byte, max int) ([]*rawValue, er
 	rawValues := []*rawValue{}
 	reader := bytes.NewBuffer(data)
 	for i := 0; i < max; i++ {
+		// LOCAL PATCH (omec/li): stop when the data is exhausted instead of
+		// calling decodeRawValue on an empty reader (which returns EOF). This
+		// makes an empty SEQUENCE — valid when every member is OPTIONAL and
+		// absent — decode into the zero value rather than failing.
+		if reader.Len() == 0 {
+			return rawValues, nil
+		}
 		// Parse an Asn.1 element
 		raw, err := decodeRawValue(reader)
 		if err != nil {
 			return nil, err
 		}
 		rawValues = append(rawValues, raw)
-		if reader.Len() == 0 {
-			return rawValues, nil
-		}
 	}
-	return nil, parseError("too many items for Sequence")
+	if reader.Len() != 0 {
+		return nil, parseError("too many items for Sequence")
+	}
+	return rawValues, nil
 }
 
 // matchExpectedValues tries to decode a sequence of raw values based on the

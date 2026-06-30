@@ -126,6 +126,36 @@ type FTEID struct {
 	IPv6Address []byte `asn1:"tag:3,optional"` // OCTET STRING(16)
 }
 
+// Location ::= SEQUENCE — minimal model. All six members are OPTIONAL; we model
+// only locationInfo [1] (and within it only currentLocation), so a Location may
+// be empty. The deeper detail (userLocation → EUTRA/NR/N3GA/..., positioningInfo,
+// the 4G variants, iMSLocation) is deferred to a later increment.
+type Location struct {
+	LocationInfo LocationInfo `asn1:"tag:1,optional"`
+}
+
+// LocationInfo ::= SEQUENCE — minimal: currentLocation only; the rest (userLocation,
+// geoInfo, rATType, timeZone, additionalCellIDs) is deferred.
+type LocationInfo struct {
+	CurrentLocation bool `asn1:"tag:2,optional"`
+}
+
+// AMFFailedProcedureType ::= ENUMERATED.
+type AMFFailedProcedureType int
+
+const (
+	FailedRegistration            AMFFailedProcedureType = 1
+	FailedSMS                     AMFFailedProcedureType = 2
+	FailedPDUSessionEstablishment AMFFailedProcedureType = 3
+)
+
+// FiveGMMCause / FiveGSMCause ::= INTEGER (0..255) — the two AMFFailureCause
+// CHOICE arms. Distinct Go types so the codec can tell them apart.
+type (
+	FiveGMMCause int
+	FiveGSMCause int
+)
+
 // FiveGGUTI ::= SEQUENCE. All members are IMPLICIT context-tagged.
 type FiveGGUTI struct {
 	MCC         string `asn1:"tag:1"` // NumericString(3)
@@ -214,6 +244,28 @@ type SMFPDUSessionRelease struct {
 	DownlinkVolume int64        `asn1:"tag:8,optional"`
 }
 
+// AMFLocationUpdate is a slice of the same-named record. Mandatory: sUPI,
+// location (a minimal Location for now — see Location).
+type AMFLocationUpdate struct {
+	SUPI     any       `asn1:"tag:1,explicit,choice:supi"`
+	PEI      any       `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI     any       `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	GUTI     FiveGGUTI `asn1:"tag:5,optional"`
+	Location Location  `asn1:"tag:6"`
+}
+
+// AMFUnsuccessfulProcedure is a slice of the same-named record. Mandatory:
+// failedProcedureType and failureCause (a CHOICE of 5GMM/5GSM cause).
+type AMFUnsuccessfulProcedure struct {
+	FailedProcedureType AMFFailedProcedureType `asn1:"tag:1"`
+	FailureCause        any                    `asn1:"tag:2,explicit,choice:amfFailureCause"`
+	SUPI                any                    `asn1:"tag:4,explicit,choice:supi,optional"`
+	PEI                 any                    `asn1:"tag:6,explicit,choice:pei,optional"`
+	GPSI                any                    `asn1:"tag:7,explicit,choice:gpsi,optional"`
+	GUTI                FiveGGUTI              `asn1:"tag:8,optional"`
+	Location            Location               `asn1:"tag:9,optional"`
+}
+
 // XIRIPayload ::= SEQUENCE { xIRIPayloadOID [1] RELATIVE-OID, event [2] XIRIEvent }.
 // event is a CHOICE, hence EXPLICIT-tagged.
 type XIRIPayload struct {
@@ -238,10 +290,16 @@ func NewContext() *asn1.Context {
 		{Type: reflect.TypeOf(MSISDN("")), Options: "tag:1"},
 		{Type: reflect.TypeOf(NAI("")), Options: "tag:2"},
 	})
+	_ = ctx.AddChoice("amfFailureCause", []asn1.Choice{
+		{Type: reflect.TypeOf(FiveGMMCause(0)), Options: "tag:1"},
+		{Type: reflect.TypeOf(FiveGSMCause(0)), Options: "tag:2"},
+	})
 	_ = ctx.AddChoice("xiriEvent", []asn1.Choice{
 		{Type: reflect.TypeOf(AMFRegistration{}), Options: "tag:1"},
 		{Type: reflect.TypeOf(AMFDeregistration{}), Options: "tag:2"},
+		{Type: reflect.TypeOf(AMFLocationUpdate{}), Options: "tag:3"},
 		{Type: reflect.TypeOf(AMFStartOfInterceptionWithRegisteredUE{}), Options: "tag:4"},
+		{Type: reflect.TypeOf(AMFUnsuccessfulProcedure{}), Options: "tag:5"},
 		{Type: reflect.TypeOf(SMFPDUSessionEstablishment{}), Options: "tag:6"},
 		{Type: reflect.TypeOf(SMFPDUSessionModification{}), Options: "tag:7"},
 		{Type: reflect.TypeOf(SMFPDUSessionRelease{}), Options: "tag:8"},
