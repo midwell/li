@@ -7,7 +7,7 @@
 // The records are defined in the TS33128Payloads ASN.1 module
 // (DEFINITIONS IMPLICIT TAGS), encoded with BER/DER. We hand-write only the
 // subset of records the AMF/SMF POIs actually emit and encode them with the
-// PromonLogicalis/asn1 library (BER + CHOICE), mirroring SD-Core's house pattern of
+// bundled li/asn1 codec (BER + CHOICE; vendored from PromonLogicalis), mirroring SD-Core's house pattern of
 // typed structs + a reflective tag codec (cf. omec ngapType + aper, which are
 // PER and therefore not reusable for 33.128's BER).
 //
@@ -19,7 +19,7 @@ package iri
 import (
 	"reflect"
 
-	"github.com/PromonLogicalis/asn1"
+	"github.com/omec-project/li/asn1"
 )
 
 // xIRIPayloadOID is the fixed RELATIVE-OID identifying an xIRI payload for

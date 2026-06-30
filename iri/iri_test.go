@@ -75,13 +75,50 @@ func TestEncodeDecodeXIRI(t *testing.T) {
 	t.Logf("wrote %d bytes of DER to %s", len(der), out)
 }
 
-// TestAbsentOptionalChoice documents a known limitation of the Logicalis/asn1
-// library: a nil interface{} field is unwrapped with reflect.Value.Elem()
-// before the optional check, yielding an invalid Value that panics isEmpty.
-// So an ABSENT optional CHOICE field cannot currently be represented as nil.
-// Fix options (follow-up): a one-line guard upstream (treat an invalid Value as
-// empty in encode/isEmpty), vendor a patched copy, or assemble absent optional
-// choice fields via raw values. Mandatory choices and present optionals work.
+// TestAbsentOptionalChoice verifies that absent (nil) optional CHOICE fields are
+// omitted, not encoded — exercising the bundled li/asn1 nil-safety patch.
 func TestAbsentOptionalChoice(t *testing.T) {
-	t.Skip("known Logicalis nil-interface limitation for absent optional CHOICE fields; tracked as follow-up")
+	ctx := NewContext()
+	reg := sampleRegistration()
+	reg.PEI = nil  // optional, absent
+	reg.GPSI = nil // optional, absent
+
+	der, err := EncodeXIRI(ctx, reg)
+	if err != nil {
+		t.Fatalf("EncodeXIRI with absent optionals: %v", err)
+	}
+	// Absent optionals must shrink the encoding versus the all-present sample.
+	full, _ := EncodeXIRI(ctx, sampleRegistration())
+	if len(der) >= len(full) {
+		t.Errorf("absent-optional encoding (%d) not smaller than full (%d)", len(der), len(full))
+	}
+
+	var got XIRIPayload
+	if _, err := ctx.Decode(der, &got); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	r, ok := got.Event.(AMFRegistration)
+	if !ok {
+		t.Fatalf("event decoded as %T", got.Event)
+	}
+	if r.PEI != nil || r.GPSI != nil {
+		t.Errorf("omitted optionals decoded non-nil: PEI=%#v GPSI=%#v", r.PEI, r.GPSI)
+	}
+	// Mandatory fields must still be present and correct.
+	if supi, ok := r.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
+		t.Errorf("SUPI = %#v, want IMSI", r.SUPI)
+	}
+}
+
+// TestMissingMandatoryErrors verifies that a nil MANDATORY field is a loud error,
+// not a silently truncated record (the li/asn1 patch returns an error rather
+// than omitting or panicking).
+func TestMissingMandatoryErrors(t *testing.T) {
+	ctx := NewContext()
+	reg := sampleRegistration()
+	reg.SUPI = nil // mandatory — must not be silently dropped
+
+	if _, err := EncodeXIRI(ctx, reg); err == nil {
+		t.Fatal("expected an error encoding a record with a nil mandatory SUPI, got nil")
+	}
 }
