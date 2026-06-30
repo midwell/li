@@ -194,6 +194,78 @@ func TestEventDiscrimination(t *testing.T) {
 	}
 }
 
+func sampleEstablishment() SMFPDUSessionEstablishment {
+	return SMFPDUSessionEstablishment{
+		SUPI:           IMSI("262019876543210"),
+		PDUSessionID:   5,
+		GTPTunnelID:    FTEID{TEID: 3735928559, IPv4Address: []byte{10, 0, 0, 1}},
+		PDUSessionType: PDUSessionTypeIPv4,
+		SNSSAI:         SNSSAI{SliceServiceType: 1, SliceDifferentiator: []byte{0x00, 0x00, 0x7b}},
+		DNN:            "internet",
+		RequestType:    SMRequestInitial,
+		AccessType:     AccessThreeGPP,
+	}
+}
+
+func TestSMFEstablishmentRoundTrip(t *testing.T) {
+	ctx := NewContext()
+	der, err := EncodeXIRI(ctx, sampleEstablishment())
+	if err != nil {
+		t.Fatalf("EncodeXIRI: %v", err)
+	}
+	var got XIRIPayload
+	if _, err := ctx.Decode(der, &got); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	r, ok := got.Event.(SMFPDUSessionEstablishment)
+	if !ok {
+		t.Fatalf("event decoded as %T, want SMFPDUSessionEstablishment", got.Event)
+	}
+	if r.PDUSessionID != 5 || r.PDUSessionType != PDUSessionTypeIPv4 || r.DNN != "internet" || r.RequestType != SMRequestInitial {
+		t.Errorf("scalars: id=%d type=%d dnn=%q req=%d", r.PDUSessionID, r.PDUSessionType, r.DNN, r.RequestType)
+	}
+	if r.GTPTunnelID.TEID != 3735928559 || !bytes.Equal(r.GTPTunnelID.IPv4Address, []byte{10, 0, 0, 1}) {
+		t.Errorf("FTEID: %+v", r.GTPTunnelID)
+	}
+	if r.SNSSAI.SliceServiceType != 1 || !bytes.Equal(r.SNSSAI.SliceDifferentiator, []byte{0x00, 0x00, 0x7b}) {
+		t.Errorf("SNSSAI: %+v", r.SNSSAI)
+	}
+	if supi, ok := r.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
+		t.Errorf("SUPI: %#v", r.SUPI)
+	}
+}
+
+func TestSMFModificationAndReleaseRoundTrip(t *testing.T) {
+	ctx := NewContext()
+
+	mod := SMFPDUSessionModification{SUPI: IMSI("262019876543210"), RequestType: SMRequestModification, PDUSessionID: 5}
+	der, err := EncodeXIRI(ctx, mod)
+	if err != nil {
+		t.Fatalf("modification encode: %v", err)
+	}
+	var g1 XIRIPayload
+	if _, err := ctx.Decode(der, &g1); err != nil {
+		t.Fatalf("modification decode: %v", err)
+	}
+	if m, ok := g1.Event.(SMFPDUSessionModification); !ok || m.RequestType != SMRequestModification || m.PDUSessionID != 5 {
+		t.Errorf("modification: %#v", g1.Event)
+	}
+
+	rel := SMFPDUSessionRelease{SUPI: IMSI("262019876543210"), PDUSessionID: 5, UplinkVolume: 1024, DownlinkVolume: 8192}
+	der, err = EncodeXIRI(ctx, rel)
+	if err != nil {
+		t.Fatalf("release encode: %v", err)
+	}
+	var g2 XIRIPayload
+	if _, err := ctx.Decode(der, &g2); err != nil {
+		t.Fatalf("release decode: %v", err)
+	}
+	r, ok := g2.Event.(SMFPDUSessionRelease)
+	if !ok || r.PDUSessionID != 5 || r.UplinkVolume != 1024 || r.DownlinkVolume != 8192 {
+		t.Errorf("release: %#v", g2.Event)
+	}
+}
+
 // TestMissingMandatoryErrors verifies that a nil MANDATORY field is a loud error,
 // not a silently truncated record (the li/asn1 patch returns an error rather
 // than omitting or panicking).

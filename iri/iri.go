@@ -79,6 +79,53 @@ const (
 	AccessBoth        AccessType = 3
 )
 
+// --- SMF PDU-session types ---
+
+// PDUSessionID ::= INTEGER (0..255).
+type PDUSessionID int
+
+// PDUSessionType ::= ENUMERATED.
+type PDUSessionType int
+
+const (
+	PDUSessionTypeIPv4         PDUSessionType = 1
+	PDUSessionTypeIPv6         PDUSessionType = 2
+	PDUSessionTypeIPv4v6       PDUSessionType = 3
+	PDUSessionTypeUnstructured PDUSessionType = 4
+	PDUSessionTypeEthernet     PDUSessionType = 5
+)
+
+// DNN ::= UTF8String — Data Network Name.
+type DNN string
+
+// FiveGSMRequestType ::= ENUMERATED.
+type FiveGSMRequestType int
+
+const (
+	SMRequestInitial           FiveGSMRequestType = 1
+	SMRequestExisting          FiveGSMRequestType = 2
+	SMRequestInitialEmergency  FiveGSMRequestType = 3
+	SMRequestExistingEmergency FiveGSMRequestType = 4
+	SMRequestModification      FiveGSMRequestType = 5
+	SMRequestReserved          FiveGSMRequestType = 6
+	SMRequestMAPDU             FiveGSMRequestType = 7
+)
+
+// SNSSAI ::= SEQUENCE — the slice identifier (SST + optional SD).
+type SNSSAI struct {
+	SliceServiceType    int    `asn1:"tag:1"`          // SST (0..255)
+	SliceDifferentiator []byte `asn1:"tag:2,optional"` // SD, OCTET STRING(3)
+	MappedHPLMNSST      int    `asn1:"tag:3,optional"`
+	MappedHPLMNSD       []byte `asn1:"tag:4,optional"`
+}
+
+// FTEID ::= SEQUENCE — a GTP-U F-TEID (tunnel id + endpoint IP).
+type FTEID struct {
+	TEID        int64  `asn1:"tag:1"`          // 0..4294967295
+	IPv4Address []byte `asn1:"tag:2,optional"` // OCTET STRING(4)
+	IPv6Address []byte `asn1:"tag:3,optional"` // OCTET STRING(16)
+}
+
 // FiveGGUTI ::= SEQUENCE. All members are IMPLICIT context-tagged.
 type FiveGGUTI struct {
 	MCC         string `asn1:"tag:1"` // NumericString(3)
@@ -126,6 +173,47 @@ type AMFStartOfInterceptionWithRegisteredUE struct {
 	GUTI               FiveGGUTI             `asn1:"tag:8"`
 }
 
+// SMFPDUSessionEstablishment is a slice of the same-named TS 33.128 record.
+// Mandatory: pDUSessionID, gTPTunnelID, pDUSessionType, dNN, requestType.
+// Deferred optionals (deeper subtrees): uEEndpoint [9] (SEQUENCE OF the
+// UEEndpointAddress CHOICE), location [11], and the long tail.
+type SMFPDUSessionEstablishment struct {
+	SUPI           any                `asn1:"tag:1,explicit,choice:supi,optional"`
+	PEI            any                `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI           any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	PDUSessionID   PDUSessionID       `asn1:"tag:5"`
+	GTPTunnelID    FTEID              `asn1:"tag:6"`
+	PDUSessionType PDUSessionType     `asn1:"tag:7"`
+	SNSSAI         SNSSAI             `asn1:"tag:8,optional"`
+	DNN            DNN                `asn1:"tag:12"`
+	RequestType    FiveGSMRequestType `asn1:"tag:15"`
+	AccessType     AccessType         `asn1:"tag:16,optional"`
+}
+
+// SMFPDUSessionModification is a slice of the same-named record. Only
+// requestType is mandatory.
+type SMFPDUSessionModification struct {
+	SUPI         any                `asn1:"tag:1,explicit,choice:supi,optional"`
+	PEI          any                `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI         any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	SNSSAI       SNSSAI             `asn1:"tag:5,optional"`
+	RequestType  FiveGSMRequestType `asn1:"tag:8"`
+	AccessType   AccessType         `asn1:"tag:9,optional"`
+	PDUSessionID PDUSessionID       `asn1:"tag:11,optional"` // note: value 0 indistinguishable from absent
+}
+
+// SMFPDUSessionRelease is a slice of the same-named record. Mandatory: sUPI,
+// pDUSessionID. Deferred optionals: timeOfFirst/LastPacket [5][6] (GeneralizedTime),
+// location [9], and the cause tail.
+type SMFPDUSessionRelease struct {
+	SUPI           any          `asn1:"tag:1,explicit,choice:supi"`
+	PEI            any          `asn1:"tag:2,explicit,choice:pei,optional"`
+	GPSI           any          `asn1:"tag:3,explicit,choice:gpsi,optional"`
+	PDUSessionID   PDUSessionID `asn1:"tag:4"`
+	UplinkVolume   int64        `asn1:"tag:7,optional"`
+	DownlinkVolume int64        `asn1:"tag:8,optional"`
+}
+
 // XIRIPayload ::= SEQUENCE { xIRIPayloadOID [1] RELATIVE-OID, event [2] XIRIEvent }.
 // event is a CHOICE, hence EXPLICIT-tagged.
 type XIRIPayload struct {
@@ -154,6 +242,9 @@ func NewContext() *asn1.Context {
 		{Type: reflect.TypeOf(AMFRegistration{}), Options: "tag:1"},
 		{Type: reflect.TypeOf(AMFDeregistration{}), Options: "tag:2"},
 		{Type: reflect.TypeOf(AMFStartOfInterceptionWithRegisteredUE{}), Options: "tag:4"},
+		{Type: reflect.TypeOf(SMFPDUSessionEstablishment{}), Options: "tag:6"},
+		{Type: reflect.TypeOf(SMFPDUSessionModification{}), Options: "tag:7"},
+		{Type: reflect.TypeOf(SMFPDUSessionRelease{}), Options: "tag:8"},
 	})
 	return ctx
 }
