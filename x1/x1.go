@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -65,6 +66,9 @@ type Server struct {
 	neID       string
 	now        func() time.Time
 	onActivate func(types.InterceptTask)
+
+	mu       sync.Mutex
+	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
 }
 
 // Option customises a Server.
@@ -119,11 +123,43 @@ func (s *Server) Process(body []byte) (*X1Response, error) {
 	if err := xml.Unmarshal(body, &req); err != nil {
 		return nil, fmt.Errorf("x1: malformed request: %w", err)
 	}
+	// Any well-formed X1 message means the ADMF is alive — feeds the keepalive
+	// watchdog (TS 103 221-1: the ADMF sends KeepaliveRequest at least every
+	// TIME_P1; if they lapse the NE purges tasking).
+	s.recordActivity()
 	resp := &X1Response{}
 	for _, m := range req.Messages {
 		resp.Messages = append(resp.Messages, s.apply(m))
 	}
 	return resp, nil
+}
+
+func (s *Server) recordActivity() {
+	s.mu.Lock()
+	s.lastSeen = s.now()
+	s.mu.Unlock()
+}
+
+// WatchKeepalive enforces the TS 103 221-1 keepalive fail-safe: if no X1 message
+// arrives from the ADMF within timeout, all tasking is purged (the controlling
+// ADMF is presumed gone, so warrants must not persist). It blocks — run it in a
+// goroutine; timeout must be > 0.
+func (s *Server) WatchKeepalive(timeout time.Duration) {
+	s.recordActivity() // seed, so a freshly-started NE does not purge immediately
+	ticker := time.NewTicker(timeout / 2)
+	for range ticker.C {
+		s.purgeIfLapsed(timeout)
+	}
+}
+
+// purgeIfLapsed clears all tasking when no X1 message has arrived within timeout.
+func (s *Server) purgeIfLapsed(timeout time.Duration) {
+	s.mu.Lock()
+	idle := s.now().Sub(s.lastSeen)
+	s.mu.Unlock()
+	if idle > timeout {
+		s.store.DeactivateAll()
+	}
 }
 
 func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
@@ -162,6 +198,12 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			s.store.Deactivate(types.XID(m.XID))
 		}
 		rm.Type = "DeactivateTaskResponse"
+	case "KeepaliveRequest":
+		// Liveness from the ADMF (TS 103 221-1). Process already recorded the
+		// activity that resets the watchdog; just acknowledge.
+		rm.Type = "KeepaliveResponse"
+	case "PingRequest":
+		rm.Type = "PingResponse"
 	default:
 		err = fmt.Errorf("unsupported request type %q", localType(m.Type))
 	}

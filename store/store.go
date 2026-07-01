@@ -79,6 +79,16 @@ func (s *Store) unindex(xid types.XID) {
 }
 
 // Get returns the active task for an XID.
+// DeactivateAll removes every active task. It backs the X1 keepalive fail-safe:
+// per TS 103 221-1 the NE purges all tasking when the controlling ADMF goes
+// silent, so warrants never outlive an operational controller.
+func (s *Store) DeactivateAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.byXID)
+	clear(s.byTarget)
+}
+
 func (s *Store) Get(xid types.XID) (types.InterceptTask, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

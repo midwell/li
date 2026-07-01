@@ -5,14 +5,111 @@ package x1
 
 import (
 	"encoding/xml"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/omec-project/li/store"
 	"github.com/omec-project/li/types"
 )
+
+// keepaliveXML is a TS 103 221-1 KeepaliveRequest (ADMF→NE).
+const keepaliveXML = `<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:KeepaliveRequest">
+    <ns1:admfIdentifier>admfID</ns1:admfIdentifier>
+    <ns1:neIdentifier>neID</ns1:neIdentifier>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>tx-ka</ns1:x1TransactionId>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`
+
+func supiTarget(v string) types.TargetIdentifier {
+	return types.TargetIdentifier{Type: types.TargetSUPI, Value: v}
+}
+
+// TestReportNEIssue checks the NE-initiated fault report is a well-formed X1
+// ReportNEIssueRequest POSTed to the ADMF, carrying NE-level status only.
+func TestReportNEIssue(t *testing.T) {
+	var got []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	r := NewReporter(ts.URL, "admfID", "neID", nil)
+	if err := r.ReportNEIssue(NEIssueX3EgressDown, "X3 egress socket unavailable"); err != nil {
+		t.Fatalf("ReportNEIssue: %v", err)
+	}
+
+	body := string(got)
+	for _, want := range []string{
+		`xsi:type="ns1:ReportNEIssueRequest"`,
+		"<ns1:neIdentifier>neID</ns1:neIdentifier>",
+		"<ns1:typeOfNeIssueMessage>x3EgressDown</ns1:typeOfNeIssueMessage>",
+		"X3 egress socket unavailable",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("report body missing %q\n%s", want, body)
+		}
+	}
+	var probe struct{}
+	if err := xml.Unmarshal(got, &probe); err != nil {
+		t.Errorf("report body is not valid XML: %v", err)
+	}
+}
+
+// TestKeepaliveWatchdogPurgesTasking checks the TS 103 221-1 fail-safe: if no X1
+// message arrives within the window, all tasking is purged.
+func TestKeepaliveWatchdogPurgesTasking(t *testing.T) {
+	st := store.New()
+	st.Activate(types.InterceptTask{XID: "a", Target: supiTarget("1")})
+	srv := NewServer(st, "neID")
+	now := time.Now()
+	srv.now = func() time.Time { return now }
+	srv.recordActivity() // ADMF last seen now
+
+	now = now.Add(3 * time.Second) // within a 5s window
+	srv.purgeIfLapsed(5 * time.Second)
+	if len(st.Match(supiTarget("1"))) != 1 {
+		t.Fatal("purged tasking while still within the keepalive window")
+	}
+
+	now = now.Add(5 * time.Second) // now 8s idle > 5s
+	srv.purgeIfLapsed(5 * time.Second)
+	if len(st.Match(supiTarget("1"))) != 0 {
+		t.Error("keepalive lapsed but tasking was not purged")
+	}
+}
+
+// TestKeepaliveResetsWatchdog checks that an inbound KeepaliveRequest is
+// acknowledged and resets the watchdog.
+func TestKeepaliveResetsWatchdog(t *testing.T) {
+	st := store.New()
+	st.Activate(types.InterceptTask{XID: "a", Target: supiTarget("1")})
+	srv := NewServer(st, "neID")
+	now := time.Now()
+	srv.now = func() time.Time { return now }
+	srv.recordActivity()
+
+	now = now.Add(4 * time.Second)
+	resp, err := srv.Process([]byte(keepaliveXML))
+	if err != nil {
+		t.Fatalf("keepalive: %v", err)
+	}
+	if resp.Messages[0].Type != "KeepaliveResponse" || resp.Messages[0].OK == "" {
+		t.Errorf("keepalive response = %+v, want KeepaliveResponse/OK", resp.Messages[0])
+	}
+
+	now = now.Add(4 * time.Second) // 4s since the keepalive, < 5s window
+	srv.purgeIfLapsed(5 * time.Second)
+	if len(st.Match(supiTarget("1"))) != 1 {
+		t.Error("keepalive should have reset the watchdog, but tasking was purged")
+	}
+}
 
 // activateXML is the ETSI TS 103 221-1 ActivateTaskRequest from the sipgate
 // simulator's sim-to-ne examples — an independent implementation's real output.
