@@ -10,9 +10,15 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"sync"
 	"text/template"
 	"time"
 )
+
+// reportThrottle is the minimum interval between reports of the same issue type,
+// so a persistent fault (e.g. an unreachable MDF hit on every event) does not
+// flood the ADMF.
+const reportThrottle = 30 * time.Second
 
 // TS 103 221-1 typeOfNeIssueMessage values for the LI-plane faults a POI reports.
 // These are NE-level (no target/warrant identifier). The exact XSD enumeration
@@ -36,6 +42,9 @@ type Reporter struct {
 	neID    string
 	client  *http.Client
 	now     func() time.Time
+
+	mu       sync.Mutex
+	lastSent map[string]time.Time // per issue type, for throttling
 }
 
 // NewReporter returns a Reporter that POSTs to the ADMF's X1 endpoint admfURL
@@ -49,7 +58,8 @@ func NewReporter(admfURL, admfID, neID string, tlsConfig *tls.Config) *Reporter 
 			Transport: &http.Transport{TLSClientConfig: tlsConfig},
 			Timeout:   10 * time.Second,
 		},
-		now: func() time.Time { return time.Now().UTC() },
+		now:      func() time.Time { return time.Now().UTC() },
+		lastSent: make(map[string]time.Time),
 	}
 }
 
@@ -80,6 +90,16 @@ var reportTemplate = template.Must(template.New("x1report").Funcs(template.FuncM
 // human-readable NE-level text that MUST NOT contain a target or warrant
 // identifier. Best-effort — the caller may ignore the returned error.
 func (r *Reporter) ReportNEIssue(issueType, description string) error {
+	// Throttle repeats of the same issue type so a persistent fault does not
+	// flood the ADMF; safe to call on every failed event.
+	r.mu.Lock()
+	if last, ok := r.lastSent[issueType]; ok && r.now().Sub(last) < reportThrottle {
+		r.mu.Unlock()
+		return nil
+	}
+	r.lastSent[issueType] = r.now()
+	r.mu.Unlock()
+
 	var body bytes.Buffer
 	if err := reportTemplate.Execute(&body, struct {
 		AdmfID, NeID, Timestamp, TxID, IssueType, Description string
