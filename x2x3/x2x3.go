@@ -195,10 +195,10 @@ func Unmarshal(b []byte) (*PDU, int, error) {
 	if headerLen < MandatoryHeaderLength {
 		return nil, 0, fmt.Errorf("x2x3: header length %d below mandatory %d", headerLen, MandatoryHeaderLength)
 	}
-	total := int(headerLen) + int(payloadLen)
-	if len(b) < total {
+	if uint64(headerLen)+uint64(payloadLen) > uint64(len(b)) {
 		return nil, 0, ErrIncomplete
 	}
+	total := int(headerLen) + int(payloadLen) // safe: the uint64 check above bounds the sum by len(b) ≤ maxInt
 	if b[0] != MajorVersion || b[1] != MinorVersion {
 		return nil, 0, fmt.Errorf("x2x3: unsupported version %d.%d", b[0], b[1])
 	}

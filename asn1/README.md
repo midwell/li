@@ -31,3 +31,11 @@ encode correctly, mirroring how `aper` treats a nil pointer as an absent
    member is OPTIONAL and absent (e.g. TS 33.128 `Location`), so the patch
    stops when the data is exhausted and decodes it into the zero value. Also
    upstreamable.
+
+4. `raw.go` (`decodeRawValue`, marked `LOCAL PATCH (omec/li) 4/4`): the upstream
+   decoder does `make([]byte, length)` straight from the wire length field with
+   no bound, so a crafted definite-length element triggers a multi-gigabyte
+   allocation (OOM) or a `makeslice` panic — a remote DoS for any caller that
+   decodes peer-supplied BER (e.g. an MDF/receiver). The patch rejects any
+   element longer than `maxElementLength` (16 MiB, far above any real xIRI/X2/X3
+   element) before allocating. Also upstreamable.

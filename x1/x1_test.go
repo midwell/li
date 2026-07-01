@@ -100,7 +100,20 @@ func TestOnActivateCallback(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 	if len(got) != 1 {
-		t.Errorf("callback fired %d times after modify, want 1 (modify must not re-scan)", len(got))
+		t.Errorf("callback fired %d times after same-target modify, want 1 (must not re-scan)", len(got))
+	}
+
+	// A modify that RETARGETS to a different identifier must re-fire — the new
+	// target's already-present state needs a start-of-interception scan too.
+	retargetXML := strings.Replace(modifyXML, "2125552368", "5551234567", 1)
+	if _, err := srv.Process([]byte(retargetXML)); err != nil {
+		t.Fatalf("retarget modify: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("callback fired %d times after retarget modify, want 2", len(got))
+	}
+	if got[1].Target.Value != "5551234567" {
+		t.Errorf("retarget callback target = %q, want 5551234567", got[1].Target.Value)
 	}
 }
 

@@ -7,6 +7,11 @@ import (
 	"strconv"
 )
 
+// maxElementLength caps a single BER element's definite length before it is
+// allocated (LOCAL PATCH omec/li 4/4 — see README.md; guards decodeRawValue
+// against a crafted length field). 16 MiB is far above any real xIRI/X2/X3 element.
+const maxElementLength = 16 << 20
+
 // ASN.1 class tags.
 const (
 	classUniversal       = 0x00
@@ -177,6 +182,13 @@ func decodeRawValue(reader io.Reader) (*rawValue, error) {
 	// Indefinite form
 	var content []byte
 	if !indefinite {
+		// LOCAL PATCH (omec/li) 4/4: cap the definite length before allocating, so
+		// a crafted length field cannot force a huge make([]byte) (remote OOM or a
+		// makeslice panic). xIRI/X2/X3 elements are tiny, so this ceiling is very
+		// generous. See README.md.
+		if length > maxElementLength {
+			return nil, parseError("element length %d exceeds maximum %d", length, maxElementLength)
+		}
 		content = make([]byte, length)
 		_, err = io.ReadFull(reader, content)
 		if err != nil {

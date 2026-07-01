@@ -138,12 +138,20 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	var err error
 	switch localType(m.Type) {
 	case "ActivateTaskRequest", "ModifyTaskRequest":
+		// StartOfInterception fires on a fresh activation, and on a modify that
+		// retargets to a *different* identifier (the new target's already-present
+		// state needs a scan too) — but not on a modify that leaves the target
+		// unchanged, which would re-emit for UEs already covered.
+		isModify := localType(m.Type) == "ModifyTaskRequest"
+		var prevTarget types.TargetIdentifier
+		if isModify && m.TaskDetails != nil {
+			if old, ok := s.store.Get(types.XID(m.TaskDetails.XID)); ok {
+				prevTarget = old.Target
+			}
+		}
 		var task types.InterceptTask
 		task, err = s.activate(m)
-		// StartOfInterception applies only to a fresh activation; a modify of an
-		// already-active task must not re-scan (it would re-emit for UEs already
-		// covered).
-		if err == nil && s.onActivate != nil && localType(m.Type) == "ActivateTaskRequest" {
+		if err == nil && s.onActivate != nil && (!isModify || task.Target != prevTarget) {
 			s.onActivate(task)
 		}
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)

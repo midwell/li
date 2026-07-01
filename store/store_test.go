@@ -50,6 +50,31 @@ func TestMultiAgencyIsolation(t *testing.T) {
 	}
 }
 
+// TestMatchReturnsIsolatedSlices checks that a caller mutating a returned task's
+// Products/Deliveries slices cannot corrupt the store's backing arrays.
+func TestMatchReturnsIsolatedSlices(t *testing.T) {
+	st := New()
+	target := supi("262019876543210")
+	st.Activate(types.InterceptTask{
+		XID: "a", Target: target,
+		Products:   []types.ProductType{types.ProductIRI},
+		Deliveries: []types.DeliveryEndpoint{{Type: types.DeliveryX2, Address: "mdf2:1"}},
+	})
+
+	got := st.Match(target)[0]
+	got.Products[0] = types.ProductCC
+	got.Products = append(got.Products, types.ProductCC)
+	got.Deliveries[0].Address = "attacker:0"
+
+	after := st.Match(target)[0]
+	if len(after.Products) != 1 || after.Products[0] != types.ProductIRI {
+		t.Errorf("store Products mutated via returned slice: %v", after.Products)
+	}
+	if after.Deliveries[0].Address != "mdf2:1" {
+		t.Errorf("store Deliveries mutated via returned slice: %v", after.Deliveries)
+	}
+}
+
 func TestActivateMatchDeactivate(t *testing.T) {
 	s := New()
 	target := supi("imsi-001010000000001")

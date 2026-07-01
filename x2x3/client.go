@@ -19,9 +19,10 @@ import (
 // The caller supplies the *tls.Config — for LI this is mtls.ClientTLS(), which
 // presents the network element's LI certificate and verifies the MDF.
 type Client struct {
-	addr        string
-	tlsConfig   *tls.Config
-	dialTimeout time.Duration
+	addr         string
+	tlsConfig    *tls.Config
+	dialTimeout  time.Duration
+	writeTimeout time.Duration
 
 	mu   sync.Mutex
 	conn net.Conn
@@ -29,7 +30,7 @@ type Client struct {
 
 // NewClient returns a delivery client for the MDF at addr ("host:port").
 func NewClient(addr string, tlsConfig *tls.Config) *Client {
-	return &Client{addr: addr, tlsConfig: tlsConfig, dialTimeout: 10 * time.Second}
+	return &Client{addr: addr, tlsConfig: tlsConfig, dialTimeout: 10 * time.Second, writeTimeout: 5 * time.Second}
 }
 
 // Send marshals pdu and writes it to the MDF, (re)connecting as needed. A PDU
@@ -74,6 +75,12 @@ func (c *Client) dialLocked() error {
 }
 
 func (c *Client) writeLocked(b []byte) error {
+	// Bound the write so a stalled/half-open MDF cannot block delivery (and every
+	// other Send behind the mutex) indefinitely; a timeout is treated as any other
+	// write error — drop + one redial.
+	if c.writeTimeout > 0 {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+	}
 	_, err := c.conn.Write(b)
 	return err
 }

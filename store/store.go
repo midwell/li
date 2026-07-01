@@ -83,7 +83,20 @@ func (s *Store) Get(xid types.XID) (types.InterceptTask, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t, ok := s.byXID[xid]
-	return t, ok
+	return cloneTask(t), ok
+}
+
+// cloneTask copies t's slice fields so a caller cannot mutate the store's backing
+// arrays (Products/Deliveries) outside the lock — a data race and cross-warrant
+// corruption. The value fields are already copied by the return-by-value.
+func cloneTask(t types.InterceptTask) types.InterceptTask {
+	if t.Products != nil {
+		t.Products = append([]types.ProductType(nil), t.Products...)
+	}
+	if t.Deliveries != nil {
+		t.Deliveries = append([]types.DeliveryEndpoint(nil), t.Deliveries...)
+	}
+	return t
 }
 
 // Match returns the active tasks targeting the given identifier. The result is a
@@ -97,7 +110,7 @@ func (s *Store) Match(id types.TargetIdentifier) []types.InterceptTask {
 	}
 	out := make([]types.InterceptTask, 0, len(set))
 	for xid := range set {
-		out = append(out, s.byXID[xid])
+		out = append(out, cloneTask(s.byXID[xid]))
 	}
 	return out
 }
