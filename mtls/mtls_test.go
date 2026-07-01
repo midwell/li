@@ -148,6 +148,43 @@ func TestMutualTLS(t *testing.T) {
 	}
 }
 
+// TestClientVerifiesMDF checks the X2/X3 delivery side: the client must verify
+// the MDF and refuse to deliver intercept product to a server whose certificate
+// is not signed by the LI CA — and it must never disable verification.
+func TestClientVerifiesMDF(t *testing.T) {
+	ca, caKey, caPEM := newCA(t, "LI Test CA")
+	clientCert, clientKey := newLeaf(t, "poi", ca, caKey)
+	clientMat := writeMaterial(t, t.TempDir(), clientCert, clientKey, caPEM)
+
+	if clientMat.ClientTLS().InsecureSkipVerify {
+		t.Fatal("ClientTLS must never set InsecureSkipVerify")
+	}
+
+	// A rogue MDF whose server cert is signed by an untrusted CA. It requires no
+	// client cert, so the only property under test is the client verifying the
+	// server.
+	rogueCA, rogueKey, _ := newCA(t, "Rogue CA")
+	rogueServerCert, rogueServerKey := newLeaf(t, "rogue-mdf", rogueCA, rogueKey)
+	rogueTLSCert, err := tls.X509KeyPair(rogueServerCert, rogueServerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{rogueTLSCert}}
+	ts.StartTLS()
+	defer ts.Close()
+
+	c := &http.Client{Transport: &http.Transport{TLSClientConfig: clientMat.ClientTLS()}}
+	resp, err := c.Get(ts.URL)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Error("X2/X3 client accepted an MDF whose cert is not signed by the LI CA")
+	}
+}
+
 func TestLoadRejectsBadInputs(t *testing.T) {
 	dir := t.TempDir()
 	ca, caKey, caPEM := newCA(t, "LI Test CA")

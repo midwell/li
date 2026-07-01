@@ -13,6 +13,43 @@ func supi(v string) types.TargetIdentifier {
 	return types.TargetIdentifier{Type: types.TargetSUPI, Value: v}
 }
 
+// TestMultiAgencyIsolation checks that two agencies tasking the same target
+// under distinct warrants (XIDs) coexist, are matched together, and are removed
+// independently — one agency's activity never affects the other's.
+func TestMultiAgencyIsolation(t *testing.T) {
+	st := New()
+	target := supi("262019876543210")
+	a := types.InterceptTask{XID: "agency-a", Target: target, Products: []types.ProductType{types.ProductIRI}}
+	b := types.InterceptTask{XID: "agency-b", Target: target, Products: []types.ProductType{types.ProductIRI, types.ProductCC}}
+	if !st.Activate(a) || !st.Activate(b) {
+		t.Fatal("activate failed")
+	}
+
+	matches := st.Match(target)
+	if len(matches) != 2 {
+		t.Fatalf("Match returned %d tasks, want 2 (both agencies)", len(matches))
+	}
+	seen := map[types.XID]bool{}
+	for _, m := range matches {
+		seen[m.XID] = true
+	}
+	if !seen["agency-a"] || !seen["agency-b"] {
+		t.Errorf("Match XIDs = %v, want both agency-a and agency-b", seen)
+	}
+
+	// Deactivating agency A must leave agency B's warrant fully intact.
+	if !st.Deactivate("agency-a") {
+		t.Fatal("deactivate agency-a failed")
+	}
+	after := st.Match(target)
+	if len(after) != 1 || after[0].XID != "agency-b" {
+		t.Errorf("after deactivating agency-a, Match = %+v, want only agency-b", after)
+	}
+	if _, ok := st.Get("agency-b"); !ok {
+		t.Error("agency-b warrant lost when agency-a was deactivated")
+	}
+}
+
 func TestActivateMatchDeactivate(t *testing.T) {
 	s := New()
 	target := supi("imsi-001010000000001")
