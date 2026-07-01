@@ -117,6 +117,40 @@ func TestOnActivateCallback(t *testing.T) {
 	}
 }
 
+// TestParseTargetIdentifierTypes locks in the target-identifier element names
+// against the ETSI TS 103 221-1 XSD (verified verbatim: supiimsi/supinai/
+// peiImei/peiImeisv/gpsiMsisdn/imsi/e164Number — the casing is the schema's own).
+// Previously only e164Number was exercised.
+func TestParseTargetIdentifierTypes(t *testing.T) {
+	cases := []struct {
+		elem, val string
+		want      types.TargetIdentifierType
+	}{
+		{"supiimsi", "262019876543210", types.TargetSUPI},
+		{"supinai", "user@example.com", types.TargetSUPI},
+		{"peiImei", "35342500000001", types.TargetPEI},
+		{"peiImeisv", "3534250000000151", types.TargetPEI},
+		{"gpsiMsisdn", "4915123456789", types.TargetGPSI},
+	}
+	for _, c := range cases {
+		st := store.New()
+		srv := NewServer(st, "neID")
+		body := strings.Replace(activateXML,
+			"<ns1:e164Number>2125552368</ns1:e164Number>",
+			"<ns1:"+c.elem+">"+c.val+"</ns1:"+c.elem+">", 1)
+		if _, err := srv.Process([]byte(body)); err != nil {
+			t.Fatalf("%s: Process: %v", c.elem, err)
+		}
+		task, ok := st.Get(testXID)
+		if !ok {
+			t.Fatalf("%s: task not activated", c.elem)
+		}
+		if task.Target.Type != c.want || task.Target.Value != c.val {
+			t.Errorf("%s → target %+v, want {%s %q}", c.elem, task.Target, c.want, c.val)
+		}
+	}
+}
+
 func TestProcessDeactivate(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: testXID, Target: types.TargetIdentifier{Type: types.TargetGPSI, Value: "2125552368"}})
