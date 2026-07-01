@@ -266,6 +266,26 @@ type AMFUnsuccessfulProcedure struct {
 	Location            Location               `asn1:"tag:9,optional"`
 }
 
+// AMFIdentifierAssociation is a slice of the same-named TS 33.128 record,
+// generated when the AMF binds a target's SUPI to a (newly assigned) 5G-GUTI.
+// Mandatory: sUPI [1], gUTI [5]; the pEI/gPSI target-identifier optionals are
+// also carried. Deferred optionals (deeper types): sUCI [2], oldGUTI [6]
+// (EPS5GGUTI), additionalUserIdentifiers [7], relatedAMFUENGAPID [8].
+type AMFIdentifierAssociation struct {
+	SUPI any       `asn1:"tag:1,explicit,choice:supi"`
+	PEI  any       `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI any       `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	GUTI FiveGGUTI `asn1:"tag:5"`
+}
+
+// AMFIdentifierDeassociation is a slice of the same-named TS 33.128 record,
+// generated when the AMF releases a target's SUPI↔5G-GUTI binding. Mandatory:
+// sUPI [1]; gUTI [2] is optional (value+optional: zero-value omitted).
+type AMFIdentifierDeassociation struct {
+	SUPI any       `asn1:"tag:1,explicit,choice:supi"`
+	GUTI FiveGGUTI `asn1:"tag:2,optional"`
+}
+
 // XIRIPayload ::= SEQUENCE { xIRIPayloadOID [1] RELATIVE-OID, event [2] XIRIEvent }.
 // event is a CHOICE, hence EXPLICIT-tagged.
 type XIRIPayload struct {
@@ -303,6 +323,10 @@ func NewContext() *asn1.Context {
 		{Type: reflect.TypeOf(SMFPDUSessionEstablishment{}), Options: "tag:6"},
 		{Type: reflect.TypeOf(SMFPDUSessionModification{}), Options: "tag:7"},
 		{Type: reflect.TypeOf(SMFPDUSessionRelease{}), Options: "tag:8"},
+		// Identifier (de)association carry their real TS 33.128 XIRIEvent tags,
+		// which are > 30 and therefore encode in ASN.1 high-tag-number (long) form.
+		{Type: reflect.TypeOf(AMFIdentifierAssociation{}), Options: "tag:62"},
+		{Type: reflect.TypeOf(AMFIdentifierDeassociation{}), Options: "tag:186"},
 	})
 	return ctx
 }

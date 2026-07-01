@@ -178,6 +178,8 @@ func TestEventDiscrimination(t *testing.T) {
 		{"registration", sampleRegistration(), func(e any) bool { _, ok := e.(AMFRegistration); return ok }},
 		{"deregistration", AMFDeregistration{DeregistrationDirection: DirNetworkInitiated, AccessType: AccessBoth}, func(e any) bool { _, ok := e.(AMFDeregistration); return ok }},
 		{"startOfInterception", AMFStartOfInterceptionWithRegisteredUE{RegistrationResult: RegResult3GPPAccess, SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFStartOfInterceptionWithRegisteredUE); return ok }},
+		{"identifierAssociation", AMFIdentifierAssociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFIdentifierAssociation); return ok }},
+		{"identifierDeassociation", AMFIdentifierDeassociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFIdentifierDeassociation); return ok }},
 	}
 	for _, tc := range cases {
 		der, err := EncodeXIRI(ctx, tc.event)
@@ -191,6 +193,67 @@ func TestEventDiscrimination(t *testing.T) {
 		if !tc.check(got.Event) {
 			t.Errorf("%s: decoded as %T", tc.name, got.Event)
 		}
+	}
+}
+
+// TestIdentifierAssociationRoundTrip round-trips both identifier-association
+// records. Their XIRIEvent tags (62 and 186) exceed 30, so this is also the
+// codec's high-tag-number (long-form) coverage: the identifier octet is
+// context+constructed+0x1f = 0xBF, followed by the base-128 tag continuation.
+func TestIdentifierAssociationRoundTrip(t *testing.T) {
+	ctx := NewContext()
+	guti := FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 42}
+
+	assoc := AMFIdentifierAssociation{
+		SUPI: IMSI("262019876543210"),
+		PEI:  IMEI("35342500000001"),
+		GPSI: MSISDN("4915123456789"),
+		GUTI: guti,
+	}
+	der, err := EncodeXIRI(ctx, assoc)
+	if err != nil {
+		t.Fatalf("association encode: %v", err)
+	}
+	// The [62] alternative must appear on the wire in high-tag-number long form:
+	// 0xBF (context|constructed|0x1f) followed by 0x3E (=62 in one octet).
+	if !bytes.Contains(der, []byte{0xBF, 0x3E}) {
+		t.Errorf("association DER missing high-tag-number form for [62]: % x", der)
+	}
+	var g1 XIRIPayload
+	if _, err := ctx.Decode(der, &g1); err != nil {
+		t.Fatalf("association decode: %v", err)
+	}
+	a, ok := g1.Event.(AMFIdentifierAssociation)
+	if !ok {
+		t.Fatalf("event decoded as %T, want AMFIdentifierAssociation", g1.Event)
+	}
+	if supi, ok := a.SUPI.(IMSI); !ok || supi != "262019876543210" {
+		t.Errorf("association SUPI = %#v", a.SUPI)
+	}
+	if a.GUTI != guti {
+		t.Errorf("association GUTI = %+v, want %+v", a.GUTI, guti)
+	}
+
+	// Deassociation: tag 186 = 1×128 + 58, so two continuation octets 0x81 0x3A
+	// after the 0xBF introducer.
+	deassoc := AMFIdentifierDeassociation{SUPI: IMSI("262019876543210"), GUTI: guti}
+	der, err = EncodeXIRI(ctx, deassoc)
+	if err != nil {
+		t.Fatalf("deassociation encode: %v", err)
+	}
+	if !bytes.Contains(der, []byte{0xBF, 0x81, 0x3A}) {
+		t.Errorf("deassociation DER missing high-tag-number form for [186]: % x", der)
+	}
+	var g2 XIRIPayload
+	if _, err := ctx.Decode(der, &g2); err != nil {
+		t.Fatalf("deassociation decode: %v", err)
+	}
+	d, ok := g2.Event.(AMFIdentifierDeassociation)
+	if !ok {
+		t.Fatalf("event decoded as %T, want AMFIdentifierDeassociation", g2.Event)
+	}
+	if supi, ok := d.SUPI.(IMSI); !ok || supi != "262019876543210" || d.GUTI != guti {
+		t.Errorf("deassociation = %#v guti %+v", d.SUPI, d.GUTI)
 	}
 }
 
