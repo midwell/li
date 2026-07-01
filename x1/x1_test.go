@@ -76,6 +76,34 @@ func TestProcessActivate(t *testing.T) {
 	}
 }
 
+func TestOnActivateCallback(t *testing.T) {
+	st := store.New()
+	var got []types.InterceptTask
+	srv := NewServer(st, "neID", OnActivate(func(task types.InterceptTask) {
+		got = append(got, task)
+	}))
+
+	// A fresh activation fires the callback exactly once, with the stored task.
+	if _, err := srv.Process([]byte(activateXML)); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("callback fired %d times on activate, want 1", len(got))
+	}
+	if got[0].XID != testXID {
+		t.Errorf("callback task XID = %q, want %q", got[0].XID, testXID)
+	}
+
+	// A modify of the same task must not re-fire (the target is already covered).
+	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
+	if _, err := srv.Process([]byte(modifyXML)); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("callback fired %d times after modify, want 1 (modify must not re-scan)", len(got))
+	}
+}
+
 func TestProcessDeactivate(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: testXID, Target: types.TargetIdentifier{Type: types.TargetGPSI, Value: "2125552368"}})

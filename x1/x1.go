@@ -61,14 +61,31 @@ func marshalResponse(resp *X1Response) ([]byte, error) {
 // the ADMF is configured to use (e.g. "/X1/NE"). It logs nothing about task
 // content, to keep interception undetectable.
 type Server struct {
-	store *store.Store
-	neID  string
-	now   func() time.Time
+	store      *store.Store
+	neID       string
+	now        func() time.Time
+	onActivate func(types.InterceptTask)
+}
+
+// Option customises a Server.
+type Option func(*Server)
+
+// OnActivate registers a callback run after a task is successfully activated
+// (an ActivateTaskRequest — not a modify or deactivate). A POI uses it to apply
+// interception to state that already exists when the warrant arrives, e.g. the
+// AMF scanning already-registered UEs to emit StartOfInterception records. The
+// callback runs synchronously on the X1 request goroutine, so it must not block.
+func OnActivate(fn func(types.InterceptTask)) Option {
+	return func(s *Server) { s.onActivate = fn }
 }
 
 // NewServer returns an X1 Server backed by s, identifying itself as neID.
-func NewServer(s *store.Store, neID string) *Server {
-	return &Server{store: s, neID: neID, now: func() time.Time { return time.Now().UTC() }}
+func NewServer(s *store.Store, neID string, opts ...Option) *Server {
+	srv := &Server{store: s, neID: neID, now: func() time.Time { return time.Now().UTC() }}
+	for _, opt := range opts {
+		opt(srv)
+	}
+	return srv
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +138,14 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	var err error
 	switch localType(m.Type) {
 	case "ActivateTaskRequest", "ModifyTaskRequest":
-		err = s.activate(m)
+		var task types.InterceptTask
+		task, err = s.activate(m)
+		// StartOfInterception applies only to a fresh activation; a modify of an
+		// already-active task must not re-scan (it would re-emit for UEs already
+		// covered).
+		if err == nil && s.onActivate != nil && localType(m.Type) == "ActivateTaskRequest" {
+			s.onActivate(task)
+		}
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)
 	case "DeactivateTaskRequest":
 		if m.XID == "" {
@@ -143,18 +167,18 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	return rm
 }
 
-func (s *Server) activate(m X1RequestMessage) error {
+func (s *Server) activate(m X1RequestMessage) (types.InterceptTask, error) {
 	if m.TaskDetails == nil {
-		return fmt.Errorf("missing taskDetails")
+		return types.InterceptTask{}, fmt.Errorf("missing taskDetails")
 	}
 	task, err := taskFromDetails(*m.TaskDetails)
 	if err != nil {
-		return err
+		return types.InterceptTask{}, err
 	}
 	if !s.store.Activate(task) {
-		return fmt.Errorf("invalid task")
+		return types.InterceptTask{}, fmt.Errorf("invalid task")
 	}
-	return nil
+	return task, nil
 }
 
 // taskFromDetails maps X1 TaskDetails onto an interception task. DID→MDF-address
