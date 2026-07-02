@@ -162,12 +162,24 @@ func (s *Server) WatchKeepalive(timeout time.Duration) {
 }
 
 // purgeIfLapsed clears all tasking when no X1 message has arrived within timeout.
+// It clears the store first, then runs the deactivation hook over the tasks that
+// were present, so a POI re-evaluating against the (now empty) task set actually
+// tears its product down — e.g. the SMF clearing UPF CC duplication. Clearing the
+// store alone is not a complete purge (review R19 / design D11 Part B). After the
+// first purge the snapshot is empty, so subsequent lapsed ticks are no-ops.
 func (s *Server) purgeIfLapsed(timeout time.Duration) {
 	s.mu.Lock()
 	idle := s.now().Sub(s.lastSeen)
 	s.mu.Unlock()
-	if idle > timeout {
-		s.store.DeactivateAll()
+	if idle <= timeout {
+		return
+	}
+	tasks := s.store.Snapshot()
+	s.store.DeactivateAll()
+	if s.onDeactivate != nil {
+		for _, t := range tasks {
+			s.onDeactivate(t)
+		}
 	}
 }
 
@@ -188,16 +200,24 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		// state needs a scan too) — but not on a modify that leaves the target
 		// unchanged, which would re-emit for UEs already covered.
 		isModify := localType(m.Type) == "ModifyTaskRequest"
-		var prevTarget types.TargetIdentifier
+		var prevTask types.InterceptTask
+		var hadPrev bool
 		if isModify && m.TaskDetails != nil {
-			if old, ok := s.store.Get(types.XID(m.TaskDetails.XID)); ok {
-				prevTarget = old.Target
-			}
+			prevTask, hadPrev = s.store.Get(types.XID(m.TaskDetails.XID))
 		}
 		var task types.InterceptTask
 		task, err = s.activate(m)
-		if err == nil && s.onActivate != nil && (!isModify || task.Target != prevTarget) {
-			s.onActivate(task)
+		if err == nil {
+			retargeted := isModify && hadPrev && task.Target != prevTask.Target
+			if s.onActivate != nil && (!isModify || retargeted) {
+				s.onActivate(task)
+			}
+			// A retarget must undo product/state applied for the old target (e.g.
+			// clear the SMF's CC duplication on the old target's sessions), which
+			// re-evaluates against the now-updated task set. (review R19/R15)
+			if retargeted && s.onDeactivate != nil {
+				s.onDeactivate(prevTask)
+			}
 		}
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)
 	case "DeactivateTaskRequest":

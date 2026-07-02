@@ -85,6 +85,40 @@ func TestKeepaliveWatchdogPurgesTasking(t *testing.T) {
 	}
 }
 
+// TestKeepalivePurgeRunsDeactivateHook verifies the fail-safe purge runs the
+// per-task OnDeactivate hook (so a POI tears down product it applied elsewhere,
+// e.g. UPF CC duplication), clears the store, and is a no-op on subsequent
+// lapsed ticks once the store is empty (review R19).
+func TestKeepalivePurgeRunsDeactivateHook(t *testing.T) {
+	st := store.New()
+	st.Activate(types.InterceptTask{XID: "a", Target: supiTarget("1"), Products: []types.ProductType{types.ProductCC}})
+	st.Activate(types.InterceptTask{XID: "b", Target: supiTarget("2"), Products: []types.ProductType{types.ProductCC}})
+	var torn []types.XID
+	srv := NewServer(st, "neID", OnDeactivate(func(task types.InterceptTask) {
+		torn = append(torn, task.XID)
+	}))
+	now := time.Now()
+	srv.now = func() time.Time { return now }
+	srv.recordActivity()
+
+	now = now.Add(10 * time.Second) // lapsed past a 5s window
+	srv.purgeIfLapsed(5 * time.Second)
+	if st.Len() != 0 {
+		t.Fatalf("store not purged: %d tasks remain", st.Len())
+	}
+	if len(torn) != 2 {
+		t.Fatalf("OnDeactivate ran %d times, want 2 (one per purged task)", len(torn))
+	}
+
+	// A second lapsed tick must not re-run the hook (nothing left to tear down).
+	torn = nil
+	now = now.Add(10 * time.Second)
+	srv.purgeIfLapsed(5 * time.Second)
+	if len(torn) != 0 {
+		t.Errorf("second purge re-ran OnDeactivate %d times, want 0", len(torn))
+	}
+}
+
 // TestKeepaliveResetsWatchdog checks that an inbound KeepaliveRequest is
 // acknowledged and resets the watchdog.
 func TestKeepaliveResetsWatchdog(t *testing.T) {
@@ -211,6 +245,43 @@ func TestOnActivateCallback(t *testing.T) {
 	}
 	if got[1].Target.Value != "5551234567" {
 		t.Errorf("retarget callback target = %q, want 5551234567", got[1].Target.Value)
+	}
+}
+
+// TestModifyRetargetRunsDeactivateHook verifies a retargeting ModifyTask tears
+// down the OLD target's applied state via OnDeactivate (not only scanning the new
+// target via OnActivate), so a warrant that moves to a new identifier does not
+// leave stale product running for the old one (review R19/R15).
+func TestModifyRetargetRunsDeactivateHook(t *testing.T) {
+	st := store.New()
+	var activated, deactivated []types.TargetIdentifier
+	srv := NewServer(st, "neID",
+		OnActivate(func(task types.InterceptTask) { activated = append(activated, task.Target) }),
+		OnDeactivate(func(task types.InterceptTask) { deactivated = append(deactivated, task.Target) }),
+	)
+	if _, err := srv.Process([]byte(activateXML)); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
+
+	// Same-target modify: no teardown, no re-scan.
+	if _, err := srv.Process([]byte(modifyXML)); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if len(deactivated) != 0 {
+		t.Fatalf("same-target modify ran OnDeactivate %d times, want 0", len(deactivated))
+	}
+
+	// Retarget: OnDeactivate fires for the old target, OnActivate for the new.
+	retargetXML := strings.Replace(modifyXML, "2125552368", "5551234567", 1)
+	if _, err := srv.Process([]byte(retargetXML)); err != nil {
+		t.Fatalf("retarget: %v", err)
+	}
+	if len(deactivated) != 1 || deactivated[0].Value != "2125552368" {
+		t.Fatalf("retarget OnDeactivate = %+v, want one call for old target 2125552368", deactivated)
+	}
+	if len(activated) != 2 || activated[1].Value != "5551234567" {
+		t.Fatalf("retarget OnActivate = %+v, want new target 5551234567", activated)
 	}
 }
 

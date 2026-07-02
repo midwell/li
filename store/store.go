@@ -109,6 +109,20 @@ func cloneTask(t types.InterceptTask) types.InterceptTask {
 	return t
 }
 
+// Snapshot returns a copy of every active task. It backs the keepalive fail-safe:
+// the caller runs per-task teardown (OnDeactivate) over the snapshot so a purge
+// undoes each task's side effects (e.g. UPF CC duplication), not just the store
+// entries. The result is a fresh slice usable without holding any lock.
+func (s *Store) Snapshot() []types.InterceptTask {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]types.InterceptTask, 0, len(s.byXID))
+	for xid := range s.byXID {
+		out = append(out, cloneTask(s.byXID[xid]))
+	}
+	return out
+}
+
 // Match returns the active tasks targeting the given identifier. The result is a
 // fresh slice the caller may use without holding any lock; nil if no task matches.
 func (s *Store) Match(id types.TargetIdentifier) []types.InterceptTask {
