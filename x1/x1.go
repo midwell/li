@@ -62,10 +62,11 @@ func marshalResponse(resp *X1Response) ([]byte, error) {
 // the ADMF is configured to use (e.g. "/X1/NE"). It logs nothing about task
 // content, to keep interception undetectable.
 type Server struct {
-	store      *store.Store
-	neID       string
-	now        func() time.Time
-	onActivate func(types.InterceptTask)
+	store        *store.Store
+	neID         string
+	now          func() time.Time
+	onActivate   func(types.InterceptTask)
+	onDeactivate func(types.InterceptTask)
 
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
@@ -81,6 +82,14 @@ type Option func(*Server)
 // callback runs synchronously on the X1 request goroutine, so it must not block.
 func OnActivate(fn func(types.InterceptTask)) Option {
 	return func(s *Server) { s.onActivate = fn }
+}
+
+// OnDeactivate registers a callback run after a task is successfully deactivated,
+// with the task as it was before removal. A POI uses it to undo interception it
+// applied to existing state (e.g. the SMF clearing mid-session CC duplication).
+// It runs synchronously on the X1 request goroutine, so it must not block.
+func OnDeactivate(fn func(types.InterceptTask)) Option {
+	return func(s *Server) { s.onDeactivate = fn }
 }
 
 // NewServer returns an X1 Server backed by s, identifying itself as neID.
@@ -195,7 +204,13 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		if m.XID == "" {
 			err = fmt.Errorf("missing xId")
 		} else {
+			// Capture the task before removal so a POI can undo state it applied
+			// for the target (e.g. clear mid-session CC on the SMF).
+			task, existed := s.store.Get(types.XID(m.XID))
 			s.store.Deactivate(types.XID(m.XID))
+			if existed && s.onDeactivate != nil {
+				s.onDeactivate(task)
+			}
 		}
 		rm.Type = "DeactivateTaskResponse"
 	case "KeepaliveRequest":

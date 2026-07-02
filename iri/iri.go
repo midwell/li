@@ -286,6 +286,33 @@ type AMFIdentifierDeassociation struct {
 	GUTI FiveGGUTI `asn1:"tag:2,optional"`
 }
 
+// UEEndpointAddress models TS 33.128's ueEndpoint element, which is a CHOICE.
+// The bundled codec cannot encode a SEQUENCE OF CHOICE (verified), so
+// SMFStartOfInterceptionWithEstablishedPDUSession currently emits uEEndpoint as
+// an empty SEQUENCE (present, zero entries — schema-valid). Populating it needs
+// SEQUENCE-OF-CHOICE codec support, deferred as it is for the establishment record.
+type UEEndpointAddress struct{}
+
+// SMFStartOfInterceptionWithEstablishedPDUSession is a slice of the same-named
+// TS 33.128 record (XIRIEvent [9]), generated when interception is activated for
+// a UE that already has an active PDU session. Mandatory: pDUSessionID,
+// gTPTunnelID, pDUSessionType, uEEndpoint, dNN, requestType (uEEndpoint emitted
+// empty — see UEEndpointAddress). Deep optionals (location, the EPS-combo tail,
+// serving network, etc.) are deferred, as for SMFPDUSessionEstablishment.
+type SMFStartOfInterceptionWithEstablishedPDUSession struct {
+	SUPI           any                 `asn1:"tag:1,explicit,choice:supi,optional"`
+	PEI            any                 `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI           any                 `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	PDUSessionID   PDUSessionID        `asn1:"tag:5"`
+	GTPTunnelID    FTEID               `asn1:"tag:6"`
+	PDUSessionType PDUSessionType      `asn1:"tag:7"`
+	SNSSAI         SNSSAI              `asn1:"tag:8,optional"`
+	UEEndpoint     []UEEndpointAddress `asn1:"tag:9"` // mandatory SEQUENCE OF; emitted empty
+	DNN            DNN                 `asn1:"tag:12"`
+	RequestType    FiveGSMRequestType  `asn1:"tag:15"`
+	AccessType     AccessType          `asn1:"tag:16,optional"`
+}
+
 // XIRIPayload ::= SEQUENCE { xIRIPayloadOID [1] RELATIVE-OID, event [2] XIRIEvent }.
 // event is a CHOICE, hence EXPLICIT-tagged.
 type XIRIPayload struct {
@@ -323,6 +350,7 @@ func NewContext() *asn1.Context {
 		{Type: reflect.TypeOf(SMFPDUSessionEstablishment{}), Options: "tag:6"},
 		{Type: reflect.TypeOf(SMFPDUSessionModification{}), Options: "tag:7"},
 		{Type: reflect.TypeOf(SMFPDUSessionRelease{}), Options: "tag:8"},
+		{Type: reflect.TypeOf(SMFStartOfInterceptionWithEstablishedPDUSession{}), Options: "tag:9"},
 		// Identifier (de)association carry their real TS 33.128 XIRIEvent tags,
 		// which are > 30 and therefore encode in ASN.1 high-tag-number (long) form.
 		{Type: reflect.TypeOf(AMFIdentifierAssociation{}), Options: "tag:62"},
