@@ -28,6 +28,11 @@ const (
 	NEIssueX3EgressDown   = "x3EgressDown"
 	NEIssueMDFUnreachable = "mdfUnreachable"
 	NEIssueInvalidConfig  = "invalidConfig"
+	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
+	// unusable, so the MDF cannot join the content to the session's signalling. The
+	// interception is running but its product is not correlatable — a fault the ADMF
+	// must know about even though content keeps flowing.
+	NEIssueX3TagInvalid = "x3TagInvalid"
 )
 
 // Reporter sends NE-initiated X1 issue reports to the ADMF (ETSI TS 103 221-1
