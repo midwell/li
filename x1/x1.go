@@ -236,6 +236,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	}
 
 	var err error
+	var code int // TS 103 221-1 error code; 0 means "pick the generic one"
 	switch localType(m.Type) {
 	case "ActivateTaskRequest", "ModifyTaskRequest":
 		// StartOfInterception fires on a fresh activation, and on a modify that
@@ -284,11 +285,15 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		rm.Type = "PingResponse"
 	default:
 		err = fmt.Errorf("unsupported request type %q", localType(m.Type))
+		code = errCodeUnsupportedRequest
 	}
 
 	if err != nil {
 		rm.Type = "ErrorResponse"
-		rm.ErrorInformation = &X1Error{ErrorCode: 1, ErrorDescription: err.Error()}
+		if code == 0 {
+			code = errCodeGeneric
+		}
+		rm.ErrorInformation = &X1Error{ErrorCode: code, ErrorDescription: err.Error()}
 	} else {
 		rm.OK = "AcknowledgedAndCompleted"
 	}

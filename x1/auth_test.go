@@ -347,3 +347,13 @@ func TestServeHTTPMutualTLS(t *testing.T) {
 		})
 	}
 }
+
+// TestUnsupportedRequestUsesStandardCode checks an unrecognised request type is
+// refused with the reserved code rather than an invented one. A real ADMF reads
+// these numerically; the sipgate simulator asking for GetTaskDetailsRequest is
+// what surfaced this, having received a code that is not in the standard's table.
+func TestUnsupportedRequestUsesStandardCode(t *testing.T) {
+	st := store.New()
+	body := strings.Replace(activateXML, "ActivateTaskRequest", "GetTaskDetailsRequest", 1)
+	assertRejected(t, processWith(t, st, admfPeer(t), body), st, errCodeUnsupportedRequest)
+}

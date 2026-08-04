@@ -10,9 +10,11 @@ import (
 
 // X1 error codes (TS 103 221-1 table 6.7-3) used by peer authentication.
 const (
-	errCodeADMFCertMismatch = 1030 // ADMF Identifier does not match certificate details
-	errCodeUnexpectedADMF   = 1040 // Unexpected ADMF Identifier
-	errCodeUnexpectedNE     = 1060 // Unexpected NE Identifier
+	errCodeADMFCertMismatch   = 1030 // ADMF Identifier does not match certificate details
+	errCodeUnexpectedADMF     = 1040 // Unexpected ADMF Identifier
+	errCodeUnexpectedNE       = 1060 // Unexpected NE Identifier
+	errCodeGeneric            = 1000 // Generic error
+	errCodeUnsupportedRequest = 1080 // Unsupported request
 )
 
 // roleADMF is the role a peer tasking this network element presents in its
