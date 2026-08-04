@@ -5,6 +5,7 @@ package x1
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -64,6 +65,7 @@ func marshalResponse(resp *X1Response) ([]byte, error) {
 type Server struct {
 	store        *store.Store
 	neID         string
+	admfID       string // responsible ADMF; empty disables the "expected ADMF" check
 	now          func() time.Time
 	onActivate   func(types.InterceptTask)
 	onDeactivate func(types.InterceptTask)
@@ -92,6 +94,14 @@ func OnDeactivate(fn func(types.InterceptTask)) Option {
 	return func(s *Server) { s.onDeactivate = fn }
 }
 
+// WithADMF names the ADMF responsible for this network element. When set, a
+// request asserting a different ADMF identifier is refused even if that
+// identifier is properly bound into the peer's certificate — certification by
+// the LI CA is not by itself authority to task this NE (TS 103 221-1 error 1040).
+func WithADMF(admfID string) Option {
+	return func(s *Server) { s.admfID = admfID }
+}
+
 // NewServer returns an X1 Server backed by s, identifying itself as neID.
 func NewServer(s *store.Store, neID string, opts ...Option) *Server {
 	srv := &Server{store: s, neID: neID, now: func() time.Time { return time.Now().UTC() }}
@@ -111,7 +121,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read error", http.StatusBadRequest)
 		return
 	}
-	resp, err := s.Process(body)
+	// The peer certificate authenticates the request beyond the handshake
+	// (TS 103 221-1 clause 8.2.4); mutual TLS guarantees it is present and
+	// CA-verified in any conformant deployment.
+	var peer *x509.Certificate
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		peer = r.TLS.PeerCertificates[0]
+	}
+	resp, err := s.Process(body, peer)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -126,21 +143,47 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Process parses an X1 request body, applies each message to the store, and
-// returns the response envelope. Exposed for testing without HTTP.
-func (s *Server) Process(body []byte) (*X1Response, error) {
+// returns the response envelope. peer is the certificate the requester presented
+// (nil if none), against which each message is authenticated. Exposed for testing
+// without HTTP.
+func (s *Server) Process(body []byte, peer *x509.Certificate) (*X1Response, error) {
 	var req X1Request
 	if err := xml.Unmarshal(body, &req); err != nil {
 		return nil, fmt.Errorf("x1: malformed request: %w", err)
 	}
-	// Any well-formed X1 message means the ADMF is alive — feeds the keepalive
-	// watchdog (TS 103 221-1: the ADMF sends KeepaliveRequest at least every
-	// TIME_P1; if they lapse the NE purges tasking).
-	s.recordActivity()
 	resp := &X1Response{}
+	authenticated := false
 	for _, m := range req.Messages {
-		resp.Messages = append(resp.Messages, s.apply(m))
+		rm, ok := s.applyAuthenticated(m, peer)
+		authenticated = authenticated || ok
+		resp.Messages = append(resp.Messages, rm)
+	}
+	// An authenticated X1 message means the responsible ADMF is alive — this feeds
+	// the keepalive watchdog (TS 103 221-1: the ADMF sends KeepaliveRequest at least
+	// every TIME_P1; if they lapse the NE purges tasking). Unauthenticated traffic
+	// must not reset it, or anyone able to reach the X1 port could hold the
+	// fail-safe open indefinitely while the real ADMF is gone.
+	if authenticated {
+		s.recordActivity()
 	}
 	return resp, nil
+}
+
+// applyAuthenticated authenticates a request message and, only if it passes,
+// applies it. The bool reports whether the peer authenticated for this message.
+func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) (X1ResponseMessage, bool) {
+	if code, desc := s.authenticate(m, peer); code != 0 {
+		return X1ResponseMessage{
+			Type:             "ErrorResponse",
+			AdmfIdentifier:   m.AdmfIdentifier,
+			NeIdentifier:     s.neID,
+			MessageTimestamp: s.now().Format(time.RFC3339Nano),
+			Version:          m.Version,
+			X1TransactionID:  m.X1TransactionID,
+			ErrorInformation: &X1Error{ErrorCode: code, ErrorDescription: desc},
+		}, false
+	}
+	return s.apply(m), true
 }
 
 func (s *Server) recordActivity() {

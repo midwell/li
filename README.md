@@ -90,7 +90,9 @@ no block present, LI is inactive. Before enabling, you need:
    network element's certificate + private key, and the LI CA trust anchor.
    Place them at file paths the NF can read — in Kubernetes, a dedicated,
    access-restricted `Secret` mounted at those paths. Use a PKI **separate**
-   from the SBI certificates.
+   from the SBI certificates. **The certificates must carry their owner's X1
+   identifier** — see [Certificate requirements](#certificate-requirements)
+   below; X1 requests from a certificate that does not are refused.
 2. An external **ADMF** (to task the NFs over X1) and **MDF2**/**MDF3** (to
    receive xIRI/xCC). Note their addresses.
 3. The **LI-enabled NF images** deployed.
@@ -161,9 +163,58 @@ The UPF also requires the **content-egress datapath** to be active:
 | `neId` | `ne_id` | This network element's identifier | yes |
 | `cert` / `key` / `caCert` | `cert` / `key` / `ca_cert` | LI PKI credential file paths | yes |
 | `admfUrl` | `admf_url` | ADMF X1 endpoint for NE-initiated fault reports | optional |
-| `admfId` | `admf_id` | Responsible ADMF identifier | optional |
+| `admfId` | `admf_id` | Responsible ADMF identifier — on the AMF/SMF it also restricts who may task the NF (recommended) | optional |
 | `keepaliveTimeout` | — | Purge-all-tasking window (Go duration, e.g. `30s`) | AMF/SMF: optional |
 | — | `x3_sockaddr` | Datapath X3 tee socket (match `LI_X3_SOCKET_PATH`) | UPF: yes |
+
+### Certificate requirements
+
+A certificate signed by the LI CA is **not on its own** accepted for X1. ETSI
+TS 103 221-1 clause 8.2.4 requires that the identifier a peer asserts in an X1
+message also be bound into the certificate it presented, so that possession of
+any LI CA certificate cannot be used to act as some other party. Issue each
+certificate with **either** of these (either alone is sufficient):
+
+- a **UID** attribute in the Subject (OID `0.9.2342.19200300.100.1.1`) whose
+  value is the owner's X1 identifier; or
+- a **`subjectAltName` URI** holding the annex G certificate binding URN:
+
+  ```
+  urn:etsi:li:103221-1:cert-binding:{role}:{identifier}
+  ```
+
+  where `{role}` is `ADMF` or `NE`, and `{identifier}` is that party's X1
+  identifier — the ADMF identifier, or the NF's `neId`.
+
+Prefer the binding URN where you have the choice: it pins the party's **role**
+as well as its identifier, so a certificate issued to a network element cannot be
+used to act as the ADMF. A bare UID carries no role.
+
+With OpenSSL, either form can be added through the extension config:
+
+```ini
+# ADMF certificate, UID form           # ...or the binding-URN form:
+subjectAltName = URI:urn:etsi:li:103221-1:cert-binding:ADMF:admf-1
+# Subject DN with a UID: -subj "/UID=admf-1/CN=admf"
+```
+
+Set `admfId` on the AMF/SMF to the ADMF's identifier as well. The binding proves
+the peer is who it says it is; `admfId` is what says *that* party may task this
+network element. Without it, any correctly-bound certificate from the LI CA —
+including one issued for an MDF or another network element — is accepted.
+
+An X1 request that fails these checks is refused with the standard error code
+(`1030` identifier/certificate mismatch, `1040` unexpected ADMF, `1060`
+unexpected NE), no tasking is applied, and nothing is written to the operator
+log. If X1 tasking is silently refused, this is the first thing to check.
+
+> **Do not terminate X1 TLS at a proxy or ingress.** The network function has to
+> see the ADMF's client certificate to perform these checks; an intermediary that
+> terminates TLS makes them unenforceable and X1 will refuse every request.
+
+The MDF's own server certificate is verified against the LI CA *and* its name is
+checked against the configured `mdf2`/`mdf3` address. If you address an MDF by IP
+rather than hostname, its certificate needs a matching **IP** SAN.
 
 ---
 

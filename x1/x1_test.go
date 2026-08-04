@@ -130,7 +130,7 @@ func TestKeepaliveResetsWatchdog(t *testing.T) {
 	srv.recordActivity()
 
 	now = now.Add(4 * time.Second)
-	resp, err := srv.Process([]byte(keepaliveXML))
+	resp, err := srv.Process([]byte(keepaliveXML), admfPeer(t))
 	if err != nil {
 		t.Fatalf("keepalive: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestProcessActivate(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "neID")
 
-	resp, err := srv.Process([]byte(activateXML))
+	resp, err := srv.Process([]byte(activateXML), admfPeer(t))
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestOnActivateCallback(t *testing.T) {
 	}))
 
 	// A fresh activation fires the callback exactly once, with the stored task.
-	if _, err := srv.Process([]byte(activateXML)); err != nil {
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
 		t.Fatalf("activate: %v", err)
 	}
 	if len(got) != 1 {
@@ -227,7 +227,7 @@ func TestOnActivateCallback(t *testing.T) {
 
 	// A modify of the same task must not re-fire (the target is already covered).
 	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
-	if _, err := srv.Process([]byte(modifyXML)); err != nil {
+	if _, err := srv.Process([]byte(modifyXML), admfPeer(t)); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
 	if len(got) != 1 {
@@ -237,7 +237,7 @@ func TestOnActivateCallback(t *testing.T) {
 	// A modify that RETARGETS to a different identifier must re-fire — the new
 	// target's already-present state needs a start-of-interception scan too.
 	retargetXML := strings.Replace(modifyXML, "2125552368", "5551234567", 1)
-	if _, err := srv.Process([]byte(retargetXML)); err != nil {
+	if _, err := srv.Process([]byte(retargetXML), admfPeer(t)); err != nil {
 		t.Fatalf("retarget modify: %v", err)
 	}
 	if len(got) != 2 {
@@ -259,13 +259,13 @@ func TestModifyRetargetRunsDeactivateHook(t *testing.T) {
 		OnActivate(func(task types.InterceptTask) { activated = append(activated, task.Target) }),
 		OnDeactivate(func(task types.InterceptTask) { deactivated = append(deactivated, task.Target) }),
 	)
-	if _, err := srv.Process([]byte(activateXML)); err != nil {
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
 		t.Fatalf("activate: %v", err)
 	}
 	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
 
 	// Same-target modify: no teardown, no re-scan.
-	if _, err := srv.Process([]byte(modifyXML)); err != nil {
+	if _, err := srv.Process([]byte(modifyXML), admfPeer(t)); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
 	if len(deactivated) != 0 {
@@ -274,7 +274,7 @@ func TestModifyRetargetRunsDeactivateHook(t *testing.T) {
 
 	// Retarget: OnDeactivate fires for the old target, OnActivate for the new.
 	retargetXML := strings.Replace(modifyXML, "2125552368", "5551234567", 1)
-	if _, err := srv.Process([]byte(retargetXML)); err != nil {
+	if _, err := srv.Process([]byte(retargetXML), admfPeer(t)); err != nil {
 		t.Fatalf("retarget: %v", err)
 	}
 	if len(deactivated) != 1 || deactivated[0].Value != "2125552368" {
@@ -306,7 +306,7 @@ func TestParseTargetIdentifierTypes(t *testing.T) {
 		body := strings.Replace(activateXML,
 			"<ns1:e164Number>2125552368</ns1:e164Number>",
 			"<ns1:"+c.elem+">"+c.val+"</ns1:"+c.elem+">", 1)
-		if _, err := srv.Process([]byte(body)); err != nil {
+		if _, err := srv.Process([]byte(body), admfPeer(t)); err != nil {
 			t.Fatalf("%s: Process: %v", c.elem, err)
 		}
 		task, ok := st.Get(testXID)
@@ -334,7 +334,7 @@ func TestProcessDeactivate(t *testing.T) {
   </ns1:x1RequestMessage>
 </ns1:X1Request>`
 
-	resp, err := srv.Process([]byte(deactivateXML))
+	resp, err := srv.Process([]byte(deactivateXML), admfPeer(t))
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -346,7 +346,12 @@ func TestProcessDeactivate(t *testing.T) {
 	}
 }
 
-func TestServeHTTPRoundTrip(t *testing.T) {
+// TestServeHTTPWithoutCertificateRejected checks the handler is fail-closed when
+// no client certificate reaches it — the shape of a request arriving over plain
+// HTTP, or through a proxy that terminated TLS instead of passing it through
+// (design D13). The response must still be well-formed X1 the ADMF can decode.
+// The authorized round trip over real mutual TLS is TestServeHTTPMutualTLS.
+func TestServeHTTPWithoutCertificateRejected(t *testing.T) {
 	st := store.New()
 	ts := httptest.NewServer(NewServer(st, "neID"))
 	defer ts.Close()
@@ -365,11 +370,14 @@ func TestServeHTTPRoundTrip(t *testing.T) {
 	if err := xml.NewDecoder(res.Body).Decode(&decoded); err != nil {
 		t.Fatalf("response is not valid X1Response XML: %v", err)
 	}
-	if len(decoded.Messages) != 1 || decoded.Messages[0].OK != "AcknowledgedAndCompleted" {
-		t.Errorf("decoded response = %+v", decoded.Messages)
+	if len(decoded.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(decoded.Messages))
 	}
-	if _, ok := st.Get(testXID); !ok {
-		t.Error("task not activated via HTTP")
+	if m := decoded.Messages[0]; m.ErrorInformation == nil || m.ErrorInformation.ErrorCode != errCodeADMFCertMismatch {
+		t.Errorf("want error %d, got %+v", errCodeADMFCertMismatch, m)
+	}
+	if _, ok := st.Get(testXID); ok {
+		t.Error("task activated without an authenticated ADMF")
 	}
 }
 
@@ -379,7 +387,7 @@ func TestRejectsUnknownAndBadTarget(t *testing.T) {
 
 	// Unknown request type -> ErrorResponse, nothing stored.
 	unknown := strings.Replace(activateXML, "ActivateTaskRequest", "FrobnicateRequest", 1)
-	resp, err := srv.Process([]byte(unknown))
+	resp, err := srv.Process([]byte(unknown), admfPeer(t))
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
