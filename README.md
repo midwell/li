@@ -141,8 +141,11 @@ Add a top-level `li` block in `upf.jsonc`:
 
 The UPF also requires the **content-egress datapath** to be active:
 
-- Run BESS with the `conf/closed_loop.bess` pipeline (it contains the LI tee:
-  `Replicate` → `GenericEncap` → the `liX3` `UnixSocketPort`).
+- Run BESS with a pipeline that contains the LI tee (`Replicate` → `GenericEncap`
+  → the `liX3` `UnixSocketPort`). Both `conf/up4.bess` — the pipeline deployments
+  run by default — and `conf/closed_loop.bess` carry it. A pipeline **without** the
+  tee drops a tasked subscriber's traffic outright, because the PFCP agent marks it
+  with a forwarding action that such a pipeline has no gate for.
 - Set the BESS container's `LI_X3_SOCKET_PATH` environment variable to the **same
   path** as `li.x3_sockaddr` (both default to `/tmp/li_x3`).
 - The BESS and pfcpiface containers must **share** that socket path (e.g. an
