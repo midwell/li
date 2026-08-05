@@ -271,6 +271,55 @@ func sampleEstablishment() SMFPDUSessionEstablishment {
 	}
 }
 
+// TestIdentifierRecordMandatoryTags pins the field tags of the two identifier
+// records against TS 33.128. Both were wrong, and a round-trip through our own
+// codec could not see it: the encoder and decoder agreed with each other.
+//
+//   - AMFIdentifierAssociation omitted mandatory location [6], so every record
+//     failed schema validation at a conformant receiver.
+//   - AMFIdentifierDeassociation emitted gUTI under [2], which is sUCI in that
+//     record, while mandatory gUTI [5] was absent — the 5G-GUTI was not merely
+//     missing but misread as a different identifier.
+//
+// Asserting on the encoded tags is what catches this class; a decode assertion
+// cannot (review R33).
+func TestIdentifierRecordMandatoryTags(t *testing.T) {
+	ctx := NewContext()
+	guti := FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 42}
+
+	// Encode the records bare rather than wrapped: XIRIPayload carries its own
+	// event [2], so a tag check over the wrapped bytes cannot tell that apart from
+	// a sUCI [2] inside the record.
+	assoc, err := ctx.Encode(AMFIdentifierAssociation{
+		SUPI:     IMSI("262019876543210"),
+		GUTI:     guti,
+		Location: Location{LocationInfo: LocationInfo{CurrentLocation: true}},
+	})
+	if err != nil {
+		t.Fatalf("encode association: %v", err)
+	}
+	// location [6] constructed: context|constructed|6 = 0xA6.
+	if !bytes.Contains(assoc, []byte{0xA6}) {
+		t.Errorf("association is missing mandatory location [6]: % x", assoc)
+	}
+
+	deassoc, err := ctx.Encode(AMFIdentifierDeassociation{
+		SUPI: IMSI("262019876543210"),
+		GUTI: guti,
+	})
+	if err != nil {
+		t.Fatalf("encode deassociation: %v", err)
+	}
+	// gUTI [5] constructed = 0xA5. [2] is sUCI in this record, so the GUTI must
+	// not be emitted there as it once was.
+	if !bytes.Contains(deassoc, []byte{0xA5}) {
+		t.Errorf("deassociation is missing mandatory gUTI [5]: % x", deassoc)
+	}
+	if bytes.Contains(deassoc, []byte{0xA2}) {
+		t.Errorf("deassociation emits [2] (sUCI); the GUTI belongs at [5]: % x", deassoc)
+	}
+}
+
 func TestSMFEstablishmentRoundTrip(t *testing.T) {
 	ctx := NewContext()
 	der, err := EncodeXIRI(ctx, sampleEstablishment())

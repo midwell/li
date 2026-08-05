@@ -276,14 +276,25 @@ type AMFIdentifierAssociation struct {
 	PEI  any       `asn1:"tag:3,explicit,choice:pei,optional"`
 	GPSI any       `asn1:"tag:4,explicit,choice:gpsi,optional"`
 	GUTI FiveGGUTI `asn1:"tag:5"`
+	// location [6] is MANDATORY in this record, unlike the other records that
+	// carry a Location, where deferring the deep subtree was harmless. Omitting it
+	// made every association record fail schema validation (review R33). The
+	// minimal Location the other records use satisfies the requirement; filling in
+	// the detail remains the deferred increment.
+	Location Location `asn1:"tag:6"`
 }
 
 // AMFIdentifierDeassociation is a slice of the same-named TS 33.128 record,
 // generated when the AMF releases a target's SUPI↔5G-GUTI binding. Mandatory:
-// sUPI [1]; gUTI [2] is optional (value+optional: zero-value omitted).
+// sUPI [1] and gUTI [5]. location [6] is optional here — unlike in
+// AMFIdentifierAssociation — so the deep subtree stays deferred.
+//
+// The GUTI was previously emitted as [2] and optional, which is where sUCI lives:
+// a conformant receiver read the 5G-GUTI as a SUCI and separately reported the
+// mandatory gUTI missing (review R33).
 type AMFIdentifierDeassociation struct {
 	SUPI any       `asn1:"tag:1,explicit,choice:supi"`
-	GUTI FiveGGUTI `asn1:"tag:2,optional"`
+	GUTI FiveGGUTI `asn1:"tag:5"`
 }
 
 // UEEndpointAddress models TS 33.128's ueEndpoint element, which is a CHOICE.
