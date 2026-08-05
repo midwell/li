@@ -164,10 +164,23 @@ type X1ResponseMessage struct {
 	X1TransactionID  string   `xml:"x1TransactionId"`
 	OK               string   `xml:"oK,omitempty"`
 	ErrorInformation *X1Error `xml:"errorInformation,omitempty"`
-	// Tasks carries the answer to a details query. Rendered as
-	// taskResponseDetails, one per task, so an ADMF can see what this element
-	// actually holds rather than what it believes it provisioned.
+	// Tasks carries the answer to a details query on the way *out*: the server
+	// renders one taskResponseDetails per task, so a requester can see what this
+	// element actually holds rather than what it believes it provisioned.
 	Tasks []types.InterceptTask `xml:"-"`
+	// TaskResponses is the same information on the way *in*, parsed by a requester
+	// reading a reply. The two directions are separate fields because the outgoing
+	// form is built from the domain model and the incoming form is whatever the peer
+	// sent, which may include tasks this requester knows nothing about — the point
+	// of asking.
+	TaskResponses []TaskResponseDetails `xml:"taskResponseDetails"`
+}
+
+// TaskResponseDetails is one task as reported by an element (TS 103 221-1
+// clause 6.2.5).
+type TaskResponseDetails struct {
+	TaskDetails TaskDetails `xml:"taskDetails"`
+	TaskStatus  string      `xml:"taskStatus"`
 }
 
 // X1Error carries an error response (subset).

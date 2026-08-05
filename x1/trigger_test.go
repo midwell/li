@@ -396,3 +396,61 @@ func TestKeepaliveIsAcknowledged(t *testing.T) {
 		t.Errorf("wrong message type sent:\n%s", *body)
 	}
 }
+
+// TestTaskXIDsReportsWhatThePOIHolds is what a restarted requester needs: it has
+// no record of what it installed, the NE still holds all of it, and tasking nobody
+// can withdraw must not exist (review R40).
+func TestTaskXIDsReportsWhatThePOIHolds(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), RequireResolvableDIDs())
+	peer := certWithUID(t, "smf-1")
+	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		resp, err := srv.Process(b, peer)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		out, _ := marshalResponse(resp)
+		_, _ = w.Write(out)
+	}))
+
+	// Nothing tasked yet.
+	xids, err := req.TaskXIDs()
+	if err != nil {
+		t.Fatalf("TaskXIDs on an empty element: %v", err)
+	}
+	if len(xids) != 0 {
+		t.Errorf("reported %v, want nothing", xids)
+	}
+
+	const did = "33333333-3333-4333-8333-333333333333"
+	if err := req.CreateDestination(Destination{
+		DID: did, DeliveryType: "X3Only", Address: "10.0.60.122", Port: 42069,
+	}); err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	tr := testTrigger()
+	tr.DIDs = []string{did}
+	if err := req.ActivateTask(tr); err != nil {
+		t.Fatalf("ActivateTask: %v", err)
+	}
+
+	xids, err = req.TaskXIDs()
+	if err != nil {
+		t.Fatalf("TaskXIDs: %v", err)
+	}
+	if len(xids) != 1 || xids[0] != tr.XID {
+		t.Errorf("reported %v, want [%s]", xids, tr.XID)
+	}
+
+	// And it must be actionable: the XID reported has to be the one that withdraws
+	// the task, or a reconciling requester cannot clean up after itself.
+	if err := req.DeactivateTask(xids[0]); err != nil {
+		t.Fatalf("DeactivateTask on a reported XID: %v", err)
+	}
+	if st.Len() != 0 {
+		t.Errorf("store holds %d tasks after withdrawing the reported XID, want 0", st.Len())
+	}
+}

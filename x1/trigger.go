@@ -304,6 +304,65 @@ var keepaliveTemplate = template.Must(template.New("x1ka").Funcs(template.FuncMa
   </ns1:x1RequestMessage>
 </ns1:X1Request>`))
 
+// detailsTemplate emits a GetAllDetailsRequest, which carries only the header.
+var detailsTemplate = template.Must(template.New("x1all").Funcs(template.FuncMap{
+	"esc": escapeXML,
+}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:GetAllDetailsRequest">
+    <ns1:admfIdentifier>{{esc .Header.OurID}}</ns1:admfIdentifier>
+    <ns1:neIdentifier>{{esc .Header.NeID}}</ns1:neIdentifier>
+    <ns1:messageTimestamp>{{esc .Header.Timestamp}}</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>{{esc .Header.TxID}}</ns1:x1TransactionId>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`))
+
+// TaskXIDs asks the NE what tasking it currently holds.
+//
+// A requester needs this after it has itself restarted: it comes back with no
+// record of what it installed, while the NE still holds all of it, and tasking
+// nobody can withdraw is exactly what must not exist. A liveness signal cannot
+// substitute — a restarted requester is perfectly alive (review R40).
+func (r *Requester) TaskXIDs() ([]types.XID, error) {
+	var body bytes.Buffer
+	if err := detailsTemplate.Execute(&body, struct{ Header header }{Header: r.header("GetAllDetailsRequest")}); err != nil {
+		return nil, err
+	}
+
+	resp, err := r.client.Post(r.neURL, "application/xml", &body)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("x1: NE returned status %d", resp.StatusCode)
+	}
+
+	var out X1Response
+	if err := xml.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("x1: malformed response: %w", err)
+	}
+	if len(out.Messages) == 0 {
+		return nil, fmt.Errorf("x1: response carried no message")
+	}
+
+	m := out.Messages[0]
+	if m.ErrorInformation != nil {
+		return nil, &RequestError{Code: m.ErrorInformation.ErrorCode, Description: m.ErrorInformation.ErrorDescription}
+	}
+
+	xids := make([]types.XID, 0, len(m.TaskResponses))
+	for _, t := range m.TaskResponses {
+		if t.TaskDetails.XID != "" {
+			xids = append(xids, types.XID(t.TaskDetails.XID))
+		}
+	}
+
+	return xids, nil
+}
+
 // Keepalive tells the NE this requester is still present.
 //
 // It is what makes the other side's fail-safe safe to enable: a POI that purges
