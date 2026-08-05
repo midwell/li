@@ -28,7 +28,7 @@ Three network functions act as POIs:
 | NF  | Role | Produces | Interface |
 |-----|------|----------|-----------|
 | **AMF** | IRI-POI | Intercept Related Information (registration, deregistration, location update, identifier (de)association, unsuccessful procedure, start-of-interception) as 3GPP TS 33.128 **xIRI** | X2 → MDF2 |
-| **SMF** | IRI-POI + CC Triggering Function | PDU-session xIRI (establishment/modification/release/start-of-interception); and instructs the UPF to duplicate a tasked target's user plane | X2 → MDF2; PFCP `DUPL` FAR → UPF |
+| **SMF** | IRI-POI + CC Triggering Function | PDU-session xIRI (establishment/modification/release/start-of-interception); instructs the UPF to duplicate a tasked target's user plane, and tasks its interception point with the warrant | X2 → MDF2; PFCP `DUPL` FAR + X1 trigger → UPF |
 | **UPF** | CC-POI | Content of Communication — the duplicated user-plane packets — as ETSI TS 103 221-2 **xCC** | X3 → MDF3 |
 
 ```
@@ -38,10 +38,11 @@ Three network functions act as POIs:
    (mTLS)        └─────────────┘
                    │ X1        │ X1
                    ▼           ▼
-              ┌────────┐   ┌────────┐        ┌──────┐
-              │  AMF   │   │  SMF   │──PFCP──▶│ UPF  │
-              │ IRI-POI│   │IRI-POI │  DUPL   │CC-POI│
-              └────┬───┘   └───┬────┘  FAR    └──┬───┘
+              ┌────────┐   ┌────────┐  PFCP  ┌──────┐
+              │  AMF   │   │  SMF   │──DUPL──▶│ UPF  │
+              │ IRI-POI│   │IRI-POI │  FAR    │CC-POI│
+              │        │   │ CC-TF  │───X1───▶│      │
+              └────┬───┘   └───┬────┘ trigger └──┬───┘
              xIRI  │   xIRI    │              xCC │
              X2    ▼   X2      ▼              X3  ▼
               ┌──────────────────┐         ┌──────────┐
@@ -50,13 +51,20 @@ Three network functions act as POIs:
 ```
 
 - The **ADMF** provisions interception tasks (warrants) over **X1** (ETSI TS 103 221-1,
-  XML over mutual TLS). The AMF and SMF each expose an X1 listener; the UPF has
-  no X1 listener — it is driven by the SMF over PFCP.
+  XML over mutual TLS). All three network functions expose an X1 listener, but the
+  UPF's authorised peer is the **SMF**, not the ADMF: the UPF is a *triggered* point
+  of interception, and the SMF's triggering function tasks it in the ADMF's role.
 - Each tasked network function matches events/traffic against the target
   (by SUPI, PEI, or GPSI) using a local task store — no external lookup at
   interception time.
 - **xIRI** is delivered over **X2** to the configured **MDF2**; **xCC** over
   **X3** to the configured **MDF3** (both ETSI TS 103 221-2, mutual TLS).
+- **CC takes two interfaces, and needs both.** PFCP tells the UPF *to* copy a
+  session's packets; the X1 trigger tells it *whose warrant* the copies serve,
+  which correlation identifier to stamp on them, and where to send them. A copy
+  the UPF cannot attribute to a warrant is discarded and reported, never delivered,
+  because a mediation function attributes product by warrant alone and silently
+  drops what it cannot place.
 - **CC** works via PFCP: the SMF sets the `DUPL` apply-action + Duplicating
   Parameters on the target session's FAR; the UPF's BESS datapath tees a copy of
   the packets to a userspace socket, and the UPF's X3 shipper frames and
@@ -115,6 +123,17 @@ configuration:
     cert: "/etc/li/certs/tls.crt"         # X0-pre-provisioned LI certificate
     key: "/etc/li/certs/tls.key"          #   its private key
     caCert: "/etc/li/certs/ca.crt"        #   the LI CA trust anchor
+    # --- SMF only: content of communication ---
+    # The SMF is the CC triggering function. It tasks the interception point in
+    # each UPF over that UPF's X1 endpoint, passing the warrant, the session's
+    # correlation identifier and this MDF3 address; the UPF holds none of them in
+    # its own configuration. A UPF missing from this list will duplicate traffic
+    # that nobody can attribute, which the SMF reports to the ADMF as a fault.
+    mdf3: "mdf3.li.example:9001"          # X3 delivery destination (MDF3 host:port)
+    upfTriggers:
+      - nodeId: "10.0.1.5"                # the UPF's N4 node address
+        x1Url: "https://upf-1:8443/X1/NE" # its X1 endpoint; the host must be a name its certificate covers
+        neId: "upf-1"                     # the identifier its certificate is bound to
     # --- optional: NE→ADMF fault reporting + keepalive fail-safe ---
     admfUrl: "https://admf.li.example/X1/NE"  # ADMF X1 endpoint for NE-initiated issue reports
     admfId: "admf-1"                          # responsible ADMF identifier
@@ -129,17 +148,31 @@ Add a top-level `li` block in `upf.jsonc`:
 {
   // ... existing UPF configuration ...
   "li": {
-    "mdf3": "mdf3.li.example:9001",      // X3 delivery destination (MDF3 host:port)
     "x3_sockaddr": "/tmp/li_x3",         // must match the datapath's LI_X3_SOCKET_PATH (see below)
     "cert": "/etc/li/certs/tls.crt",     // X0-pre-provisioned LI certificate
     "key": "/etc/li/certs/tls.key",      //   its private key
     "ca_cert": "/etc/li/certs/ca.crt",   //   the LI CA trust anchor
-    "ne_id": "upf-1",                    // this NE's identifier (for X1 issue reports)
+    "ne_id": "upf-1",                    // this NE's identifier
+    "x1_listen": ":8443",                // the triggering interface the SMF tasks it over
+    "tf_id": "smf-1",                    // the only element permitted to task it
     "admf_url": "https://admf.li.example/X1/NE",  // optional: NE→ADMF fault reporting
     "admf_id": "admf-1"                  // optional
   }
 }
 ```
+
+The UPF has **no MDF3 address of its own**. It is a *triggered* point of
+interception: the SMF's triggering function tells it which sessions to intercept,
+under which warrant, and where to deliver the content — so `x1_listen` and `tf_id`
+are as essential as the credentials. Without them the UPF can duplicate a
+subscriber's traffic but cannot learn whose warrant the copies serve, and content
+that cannot be attributed to a warrant is discarded by any mediation function that
+receives it. The UPF refuses to start if either is missing, rather than running in
+that state.
+
+`tf_id` names the *only* element permitted to task it. The identity is checked
+against the certificate the peer presents, so a certificate the LI CA issued to
+some other element cannot be used to task this UPF.
 
 The UPF also requires the **content-egress datapath** to be active:
 
@@ -159,7 +192,11 @@ The UPF also requires the **content-egress datapath** to be active:
 | AMF/SMF (`configuration.li`) | UPF (`li`) | Meaning | Required |
 |---|---|---|---|
 | `x1Listen` | — | X1 listener bind address (ADMF → NF) | AMF/SMF: yes |
-| `mdf2` | `mdf3` | xIRI (X2) / xCC (X3) delivery destination, `host:port` | yes |
+| `mdf2` | — | xIRI (X2) delivery destination, `host:port` | AMF/SMF: yes |
+| `mdf3` | — | xCC (X3) delivery destination the SMF provisions at each UPF it triggers | SMF: with `upfTriggers` |
+| `upfTriggers` | — | Per-UPF triggering endpoints (`nodeId`, `x1Url`, `neId`) | SMF: for CC |
+| — | `x1_listen` | Bind address of the triggering interface (SMF → UPF) | UPF: yes |
+| — | `tf_id` | Identifier of the element permitted to task this UPF | UPF: yes |
 | `neId` | `ne_id` | This network element's identifier | yes |
 | `cert` / `key` / `caCert` | `cert` / `key` / `ca_cert` | LI PKI credential file paths | yes |
 | `admfUrl` | `admf_url` | ADMF X1 endpoint for NE-initiated fault reports | optional |
@@ -213,7 +250,7 @@ log. If X1 tasking is silently refused, this is the first thing to check.
 > terminates TLS makes them unenforceable and X1 will refuse every request.
 
 The MDF's own server certificate is verified against the LI CA *and* its name is
-checked against the configured `mdf2`/`mdf3` address. If you address an MDF by IP
+checked against the configured MDF address. If you address an MDF by IP
 rather than hostname, its certificate needs a matching **IP** SAN.
 
 ---
@@ -237,7 +274,8 @@ Because the ADMF and MDF are external, LI is exercised end to end against a
 third-party stack — for example the **sipgate `li-simulator-x1x2x3`** (an
 independent ETSI TS 103 221 implementation, useful as an interop reference) or
 **OpenLI** (which ingests X2/X3 and mediates through to an emulated LEA). Point
-the NFs' `mdf2`/`mdf3`/`admfUrl` at the simulator's endpoints and provision a
+the NFs' `mdf2`/`mdf3`/`admfUrl` at the simulator's endpoints (`mdf3` on the SMF,
+which passes it to each UPF) and provision a
 task over its X1 client.
 
 ## Standards
