@@ -33,6 +33,13 @@ const (
 	// content is dropped — but an authorised interception may be silently producing
 	// nothing, which only the ADMF can resolve (review R34).
 	NEIssueContentUntasked = "contentUntasked"
+	// NEIssueX3ContentLost: content the datapath duplicated never reached the
+	// shipper, because the socket between them filled and the write was discarded.
+	// The interception is running and its product is *incomplete* — a mediation
+	// function receives part of the ordered content with no way to tell, which is
+	// why a throughput ceiling being documented does not make the loss acceptable
+	// to leave silent (review R36).
+	NEIssueX3ContentLost = "x3ContentLost"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
 	// interception is running but its product is not correlatable — a fault the ADMF
