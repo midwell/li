@@ -21,6 +21,13 @@ const (
 	TargetPEI TargetIdentifierType = "PEI"
 	// TargetGPSI is the Generic Public Subscription Identifier (e.g. MSISDN).
 	TargetGPSI TargetIdentifierType = "GPSI"
+	// TargetFSEID is a PFCP session (F-SEID), the packet-detection criterion a
+	// CC Triggering Function gives a triggered CC-POI so it can isolate a
+	// session's traffic without resolving subscriber identities (TS 33.128
+	// table 6.2.3-7, "PFCP Session ID"). Value is the SEID in decimal. Unlike
+	// the identifiers above this one names a session, not a subscriber, and is
+	// only meaningful within the UPF that allocated it.
+	TargetFSEID TargetIdentifierType = "FSEID"
 )
 
 // TargetIdentifier identifies the subject of an interception task.
@@ -74,9 +81,35 @@ type InterceptTask struct {
 	Products   []ProductType      // IRI and/or CC
 	Deliveries []DeliveryEndpoint // X2 and/or X3 destinations
 	State      TaskState
+	// ProductID, when set, replaces XID in the X2/X3 PDU header. It is how a
+	// triggered POI labels its product with the *warrant* rather than with the
+	// trigger task it was given: a Triggering Function allocates its own XID for
+	// the trigger and passes the warrant XID here (TS 103 221-1 clause 6.2.1.2;
+	// TS 33.128 table 6.2.3-6 makes it mandatory for LI_T3). Use DeliveryXID
+	// rather than reading this directly.
+	ProductID XID
+	// CorrelationID is the value a triggered POI must place in the correlation
+	// field of every PDU it delivers for this task, so the MDF can join content
+	// to the signalling the triggering POI reported for the same session. Zero
+	// means unset. Supplied by the Triggering Function, never derived locally —
+	// deriving it independently on each side is how the two streams drift apart.
+	CorrelationID uint64
 }
 
 // WantsProduct reports whether the task requires the given product type.
 func (t InterceptTask) WantsProduct(p ProductType) bool {
 	return slices.Contains(t.Products, p)
+}
+
+// DeliveryXID returns the XID to put in the X2/X3 PDU header for this task: the
+// ProductID when one was provisioned, otherwise the task's own XID (TS 103 221-1
+// clause 6.2.1.2). Every X2/X3 sender must label product through this method —
+// an MDF attributes a PDU to an intercept by its XID alone, so a POI that labels
+// product with a trigger's XID, or with nothing, produces material the MDF
+// cannot attribute and discards without complaint (review R34).
+func (t InterceptTask) DeliveryXID() XID {
+	if t.ProductID != "" {
+		return t.ProductID
+	}
+	return t.XID
 }

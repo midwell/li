@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -332,7 +333,25 @@ func taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 	if err != nil {
 		return types.InterceptTask{}, err
 	}
-	return types.InterceptTask{XID: types.XID(td.XID), Target: target, Products: products}, nil
+	// A provisioned ProductID replaces the XID in delivered PDU headers, and a
+	// provisioned CorrelationID is the value to stamp on them (TS 103 221-1
+	// clause 6.2.1.2). Both are optional in TS 103 221-1 and mandatory for an
+	// LI_T3 trigger; a POI that needs them enforces that itself, since an
+	// IRI-POI tasked by a real ADMF legitimately receives neither.
+	var correlation uint64
+	if td.CorrelationID != "" {
+		correlation, err = strconv.ParseUint(td.CorrelationID, 10, 64)
+		if err != nil {
+			return types.InterceptTask{}, fmt.Errorf("invalid correlationID")
+		}
+	}
+	return types.InterceptTask{
+		XID:           types.XID(td.XID),
+		Target:        target,
+		Products:      products,
+		ProductID:     types.XID(td.ProductID),
+		CorrelationID: correlation,
+	}, nil
 }
 
 func mapTarget(t TargetIdentifier) (types.TargetIdentifier, error) {
@@ -351,8 +370,31 @@ func mapTarget(t TargetIdentifier) (types.TargetIdentifier, error) {
 		return types.TargetIdentifier{Type: types.TargetGPSI, Value: t.GPSIMSISDN}, nil
 	case t.E164Number != "":
 		return types.TargetIdentifier{Type: types.TargetGPSI, Value: t.E164Number}, nil
+	case t.Extension != nil:
+		return mapExtensionTarget(t.Extension)
 	}
 	return types.TargetIdentifier{}, fmt.Errorf("unsupported target identifier")
+}
+
+// mapExtensionTarget maps the 3GPP LI_T3 packet-detection criteria onto a target
+// identifier. Only FSEID is supported — it is what the CC-POI's datapath can
+// match on. The other criteria of TS 33.128 table 6.2.3-7 (PDRID, QERID,
+// NetworkInstance, GTPTunnelDirection, FTEID, PDR) are rejected rather than
+// ignored: silently accepting a criterion we do not evaluate would intercept
+// either nothing or everything, and both are worse than a refused trigger the
+// Triggering Function can report.
+func mapExtensionTarget(ext *TargetIdentifierExtension) (types.TargetIdentifier, error) {
+	if ext.UPFT3 == nil || len(ext.UPFT3.Identifiers) == 0 {
+		return types.TargetIdentifier{}, fmt.Errorf("unsupported target identifier extension")
+	}
+	id := ext.UPFT3.Identifiers[0]
+	if id.FSEID == nil || id.FSEID.SEID == 0 {
+		return types.TargetIdentifier{}, fmt.Errorf("unsupported detection criterion")
+	}
+	return types.TargetIdentifier{
+		Type:  types.TargetFSEID,
+		Value: strconv.FormatUint(id.FSEID.SEID, 10),
+	}, nil
 }
 
 func deliveryProducts(dt string) ([]types.ProductType, error) {
