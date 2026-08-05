@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/xml"
 	"fmt"
 	"net/http"
 	"sync"
@@ -78,11 +77,7 @@ func NewReporter(admfURL, admfID, neID string, tlsConfig *tls.Config) *Reporter 
 // conventional ns1/xsi wire form (Go's encoding/xml can't produce the xsi:type
 // QName cleanly), mirroring the response template.
 var reportTemplate = template.Must(template.New("x1report").Funcs(template.FuncMap{
-	"esc": func(s string) string {
-		var b bytes.Buffer
-		_ = xml.EscapeText(&b, []byte(s))
-		return b.String()
-	},
+	"esc": escapeXML,
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:ReportNEIssueRequest">
@@ -95,6 +90,80 @@ var reportTemplate = template.Must(template.New("x1report").Funcs(template.FuncM
     <ns1:description>{{esc .Description}}</ns1:description>
   </ns1:x1RequestMessage>
 </ns1:X1Request>`))
+
+// TS 103 221-1 TaskReportType values (clause 6.5.2 / the published XSD
+// enumeration). A Triggering Function uses these to tell the LIPF what became of
+// an interception it was asked to arrange.
+const (
+	// TaskReportAllClear: a previously reported fault has cleared.
+	TaskReportAllClear = "AllClear"
+	// TaskReportWarning: something is wrong but the interception continues.
+	TaskReportWarning = "Warning"
+	// TaskReportNonTerminatingFault: a fault the interception survives.
+	TaskReportNonTerminatingFault = "NonTerminatingFault"
+	// TaskReportTerminatingFault: the interception cannot continue. This is what a
+	// CC-TF sends when a triggered POI refuses or fails its trigger — the warrant
+	// is authorised but no product will be produced, which only the LIPF can act on.
+	TaskReportTerminatingFault = "TerminatingFault"
+)
+
+// reportTaskTemplate emits an X1Request carrying a ReportTaskIssueRequest. Element
+// order follows the ReportTaskIssueRequest xs:sequence: xId, taskReportType, then
+// the optional error code and details.
+var reportTaskTemplate = template.Must(template.New("x1taskissue").Funcs(template.FuncMap{
+	"esc": escapeXML,
+}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:ReportTaskIssueRequest">
+    <ns1:admfIdentifier>{{esc .AdmfID}}</ns1:admfIdentifier>
+    <ns1:neIdentifier>{{esc .NeID}}</ns1:neIdentifier>
+    <ns1:messageTimestamp>{{esc .Timestamp}}</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>{{esc .TxID}}</ns1:x1TransactionId>
+    <ns1:xId>{{esc .XID}}</ns1:xId>
+    <ns1:taskReportType>{{esc .ReportType}}</ns1:taskReportType>
+{{- if .Details}}
+    <ns1:taskIssueDetails>{{esc .Details}}</ns1:taskIssueDetails>
+{{- end}}
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`))
+
+// ReportTaskIssue POSTs a ReportTaskIssueRequest to the ADMF for a specific
+// interception task. TS 33.128 clause 5.2.6 requires this of a Triggering
+// Function whose triggered POI answers an error: the warrant exists and is
+// authorised, but the product it authorises is not being produced, and the
+// triggering function is the only party that knows.
+//
+// Unlike ReportNEIssue this names an XID, because the issue is with one
+// interception rather than with the element. It is therefore not throttled — each
+// task's failure is its own fact — and details must still describe the fault
+// without naming the target.
+func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
+	var body bytes.Buffer
+	if err := reportTaskTemplate.Execute(&body, struct {
+		AdmfID, NeID, Timestamp, TxID, XID, ReportType, Details string
+	}{
+		AdmfID:     r.admfID,
+		NeID:       r.neID,
+		Timestamp:  r.now().Format(time.RFC3339Nano),
+		TxID:       newUUID(),
+		XID:        xid,
+		ReportType: reportType,
+		Details:    details,
+	}); err != nil {
+		return err
+	}
+
+	resp, err := r.client.Post(r.admfURL, "application/xml", &body)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("x1: ADMF returned status %d for task issue report", resp.StatusCode)
+	}
+	return nil
+}
 
 // ReportNEIssue POSTs a ReportNEIssueRequest to the ADMF. issueType is a
 // TS 103 221-1 typeOfNeIssueMessage (see the NEIssue* constants); description is
