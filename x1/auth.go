@@ -15,6 +15,7 @@ const (
 	errCodeUnexpectedNE       = 1060 // Unexpected NE Identifier
 	errCodeGeneric            = 1000 // Generic error
 	errCodeUnsupportedRequest = 1080 // Unsupported request
+	errCodeNoSuchTask         = 1020 // The XID is not known to this network element
 )
 
 // roleADMF is the role a peer tasking this network element presents in its

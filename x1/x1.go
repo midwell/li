@@ -27,10 +27,38 @@ const maxRequestBytes = 1 << 20
 // form (xsi/ns1 prefixes, xsi:type QName), which Go's encoding/xml can't
 // produce cleanly. Input is still parsed structurally with encoding/xml.
 var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncMap{
-	"esc": func(s string) string {
+	"esc": func(v any) string {
 		var b bytes.Buffer
-		_ = xml.EscapeText(&b, []byte(s))
+		_ = xml.EscapeText(&b, []byte(fmt.Sprintf("%s", v)))
 		return b.String()
+	},
+	// A details answer has to say what was tasked in the same vocabulary the
+	// request used, so an ADMF can compare it against what it believes it sent.
+	"targetElement": func(t types.TargetIdentifierType) string {
+		switch t {
+		case types.TargetPEI:
+			return "peiImei"
+		case types.TargetGPSI:
+			return "gpsiMsisdn"
+		case types.TargetFSEID:
+			// A triggered task's criterion is a session, not a subscriber; it has no
+			// plain identifier element, so report it in the extension's terms.
+			return "targetIdentifierExtension"
+		default:
+			return "supiimsi"
+		}
+	},
+	"deliveryType": func(p []types.ProductType) string {
+		iri := slices.Contains(p, types.ProductIRI)
+		cc := slices.Contains(p, types.ProductCC)
+		switch {
+		case iri && cc:
+			return "X2andX3"
+		case cc:
+			return "X3Only"
+		default:
+			return "X2Only"
+		}
 	},
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Response xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">{{range .Messages}}
@@ -40,6 +68,20 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
     <ns1:messageTimestamp>{{esc .MessageTimestamp}}</ns1:messageTimestamp>
     <ns1:version>{{esc .Version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .X1TransactionID}}</ns1:x1TransactionId>
+{{- range .Tasks}}
+    <ns1:taskResponseDetails>
+      <ns1:taskDetails>
+        <ns1:xId>{{esc .XID}}</ns1:xId>
+        <ns1:targetIdentifiers>
+          <ns1:targetIdentifier>
+            <ns1:{{targetElement .Target.Type}}>{{esc .Target.Value}}</ns1:{{targetElement .Target.Type}}>
+          </ns1:targetIdentifier>
+        </ns1:targetIdentifiers>
+        <ns1:deliveryType>{{deliveryType .Products}}</ns1:deliveryType>
+      </ns1:taskDetails>
+      <ns1:taskStatus>{{if eq (printf "%s" .State) "active"}}Active{{else}}Inactive{{end}}</ns1:taskStatus>
+    </ns1:taskResponseDetails>
+{{- end}}
 {{- if .OK}}
     <ns1:oK>{{esc .OK}}</ns1:oK>
 {{- else if .ErrorInformation}}
@@ -306,6 +348,26 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			}
 		}
 		rm.Type = "DeactivateTaskResponse"
+	case "GetTaskDetailsRequest", "GetAllDetailsRequest":
+		// A provisioning function has no other way to discover that this element has
+		// lost the tasking it was given — a restart discards it, and nothing pushes
+		// that fact anywhere. Answering these is what lets an ADMF audit and
+		// re-provision instead of believing an interception is running that is not
+		// (review R38, and the TS 103 221-1 requirement noted at task 7.2).
+		if localType(m.Type) == "GetAllDetailsRequest" {
+			rm.Tasks = s.store.Snapshot()
+		} else if t, found := s.store.Get(types.XID(m.XID)); found {
+			rm.Tasks = []types.InterceptTask{t}
+		} else if m.XID == "" {
+			// xId is mandatory on this request in the schema.
+			err = fmt.Errorf("missing xId")
+		} else {
+			// Reporting "no such task" is the whole point: it is the answer that
+			// tells an ADMF its warrant is not in place here.
+			err = fmt.Errorf("no such task")
+			code = errCodeNoSuchTask
+		}
+		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)
 	case "CreateDestinationRequest":
 		err = s.createDestination(m.DestinationDetails)
 		rm.Type = "CreateDestinationResponse"

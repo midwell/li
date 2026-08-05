@@ -8,7 +8,11 @@
 // credential pre-provisioning) is layered on separately.
 package x1
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+
+	"github.com/omec-project/li/types"
+)
 
 // Namespace is the ETSI TS 103 221-1 X1 XML namespace. The message-type
 // discriminator rides on the xsi:type attribute (XML-Schema-instance namespace).
@@ -160,6 +164,10 @@ type X1ResponseMessage struct {
 	X1TransactionID  string   `xml:"x1TransactionId"`
 	OK               string   `xml:"oK,omitempty"`
 	ErrorInformation *X1Error `xml:"errorInformation,omitempty"`
+	// Tasks carries the answer to a details query. Rendered as
+	// taskResponseDetails, one per task, so an ADMF can see what this element
+	// actually holds rather than what it believes it provisioned.
+	Tasks []types.InterceptTask `xml:"-"`
 }
 
 // X1Error carries an error response (subset).

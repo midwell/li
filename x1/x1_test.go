@@ -398,3 +398,71 @@ func TestRejectsUnknownAndBadTarget(t *testing.T) {
 		t.Errorf("store should be empty after error, len=%d", st.Len())
 	}
 }
+
+// TestTaskDetailsQueryAnswersWhatIsHeld is review R38: a network element keeps its
+// tasking in memory, so a restart discards every warrant an ADMF provisioned and
+// nothing pushes that fact anywhere. The ADMF's only recourse is to ask — so the
+// answer has to be truthful about an absence, not merely about a presence.
+func TestTaskDetailsQueryAnswersWhatIsHeld(t *testing.T) {
+	st := store.New()
+	peer := admfPeer(t)
+
+	// A details query carries its xId at message level, not inside taskDetails, so
+	// it is built rather than derived from the activate fixture.
+	query := func(msgType, xid string) X1ResponseMessage {
+		t.Helper()
+
+		body := `<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:` + msgType + `">
+    <ns1:admfIdentifier>admfID</ns1:admfIdentifier>
+    <ns1:neIdentifier>neID</ns1:neIdentifier>
+    <ns1:messageTimestamp>2017-10-06T18:46:21.247432Z</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>3741800e-971b-4aa9-85f4-466d2b1adc7f</ns1:x1TransactionId>
+    <ns1:xId>` + xid + `</ns1:xId>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`
+
+		return processWith(t, st, peer, body).Messages[0]
+	}
+
+	const taskedXID = "50b93d1e-1b53-4d63-aacb-e4d99811bc0b"
+
+	// Nothing tasked: asking about a warrant must say so rather than acknowledge.
+	m := query("GetTaskDetailsRequest", taskedXID)
+	if m.Type != "ErrorResponse" || m.ErrorInformation == nil || m.ErrorInformation.ErrorCode != errCodeNoSuchTask {
+		t.Errorf("query against an untasked element = %+v, want error %d", m, errCodeNoSuchTask)
+	}
+
+	// Now task it, and the same query must report the task.
+	if _, err := processWith(t, st, peer, activateXML), error(nil); err != nil {
+		t.Fatal(err)
+	}
+	if st.Len() != 1 {
+		t.Fatalf("setup: store holds %d tasks, want 1", st.Len())
+	}
+
+	m = query("GetTaskDetailsRequest", taskedXID)
+	if m.Type != "GetTaskDetailsResponse" || len(m.Tasks) != 1 {
+		t.Fatalf("query = %+v, want one task in a GetTaskDetailsResponse", m)
+	}
+
+	// The answer has to reach the wire, not just the struct: an ADMF compares it
+	// against what it believes it provisioned.
+	out, err := marshalResponse(&X1Response{Messages: []X1ResponseMessage{m}})
+	if err != nil {
+		t.Fatalf("marshalResponse: %v", err)
+	}
+	for _, want := range []string{"<ns1:taskResponseDetails>", "<ns1:taskDetails>", "<ns1:taskStatus>Active</ns1:taskStatus>"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("response missing %s\ngot:\n%s", want, out)
+		}
+	}
+
+	// GetAllDetails reports everything held, which is what an audit needs.
+	m = query("GetAllDetailsRequest", taskedXID)
+	if m.Type != "GetAllDetailsResponse" || len(m.Tasks) != 1 {
+		t.Errorf("GetAllDetails = %+v, want one task", m)
+	}
+}

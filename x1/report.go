@@ -54,6 +54,12 @@ const (
 	// safe direction, since tasking must not outlive the authority for it — but the
 	// ADMF has to know it happened rather than infer it from an absence of product.
 	NEIssueTaskingPurged = "taskingPurged"
+	// NEIssueTaskingAbsent: this element has come up with lawful interception
+	// enabled and no tasking at all. On a first deployment that is simply true and
+	// harmless; after a restart it is the only notice the ADMF gets that the
+	// warrants it provisioned are gone, since tasking is held in memory and nothing
+	// else announces the loss (review R38).
+	NEIssueTaskingAbsent = "taskingAbsent"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
 	// interception is running but its product is not correlatable — a fault the ADMF
