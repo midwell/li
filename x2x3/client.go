@@ -42,6 +42,13 @@ func (c *Client) Send(pdu *PDU) error {
 		return err
 	}
 
+	return c.sendBytes(b)
+}
+
+// sendBytes writes already-marshalled PDU bytes, reconnecting once if the MDF has
+// dropped an idle connection. Shared by Send and SendBatch so both get the same
+// reconnect behaviour — a batch is only a longer write.
+func (c *Client) sendBytes(b []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -102,4 +109,33 @@ func (c *Client) Close() error {
 	err := c.conn.Close()
 	c.conn = nil
 	return err
+}
+
+// SendBatch marshals several PDUs and writes them with a single call. PDUs are
+// self-delimiting, so concatenating them needs no additional framing, and the
+// receiver reads them exactly as it would separate writes. Fewer syscalls and
+// fuller TLS records matter when a heavy target's content is the thing being
+// delivered.
+func (c *Client) SendBatch(pdus []*PDU) error {
+	if len(pdus) == 0 {
+		return nil
+	}
+
+	var buf []byte
+
+	for _, pdu := range pdus {
+		b, err := pdu.Marshal()
+		if err != nil {
+			// One malformed PDU must not discard the batch around it.
+			continue
+		}
+
+		buf = append(buf, b...)
+	}
+
+	if len(buf) == 0 {
+		return nil
+	}
+
+	return c.sendBytes(buf)
 }

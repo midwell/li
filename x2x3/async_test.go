@@ -108,3 +108,66 @@ func TestAsyncSenderDropsWhenFull(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+// TestAsyncSenderBatchesWhatIsAlreadyQueued covers the delivery coalescing added
+// for review R36: PDUs that are already waiting share one write, which is where
+// the syscall and TLS-record saving comes from. It must never wait for a batch to
+// fill, or delivery latency would depend on how idle the target is.
+func TestAsyncSenderBatchesWhatIsAlreadyQueued(t *testing.T) {
+	rec := &batchRecorder{}
+	// Depth well above the number queued, so nothing is dropped.
+	a := NewAsyncSender(rec, 256, nil, nil)
+
+	const n = 50
+	for i := 0; i < n; i++ {
+		if err := a.Send(&PDU{Type: PDUTypeX3}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+	}
+	a.Close()
+
+	total, calls := rec.totals()
+	if total != n {
+		t.Errorf("delivered %d PDUs, want %d", total, n)
+	}
+	// The point of batching: fewer writes than PDUs. Exactly how many depends on
+	// scheduling, so this asserts the property rather than a number.
+	if calls >= n {
+		t.Errorf("took %d writes for %d PDUs; nothing was batched", calls, n)
+	}
+}
+
+// batchRecorder counts PDUs and the number of write calls they took.
+type batchRecorder struct {
+	mu    sync.Mutex
+	pdus  int
+	calls int
+}
+
+func (b *batchRecorder) Send(*PDU) error {
+	b.mu.Lock()
+	b.pdus++
+	b.calls++
+	b.mu.Unlock()
+
+	return nil
+}
+
+func (b *batchRecorder) SendBatch(pdus []*PDU) error {
+	b.mu.Lock()
+	b.pdus += len(pdus)
+	b.calls++
+	b.mu.Unlock()
+
+	return nil
+}
+
+// Close satisfies Sender; there is no connection to release.
+func (b *batchRecorder) Close() error { return nil }
+
+func (b *batchRecorder) totals() (int, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.pdus, b.calls
+}

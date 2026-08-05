@@ -33,13 +33,22 @@ const (
 	// content is dropped — but an authorised interception may be silently producing
 	// nothing, which only the ADMF can resolve (review R34).
 	NEIssueContentUntasked = "contentUntasked"
-	// NEIssueX3ContentLost: content the datapath duplicated never reached the
-	// shipper, because the socket between them filled and the write was discarded.
-	// The interception is running and its product is *incomplete* — a mediation
-	// function receives part of the ordered content with no way to tell, which is
-	// why a throughput ceiling being documented does not make the loss acceptable
-	// to leave silent (review R36).
-	NEIssueX3ContentLost = "x3ContentLost"
+	// The three places content can be lost on its way to the MDF each get their
+	// own type, because the ADMF's response to them differs — datapath capacity,
+	// this element's CPU, or the mediation function's ingest rate — and because
+	// reports are throttled per type, so sharing one would let whichever fired
+	// first hide the others (review R36).
+	//
+	// NEIssueX3PuntLost: the datapath could not hand the copy to this element at
+	// all; its egress socket was full. Datapath-side capacity.
+	NEIssueX3PuntLost = "x3PuntLost"
+	// NEIssueX3FramingLost: this element received the copy but could not frame it
+	// fast enough. Local CPU.
+	NEIssueX3FramingLost = "x3FramingLost"
+	// NEIssueX3DeliveryLost: the copy was framed but could not be delivered; the
+	// queue toward the MDF was full. The mediation function is reachable but
+	// slower than the offered rate.
+	NEIssueX3DeliveryLost = "x3DeliveryLost"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
 	// interception is running but its product is not correlatable — a fault the ADMF
