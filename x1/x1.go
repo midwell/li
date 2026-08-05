@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,9 @@ type Server struct {
 
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
+	// requireDIDs refuses a CC task whose destinations are unknown, rather than
+	// accepting it and delivering nothing.
+	requireDIDs bool
 	// destinations maps a provisioned DID to the endpoint it names
 	// (CreateDestination). A task carries DIDs rather than addresses, so this is
 	// how an NE learns where to deliver product — configuration is not a
@@ -98,6 +102,20 @@ func OnActivate(fn func(types.InterceptTask)) Option {
 // It runs synchronously on the X1 request goroutine, so it must not block.
 func OnDeactivate(fn func(types.InterceptTask)) Option {
 	return func(s *Server) { s.onDeactivate = fn }
+}
+
+// RequireResolvableDIDs makes the server refuse a task that requests content
+// delivery but names destinations it does not know.
+//
+// The default is deliberately lenient, because an ADMF may legitimately task an
+// IRI-POI whose MDF address comes from configuration and name DIDs it never
+// provisioned — which is what real ADMFs do. That leniency is wrong for a
+// *triggered* POI: its triggering function has no other way to discover that the
+// destination it provisioned has been lost (a restart, say), so an acknowledgement
+// it cannot honour leaves content being dropped while the triggering function
+// believes interception is running (review R37).
+func RequireResolvableDIDs() Option {
+	return func(s *Server) { s.requireDIDs = true }
 }
 
 // WithADMF names the ADMF responsible for this network element. When set, a
@@ -443,14 +461,32 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 			return types.InterceptTask{}, fmt.Errorf("invalid correlationID")
 		}
 	}
+	deliveries := s.resolveDIDs(td.ListOfDIDs)
+	if s.requireDIDs && slices.Contains(products, types.ProductCC) && !hasDelivery(deliveries, types.DeliveryX3) {
+		// Accepting this would mean duplicating a subject's traffic and discarding
+		// every copy, while the party that asked for it is told all is well.
+		return types.InterceptTask{}, fmt.Errorf("no known X3 destination")
+	}
+
 	return types.InterceptTask{
 		XID:           types.XID(td.XID),
 		Target:        target,
 		Products:      products,
 		ProductID:     types.XID(td.ProductID),
 		CorrelationID: correlation,
-		Deliveries:    s.resolveDIDs(td.ListOfDIDs),
+		Deliveries:    deliveries,
 	}, nil
+}
+
+// hasDelivery reports whether the endpoints include one of the given type.
+func hasDelivery(endpoints []types.DeliveryEndpoint, t types.DeliveryType) bool {
+	for _, e := range endpoints {
+		if e.Type == t && e.Address != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func mapTarget(t TargetIdentifier) (types.TargetIdentifier, error) {
