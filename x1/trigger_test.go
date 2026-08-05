@@ -370,3 +370,29 @@ func asRequestError(err error, out **RequestError) bool {
 	}
 	return ok
 }
+
+// TestKeepaliveIsAcknowledged covers the message that makes a POI's fail-safe
+// usable: without it, tasking either lapses whenever no new task arrives or never
+// lapses at all (review R39).
+func TestKeepaliveIsAcknowledged(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	peer := certWithUID(t, "smf-1")
+	req, body := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		resp, err := srv.Process(b, peer)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		out, _ := marshalResponse(resp)
+		_, _ = w.Write(out)
+	}))
+
+	if err := req.Keepalive(); err != nil {
+		t.Fatalf("Keepalive: %v", err)
+	}
+	if !strings.Contains(*body, `xsi:type="ns1:KeepaliveRequest"`) {
+		t.Errorf("wrong message type sent:\n%s", *body)
+	}
+}

@@ -289,6 +289,32 @@ func (r *Requester) task(msgType string, t Trigger) error {
 	})
 }
 
+// keepaliveTemplate emits a KeepaliveRequest. It carries only the common header:
+// its purpose is to prove the requester is still there.
+var keepaliveTemplate = template.Must(template.New("x1ka").Funcs(template.FuncMap{
+	"esc": escapeXML,
+}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:KeepaliveRequest">
+    <ns1:admfIdentifier>{{esc .Header.OurID}}</ns1:admfIdentifier>
+    <ns1:neIdentifier>{{esc .Header.NeID}}</ns1:neIdentifier>
+    <ns1:messageTimestamp>{{esc .Header.Timestamp}}</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>{{esc .Header.TxID}}</ns1:x1TransactionId>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`))
+
+// Keepalive tells the NE this requester is still present.
+//
+// It is what makes the other side's fail-safe safe to enable: a POI that purges
+// tasking when its requester goes quiet would otherwise purge whenever no new task
+// happened to arrive, and a requester that never announces itself cannot be
+// distinguished from one that has died. Tasking that outlives the party
+// responsible for it is the failure this pair prevents (review R39).
+func (r *Requester) Keepalive() error {
+	return r.send(keepaliveTemplate, struct{ Header header }{Header: r.header("KeepaliveRequest")})
+}
+
 // DeactivateTask removes a trigger, ending interception at the POI. A Triggering
 // Function sends it when the session ends (TS 33.128 clause 6.2.3.3.1) and when
 // the warrant it derives from is withdrawn.

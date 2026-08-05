@@ -49,6 +49,11 @@ const (
 	// queue toward the MDF was full. The mediation function is reachable but
 	// slower than the offered rate.
 	NEIssueX3DeliveryLost = "x3DeliveryLost"
+	// NEIssueTaskingPurged: the keepalive fail-safe removed all tasking because the
+	// party responsible for it went quiet. Interception has stopped — which is the
+	// safe direction, since tasking must not outlive the authority for it — but the
+	// ADMF has to know it happened rather than infer it from an absence of product.
+	NEIssueTaskingPurged = "taskingPurged"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
 	// interception is running but its product is not correlatable — a fault the ADMF
