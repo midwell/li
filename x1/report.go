@@ -28,6 +28,12 @@ const (
 	NEIssueX3EgressDown   = "x3EgressDown"
 	NEIssueMDFUnreachable = "mdfUnreachable"
 	NEIssueInvalidConfig  = "invalidConfig"
+	// NEIssueContentUntasked: the datapath delivered content for a session no
+	// interception task covers. A triggered POI cannot label such content with a
+	// warrant, and a mediation function discards what it cannot attribute, so the
+	// content is dropped — but an authorised interception may be silently producing
+	// nothing, which only the ADMF can resolve (review R34).
+	NEIssueContentUntasked = "contentUntasked"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
 	// interception is running but its product is not correlatable — a fault the ADMF

@@ -73,6 +73,11 @@ type Server struct {
 
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
+	// destinations maps a provisioned DID to the endpoint it names
+	// (CreateDestination). A task carries DIDs rather than addresses, so this is
+	// how an NE learns where to deliver product — configuration is not a
+	// substitute, since one NE may serve several agencies' destinations.
+	destinations map[string]types.DeliveryEndpoint
 }
 
 // Option customises a Server.
@@ -105,7 +110,12 @@ func WithADMF(admfID string) Option {
 
 // NewServer returns an X1 Server backed by s, identifying itself as neID.
 func NewServer(s *store.Store, neID string, opts ...Option) *Server {
-	srv := &Server{store: s, neID: neID, now: func() time.Time { return time.Now().UTC() }}
+	srv := &Server{
+		store:        s,
+		neID:         neID,
+		now:          func() time.Time { return time.Now().UTC() },
+		destinations: make(map[string]types.DeliveryEndpoint),
+	}
 	for _, opt := range opts {
 		opt(srv)
 	}
@@ -278,6 +288,9 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			}
 		}
 		rm.Type = "DeactivateTaskResponse"
+	case "CreateDestinationRequest":
+		err = s.createDestination(m.DestinationDetails)
+		rm.Type = "CreateDestinationResponse"
 	case "KeepaliveRequest":
 		// Liveness from the ADMF (TS 103 221-1). Process already recorded the
 		// activity that resets the watchdog; just acknowledge.
@@ -301,11 +314,97 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	return rm
 }
 
+// createDestination records a delivery destination against its DID. Re-creating
+// an existing DID is an error per TS 103 221-1 clause 6.3.1.1, so a
+// misconfiguration cannot silently redirect an agency's product elsewhere.
+func (s *Server) createDestination(d *DestinationDetails) error {
+	if d == nil {
+		return fmt.Errorf("missing destinationDetails")
+	}
+	if d.DID == "" {
+		return fmt.Errorf("missing dId")
+	}
+	if _, err := deliveryProducts(d.DeliveryType); err != nil {
+		return err
+	}
+	endpoint, err := deliveryEndpoint(*d)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.destinations[d.DID]; exists {
+		return fmt.Errorf("destination already present")
+	}
+	s.destinations[d.DID] = endpoint
+	return nil
+}
+
+// deliveryEndpoint maps provisioned destination details onto the endpoint the
+// X2/X3 senders dial.
+func deliveryEndpoint(d DestinationDetails) (types.DeliveryEndpoint, error) {
+	if d.Address.IPAddressAndPort == nil {
+		return types.DeliveryEndpoint{}, fmt.Errorf("unsupported deliveryAddress")
+	}
+	ap := d.Address.IPAddressAndPort
+	host := ap.Address.IPv4
+	if host == "" {
+		// An IPv6 literal needs brackets before it can be joined to a port.
+		if ap.Address.IPv6 == "" {
+			return types.DeliveryEndpoint{}, fmt.Errorf("deliveryAddress carries no IP address")
+		}
+		host = "[" + ap.Address.IPv6 + "]"
+	}
+	if ap.Port == 0 {
+		return types.DeliveryEndpoint{}, fmt.Errorf("deliveryAddress carries no port")
+	}
+	// X3Only destinations deliver content, X2Only signalling; X2andX3 is recorded
+	// as X3 here only when the task that references it wants CC, so keep the
+	// delivery type the provisioner stated.
+	dt := types.DeliveryX3
+	if d.DeliveryType == "X2Only" {
+		dt = types.DeliveryX2
+	}
+	return types.DeliveryEndpoint{
+		Type:    dt,
+		Address: host + ":" + strconv.FormatUint(uint64(ap.Port), 10),
+	}, nil
+}
+
+// resolveDIDs turns the DIDs a task references into delivery endpoints, skipping
+// any that were never provisioned.
+//
+// Skipping rather than rejecting is deliberate. A task naming an unprovisioned DID
+// is arguably malformed, but an ADMF is entitled to task an IRI-POI whose MDF2
+// address comes from configuration — which is how this implementation has always
+// worked, and what the sipgate simulator does — so failing the task here would
+// stop interception working against every ADMF that does not call
+// CreateDestination first. The strictness belongs at the point of delivery
+// instead: a POI that has no destination for the product it was asked to produce
+// must refuse to produce it, which is where an unresolvable destination becomes
+// visible (as a reported fault) rather than silent.
+func (s *Server) resolveDIDs(dids []string) []types.DeliveryEndpoint {
+	if len(dids) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []types.DeliveryEndpoint
+	for _, did := range dids {
+		if endpoint, ok := s.destinations[did]; ok {
+			out = append(out, endpoint)
+		}
+	}
+	return out
+}
+
 func (s *Server) activate(m X1RequestMessage) (types.InterceptTask, error) {
 	if m.TaskDetails == nil {
 		return types.InterceptTask{}, fmt.Errorf("missing taskDetails")
 	}
-	task, err := taskFromDetails(*m.TaskDetails)
+	task, err := s.taskFromDetails(*m.TaskDetails)
 	if err != nil {
 		return types.InterceptTask{}, err
 	}
@@ -315,10 +414,9 @@ func (s *Server) activate(m X1RequestMessage) (types.InterceptTask, error) {
 	return task, nil
 }
 
-// taskFromDetails maps X1 TaskDetails onto an interception task. DID→MDF-address
-// resolution (via CreateDestination) is not yet handled, so Deliveries is left
-// empty until destinations are provisioned.
-func taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
+// taskFromDetails maps X1 TaskDetails onto an interception task, resolving the
+// DIDs it references against the destinations provisioned with CreateDestination.
+func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 	if td.XID == "" {
 		return types.InterceptTask{}, fmt.Errorf("missing xId")
 	}
@@ -351,6 +449,7 @@ func taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 		Products:      products,
 		ProductID:     types.XID(td.ProductID),
 		CorrelationID: correlation,
+		Deliveries:    s.resolveDIDs(td.ListOfDIDs),
 	}, nil
 }
 

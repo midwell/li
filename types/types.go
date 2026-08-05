@@ -8,7 +8,11 @@
 // encoding-agnostic; the X1/X2/X3 wire formats live in their own packages.
 package types
 
-import "slices"
+import (
+	"encoding/hex"
+	"slices"
+	"strings"
+)
 
 // TargetIdentifierType enumerates the 5G identifiers a warrant may target.
 type TargetIdentifierType string
@@ -39,6 +43,28 @@ type TargetIdentifier struct {
 // XID is the X1 task identifier (warrant reference) assigned by the ADMF. It is
 // carried in every xIRI/xCC record so the MDF can correlate product to a warrant.
 type XID string
+
+// Bytes converts the XID — a UUID string on X1 — to the 16-byte form carried in
+// the X2/X3 PDU header (TS 103 221-2 clause 5.2.7). An unparseable value yields
+// the zero XID, which is what an MDF treats as unattributable, so callers that
+// must not deliver unattributable product check the result rather than assuming
+// it (review R34).
+func (x XID) Bytes() [16]byte {
+	var out [16]byte
+
+	b, err := hex.DecodeString(strings.ReplaceAll(string(x), "-", ""))
+	if err == nil && len(b) == len(out) {
+		copy(out[:], b)
+	}
+
+	return out
+}
+
+// IsZero reports whether the XID converts to the all-zero PDU header field, i.e.
+// whether product labelled with it could be attributed to a warrant at all.
+func (x XID) IsZero() bool {
+	return x.Bytes() == [16]byte{}
+}
 
 // ProductType is the kind of intercept product a task requires.
 type ProductType string

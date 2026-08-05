@@ -216,6 +216,96 @@ func TestCreateDestinationWireForm(t *testing.T) {
 	})
 }
 
+// TestDestinationProvisioningResolvesDIDs covers the provisioning half of the
+// trigger flow: a task carries DIDs, not addresses, so a destination installed
+// with CreateDestination is what tells the POI where its product goes.
+func TestDestinationProvisioningResolvesDIDs(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	peer := certWithUID(t, "smf-1")
+	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		resp, err := srv.Process(body, peer)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		out, _ := marshalResponse(resp)
+		_, _ = w.Write(out)
+	}))
+
+	const did = "33333333-3333-4333-8333-333333333333"
+	if err := req.CreateDestination(Destination{
+		DID: did, DeliveryType: "X3Only", Address: "10.0.60.122", Port: 42069,
+	}); err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	// Re-creating the same DID must fail, so a misconfiguration cannot quietly
+	// redirect an agency's product (TS 103 221-1 clause 6.3.1.1).
+	if err := req.CreateDestination(Destination{
+		DID: did, DeliveryType: "X3Only", Address: "10.0.0.9", Port: 1,
+	}); err == nil {
+		t.Error("re-creating an existing DID was accepted")
+	}
+
+	tr := testTrigger()
+	tr.DIDs = []string{did}
+	if err := req.ActivateTask(tr); err != nil {
+		t.Fatalf("ActivateTask: %v", err)
+	}
+
+	task, ok := st.Get(tr.XID)
+	if !ok {
+		t.Fatal("task not stored")
+	}
+	if len(task.Deliveries) != 1 {
+		t.Fatalf("Deliveries = %+v, want the one provisioned destination", task.Deliveries)
+	}
+	if got := task.Deliveries[0].Address; got != "10.0.60.122:42069" {
+		t.Errorf("destination address = %q, want 10.0.60.122:42069", got)
+	}
+	if got := task.Deliveries[0].Type; got != types.DeliveryX3 {
+		t.Errorf("destination type = %q, want X3", got)
+	}
+
+	// A DID nobody provisioned is skipped rather than failing the task: an ADMF may
+	// legitimately task an IRI-POI whose MDF address comes from configuration. The
+	// POI that needs a destination enforces that at delivery instead.
+	tr2 := testTrigger()
+	tr2.XID = "44444444-4444-4444-8444-444444444444"
+	tr2.DIDs = []string{"55555555-5555-4555-8555-555555555555"}
+	if err := req.ActivateTask(tr2); err != nil {
+		t.Fatalf("ActivateTask with an unprovisioned DID: %v", err)
+	}
+	task2, ok := st.Get(tr2.XID)
+	if !ok {
+		t.Fatal("task with an unprovisioned DID was not stored")
+	}
+	if len(task2.Deliveries) != 0 {
+		t.Errorf("Deliveries = %+v, want none resolved", task2.Deliveries)
+	}
+}
+
+// TestXIDBytes checks the conversion every X2/X3 sender labels product through,
+// including the zero case an MDF cannot attribute.
+func TestXIDBytes(t *testing.T) {
+	xid := types.XID("26328981-45f4-4191-8000-000000000000")
+	if types.XID("").Bytes() != [16]byte{} || !types.XID("").IsZero() {
+		t.Error("empty XID did not convert to the zero header field")
+	}
+	if !types.XID("not-a-uuid").IsZero() {
+		t.Error("an unparseable XID did not report itself as zero")
+	}
+	if xid.IsZero() {
+		t.Error("a valid XID reported itself as zero")
+	}
+	want := [16]byte{0x26, 0x32, 0x89, 0x81, 0x45, 0xf4, 0x41, 0x91, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	if got := xid.Bytes(); got != want {
+		t.Errorf("Bytes() = %x, want %x", got, want)
+	}
+}
+
 // TestTriggerRejectsUnattributableTask covers the fields whose absence produced
 // R34 in the first place. The requester refuses to send a trigger that would make
 // the POI emit product no MDF can attribute, rather than leaving it to be noticed

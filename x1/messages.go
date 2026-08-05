@@ -34,6 +34,40 @@ type X1RequestMessage struct {
 	X1TransactionID  string       `xml:"x1TransactionId"`
 	TaskDetails      *TaskDetails `xml:"taskDetails,omitempty"` // ActivateTask / ModifyTask
 	XID              string       `xml:"xId,omitempty"`         // DeactivateTask
+	// DestinationDetails carries a delivery destination being provisioned
+	// (CreateDestination). A task references destinations by DID, so they must be
+	// installed before the first task that names them.
+	DestinationDetails *DestinationDetails `xml:"destinationDetails,omitempty"`
+}
+
+// DestinationDetails is a delivery destination (TS 103 221-1 clause 6.3.1.2).
+// Field order follows its xs:sequence.
+type DestinationDetails struct {
+	DID          string          `xml:"dId"`
+	FriendlyName string          `xml:"friendlyName,omitempty"`
+	DeliveryType string          `xml:"deliveryType"`
+	Address      DeliveryAddress `xml:"deliveryAddress"`
+}
+
+// DeliveryAddress is a CHOICE of address forms. Only ipAddressAndPort is
+// modeled — the X2/X3 senders deliver to a host and port — so a destination
+// given as a URI, E.164 number or email address is rejected rather than
+// silently accepted and never delivered to.
+type DeliveryAddress struct {
+	IPAddressAndPort *IPAddressPort `xml:"ipAddressAndPort,omitempty"`
+}
+
+// IPAddressPort is the TS 103 280 address-and-port structure. Its namespace is
+// elementFormDefault="qualified", hence the qualified child names.
+type IPAddressPort struct {
+	Address IPAddress `xml:"http://uri.etsi.org/03280/common/2017/07 address"`
+	Port    uint16    `xml:"http://uri.etsi.org/03280/common/2017/07 port"`
+}
+
+// IPAddress is a CHOICE of IPv4 and IPv6 literal.
+type IPAddress struct {
+	IPv4 string `xml:"http://uri.etsi.org/03280/common/2017/07 IPv4Address,omitempty"`
+	IPv6 string `xml:"http://uri.etsi.org/03280/common/2017/07 IPv6Address,omitempty"`
 }
 
 // TaskDetails describes the interception task being (de)provisioned. Field order
