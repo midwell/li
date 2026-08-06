@@ -238,6 +238,34 @@ var reportTaskTemplate = template.Must(template.New("x1taskissue").Funcs(templat
   </ns1:x1RequestMessage>
 </ns1:X1Request>`))
 
+// Notify reports an NE-level issue and discards the outcome. It is the form the
+// network functions call: an issue report is best-effort by design (design D11 —
+// the LI plane must not surface faults through anything but this channel, so a
+// failed report has nowhere to go and nothing to do), and expressing that as a
+// void call keeps every call site from blank-assigning an error the linter then
+// flags. A nil Reporter is a no-op, so a network function with no ADMF configured
+// need not guard every call — though existing callers may still, and must when
+// they hold the Reporter behind an interface (a nil interface value cannot be
+// called at all).
+//
+// It stays silent on failure for the same reason ReportNEIssue does: writing the
+// error anywhere general would be the very disclosure this plane exists to avoid.
+func (r *Reporter) Notify(issueType, description string) {
+	if r == nil {
+		return
+	}
+	_ = r.ReportNEIssue(issueType, description)
+}
+
+// NotifyTask reports a per-task issue and discards the outcome — the task-scoped
+// counterpart to Notify, wrapping ReportTaskIssue for the same reason.
+func (r *Reporter) NotifyTask(xid, reportType, details string) {
+	if r == nil {
+		return
+	}
+	_ = r.ReportTaskIssue(xid, reportType, details)
+}
+
 // ReportTaskIssue POSTs a ReportTaskIssueRequest to the ADMF for a specific
 // interception task. TS 33.128 clause 5.2.6 requires this of a Triggering
 // Function whose triggered POI answers an error: the warrant exists and is
