@@ -54,6 +54,12 @@ const (
 	// safe direction, since tasking must not outlive the authority for it — but the
 	// ADMF has to know it happened rather than infer it from an absence of product.
 	NEIssueTaskingPurged = "taskingPurged"
+	// NEIssueReconcileFailed: this element could not establish what tasking a POI
+	// still holds from before its restart, so it may have left interception running
+	// that it cannot withdraw. It is an element-level condition rather than a task
+	// one — which warrants they were is exactly what was lost — so it is reported
+	// here rather than as a task issue, which would have to name an XID.
+	NEIssueReconcileFailed = "reconcileFailed"
 	// NEIssueTaskingAbsent: this element has come up with lawful interception
 	// enabled and no tasking at all. On a first deployment that is simply true and
 	// harmless; after a restart it is the only notice the ADMF gets that the
