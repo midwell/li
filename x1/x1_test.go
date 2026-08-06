@@ -490,7 +490,15 @@ func TestNEIssueEncodingsAreConformant(t *testing.T) {
 		NEIssueInvalidConfig, NEIssueContentUntasked, NEIssueX3PuntLost,
 		NEIssueX3FramingLost, NEIssueX3DeliveryLost, NEIssueX3TagInvalid,
 		NEIssueReconcileFailed, NEIssueTaskingPurged, NEIssueTaskingAbsent,
+		NEIssueX1AuthFailed,
 	}
+
+	// issueCode is conditional, not mandatory: it is required when the condition
+	// appears in the registry's issue-code section. A refused provisioning attempt
+	// does not — that section has nothing security-related — so omitting it is the
+	// conformant choice, and borrowing an unrelated code would misdescribe it. Every
+	// other condition must still carry one.
+	codeOptional := map[string]bool{NEIssueX1AuthFailed: true}
 
 	for _, c := range conditions {
 		e, known := neIssueEncodings[c]
@@ -504,7 +512,7 @@ func TestNEIssueEncodingsAreConformant(t *testing.T) {
 			t.Errorf("%s reports type %q, which is not one of the four the schema permits", c, e.kind)
 		}
 
-		if e.code == 0 {
+		if e.code == 0 && !codeOptional[c] {
 			t.Errorf("%s carries no issue code; the standard asks for the most specific available", c)
 		}
 	}

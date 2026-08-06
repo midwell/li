@@ -71,6 +71,12 @@ const (
 	// interception is running but its product is not correlatable — a fault the ADMF
 	// must know about even though content keeps flowing.
 	NEIssueX3TagInvalid = "x3TagInvalid"
+	// NEIssueX1AuthFailed: a peer holding an LI-CA certificate tried to provision
+	// this element under an identity it is not bound to, or one this element does
+	// not answer to. Nothing is malfunctioning — the request was refused — but
+	// somebody inside the LI trust domain is attempting to task or untask network
+	// elements, and this channel is the only place that can be said (review R44).
+	NEIssueX1AuthFailed = "x1AuthFailed"
 )
 
 // TS 103 221-1 table 6.5.4-1: TypeOfNEIssueMessage is a closed enumeration, not
@@ -120,6 +126,14 @@ var neIssueEncodings = map[string]neIssueEncoding{
 	NEIssueReconcileFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
 	NEIssueTaskingPurged:   {neIssueFaultReport, issueCodeKeepalivesNotRcvd},
 	NEIssueTaskingAbsent:   {neIssueAlert, issueCodeDatabaseCleared},
+	// A rejected provisioning attempt is not a fault — nothing has broken and
+	// interception is unaffected — so it is an Alert rather than a FaultReport, the
+	// enumeration value clause 6.5.4 pairs with a current security issue on the NE.
+	// It carries no issue code: that field is conditional, required only when the
+	// condition appears in the registry's issue-code section, and that section holds
+	// nothing security-related to name. Inventing a code, or borrowing a fault code
+	// for something that is not a fault, would tell the ADMF something untrue.
+	NEIssueX1AuthFailed: {neIssueAlert, 0},
 }
 
 // encodeNEIssue returns the wire fields for a condition. An unrecognised one still

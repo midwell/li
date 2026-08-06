@@ -253,6 +253,48 @@ The MDF's own server certificate is verified against the LI CA *and* its name is
 checked against the configured MDF address. If you address an MDF by IP
 rather than hostname, its certificate needs a matching **IP** SAN.
 
+### Restricting who can reach X1
+
+The AMF's and SMF's X1 listeners are exposed for an ADMF outside the cluster to
+reach, which in a NodePort deployment means every host that can reach the node
+can open a connection to them. Authentication holds — a peer without a bound LI
+certificate gets nowhere — but nothing should be relying on that alone, and a
+peer that can connect can consume the listener's capacity before authenticating.
+
+**Do not do this with a NetworkPolicy.** A policy that selects a network
+function's pod isolates it for every listed `policyType`, so an Ingress policy
+admitting only X1 also denies SBI from the other network functions and NGAP from
+the RAN, taking the core down. The `bess-upf` chart offered such a knob once and
+it would have severed N4; it now refuses to render instead.
+
+Restrict the node port at the node instead, where the rule concerns one port and
+cannot silently cut anything else. Note that kube-proxy DNATs NodePort traffic in
+`nat/PREROUTING`, so by the time a packet could reach `filter/INPUT` its
+destination port is the pod's, not the node port — the rule has to run before
+that, in `raw/PREROUTING`:
+
+```sh
+ADMF=10.0.60.122            # the LI system's address
+NODE=10.0.179.176           # this node's address
+X1_PORTS=30843,30844        # the amf-x1 and smf-x1 node ports
+
+sudo iptables -t raw -N LI-X1 2>/dev/null || sudo iptables -t raw -F LI-X1
+sudo iptables -t raw -A LI-X1 -s "$ADMF"/32 -j RETURN
+sudo iptables -t raw -A LI-X1 -j DROP
+sudo iptables -t raw -C PREROUTING -d "$NODE"/32 -p tcp -m multiport --dports "$X1_PORTS" -j LI-X1 2>/dev/null ||
+  sudo iptables -t raw -I PREROUTING -d "$NODE"/32 -p tcp -m multiport --dports "$X1_PORTS" -j LI-X1
+```
+
+`DROP` rather than `REJECT` deliberately: a refusal confirms something is
+listening, and these ports are best left looking closed to everyone who is not
+the ADMF.
+
+Two things this does not cover. Traffic originating **on the node itself** goes
+through `OUTPUT`, not `PREROUTING`, so a process already running there is not
+stopped by this — it is inside the trust boundary and must be treated as such.
+And `iptables` rules do not survive a reboot on their own; persist them the way
+the rest of that host's firewall is persisted.
+
 ---
 
 ## What to expect once enabled

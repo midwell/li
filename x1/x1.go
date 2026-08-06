@@ -113,6 +113,10 @@ type Server struct {
 	now          func() time.Time
 	onActivate   func(types.InterceptTask)
 	onDeactivate func(types.InterceptTask)
+	// onAuthFailure is told the X1 error code when a peer fails clause 8.2.4
+	// authentication. Nil leaves such failures unreported, which is the pre-R44
+	// behaviour: refused and invisible.
+	onAuthFailure func(code int)
 
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
@@ -158,6 +162,19 @@ func OnDeactivate(fn func(types.InterceptTask)) Option {
 // believes interception is running (review R37).
 func RequireResolvableDIDs() Option {
 	return func(s *Server) { s.requireDIDs = true }
+}
+
+// OnAuthFailure registers a callback run when a peer fails TS 103 221-1 clause
+// 8.2.4 authentication — presenting a certificate the LI CA issued, but asserting
+// an identity it is not bound to, or one this element does not answer to. It is
+// given the X1 error code the peer was refused with.
+//
+// A POI wires this to its ADMF reporter. Without it an attack on the provisioning
+// interface is refused correctly and then recorded nowhere, since this plane
+// deliberately keeps out of operator logs (review R44). The callback runs
+// synchronously on the X1 request goroutine, so it must not block.
+func OnAuthFailure(fn func(code int)) Option {
+	return func(s *Server) { s.onAuthFailure = fn }
 }
 
 // WithADMF names the ADMF responsible for this network element. When set, a
@@ -244,6 +261,22 @@ func (s *Server) Process(body []byte, peer *x509.Certificate) (*X1Response, erro
 // applies it. The bool reports whether the peer authenticated for this message.
 func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) (X1ResponseMessage, bool) {
 	if code, desc := s.authenticate(m, peer); code != 0 {
+		// Someone reached this interface with a certificate from the LI CA and tried to
+		// task or untask this element as somebody they are not. Refusing it is not
+		// enough on its own: undetectability means we deliberately log nothing, so
+		// without this the most security-relevant event this interface can witness
+		// would leave no trace anywhere at all. Clause 6.5.4 anticipates that, listing
+		// a current security issue on the NE among the reasons to report (review R44).
+		//
+		// Only the error code reaches the ADMF, never the identifier the peer asserted:
+		// that is attacker-chosen text, and an LI management channel is the last place
+		// to start echoing it. The Reporter throttles per condition, so a peer
+		// hammering the interface produces one report per interval, not a flood — the
+		// report is a signal to go and look, not an audit trail.
+		if s.onAuthFailure != nil {
+			s.onAuthFailure(code)
+		}
+
 		return X1ResponseMessage{
 			Type:             "ErrorResponse",
 			AdmfIdentifier:   m.AdmfIdentifier,

@@ -360,3 +360,39 @@ func TestUnsupportedRequestUsesStandardCode(t *testing.T) {
 	body := strings.Replace(activateXML, "ActivateTaskRequest", "SomeFutureRequest", 1)
 	assertRejected(t, processWith(t, st, admfPeer(t), body), st, errCodeUnsupportedRequest)
 }
+
+// TestAuthFailureIsReported covers review R44: a refused provisioning attempt was
+// refused correctly and then recorded nowhere. This interface keeps deliberately
+// out of operator logs, so the callback is the only thing standing between an
+// attack on LI provisioning and complete silence.
+func TestAuthFailureIsReported(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		peer *x509.Certificate
+		want int // 0 = no report expected
+	}{
+		{"unbound peer is reported", certWithUID(t, "rogueADMF"), errCodeADMFCertMismatch},
+		{"no certificate is reported", nil, errCodeADMFCertMismatch},
+		{"a legitimate ADMF is not", certWithUID(t, "admfID"), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []int
+			st := store.New()
+			processWith(t, st, tc.peer, activateXML,
+				WithADMF("admfID"),
+				OnAuthFailure(func(code int) { got = append(got, code) }))
+
+			if tc.want == 0 {
+				if len(got) != 0 {
+					t.Fatalf("reported %v for an authorised ADMF; the ADMF would be told it is attacking itself", got)
+				}
+
+				return
+			}
+
+			if len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("reported %v, want exactly [%d]", got, tc.want)
+			}
+		})
+	}
+}
