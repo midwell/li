@@ -15,7 +15,9 @@ const (
 	errCodeUnexpectedNE       = 1060 // Unexpected NE Identifier
 	errCodeGeneric            = 1000 // Generic error
 	errCodeUnsupportedRequest = 1080 // Unsupported request
-	errCodeNoSuchTask         = 1020 // The XID is not known to this network element
+	// 2020 per table 6.7-3. It is emphatically not 1020, which is "Unsupported
+	// version" — a wrong code is as unhelpful to an ADMF as an invented one.
+	errCodeNoSuchTask = 2020 // XID does not exist on NE
 )
 
 // roleADMF is the role a peer tasking this network element presents in its

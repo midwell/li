@@ -73,6 +73,66 @@ const (
 	NEIssueX3TagInvalid = "x3TagInvalid"
 )
 
+// TS 103 221-1 table 6.5.4-1: TypeOfNEIssueMessage is a closed enumeration, not
+// free text. Anything else is schema-invalid and a conformant ADMF discards the
+// message — which for a fault channel means the fault is never heard (review R41).
+const (
+	neIssueWarning      = "Warning"
+	neIssueFaultCleared = "FaultCleared"
+	neIssueFaultReport  = "FaultReport"
+	neIssueAlert        = "Alert"
+)
+
+// Status/fault and issue codes from TS 103 221-1 table 6.7-3, which the same table
+// instructs implementers to use as specifically as they can. IssueCode is required
+// when the code belongs to the section matching the message type.
+const (
+	issueCodeNonTerminatingFault = 9020
+	issueCodeTerminatingFault    = 9030
+	issueCodeKeepalivesNotRcvd   = 9050
+	issueCodeDatabaseCleared     = 10000
+)
+
+// neIssueEncoding is how a condition this implementation knows about is expressed
+// in the two fields the standard provides for it. The condition itself stays in
+// the free-text description, where arbitrary strings are allowed and an ADMF can
+// still tell one fault from another.
+type neIssueEncoding struct {
+	kind string
+	code int
+}
+
+// neIssueEncodings maps each condition onto conformant fields. Where the registry
+// has a code that names the condition exactly, it is used: a purge follows
+// keepalives that stopped arriving (9050), and an element that has come up holding
+// nothing is the "database cleared" the specification lists among the reasons to
+// send this message at all (10000).
+var neIssueEncodings = map[string]neIssueEncoding{
+	NEIssueX1ListenFailed:  {neIssueFaultReport, issueCodeTerminatingFault},
+	NEIssueX3EgressDown:    {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueMDFUnreachable:  {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueInvalidConfig:   {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueContentUntasked: {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3PuntLost:      {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3FramingLost:   {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3DeliveryLost:  {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3TagInvalid:    {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueReconcileFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueTaskingPurged:   {neIssueFaultReport, issueCodeKeepalivesNotRcvd},
+	NEIssueTaskingAbsent:   {neIssueAlert, issueCodeDatabaseCleared},
+}
+
+// encodeNEIssue returns the wire fields for a condition. An unrecognised one still
+// yields a valid message: emitting an invalid enumeration would lose the report
+// entirely, which is worse than reporting it less specifically.
+func encodeNEIssue(condition string) neIssueEncoding {
+	if e, ok := neIssueEncodings[condition]; ok {
+		return e
+	}
+
+	return neIssueEncoding{neIssueFaultReport, issueCodeNonTerminatingFault}
+}
+
 // Reporter sends NE-initiated X1 issue reports to the ADMF (ETSI TS 103 221-1
 // ReportNEIssueRequest). It is how a POI surfaces LI-plane faults — X1 bind
 // failure, X3 egress socket down, MDF delivery failing, invalid config — to the
@@ -119,8 +179,11 @@ var reportTemplate = template.Must(template.New("x1report").Funcs(template.FuncM
     <ns1:messageTimestamp>{{esc .Timestamp}}</ns1:messageTimestamp>
     <ns1:version>v1.6.1</ns1:version>
     <ns1:x1TransactionId>{{esc .TxID}}</ns1:x1TransactionId>
-    <ns1:typeOfNeIssueMessage>{{esc .IssueType}}</ns1:typeOfNeIssueMessage>
+    <ns1:typeOfNeIssueMessage>{{esc .Kind}}</ns1:typeOfNeIssueMessage>
     <ns1:description>{{esc .Description}}</ns1:description>
+{{- if .IssueCode}}
+    <ns1:issueCode>{{.IssueCode}}</ns1:issueCode>
+{{- end}}
   </ns1:x1RequestMessage>
 </ns1:X1Request>`))
 
@@ -213,16 +276,23 @@ func (r *Reporter) ReportNEIssue(issueType, description string) error {
 	r.lastSent[issueType] = r.now()
 	r.mu.Unlock()
 
+	// The condition leads the description because that is the only field on this
+	// message where it may legitimately appear, and an ADMF still needs to tell one
+	// fault from another.
+	encoding := encodeNEIssue(issueType)
+
 	var body bytes.Buffer
 	if err := reportTemplate.Execute(&body, struct {
-		AdmfID, NeID, Timestamp, TxID, IssueType, Description string
+		AdmfID, NeID, Timestamp, TxID, Kind, Description string
+		IssueCode                                        int
 	}{
 		AdmfID:      r.admfID,
 		NeID:        r.neID,
 		Timestamp:   r.now().Format(time.RFC3339Nano),
 		TxID:        newUUID(),
-		IssueType:   issueType,
-		Description: description,
+		Kind:        encoding.kind,
+		IssueCode:   encoding.code,
+		Description: issueType + ": " + description,
 	}); err != nil {
 		return err
 	}

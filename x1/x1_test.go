@@ -49,8 +49,15 @@ func TestReportNEIssue(t *testing.T) {
 	for _, want := range []string{
 		`xsi:type="ns1:ReportNEIssueRequest"`,
 		"<ns1:neIdentifier>neID</ns1:neIdentifier>",
-		"<ns1:typeOfNeIssueMessage>x3EgressDown</ns1:typeOfNeIssueMessage>",
+		// TypeOfNEIssueMessage is a closed enumeration. This assertion used to
+		// require the condition string itself, which is how an entire fault channel
+		// came to be schema-invalid without anything noticing (review R41).
+		"<ns1:typeOfNeIssueMessage>FaultReport</ns1:typeOfNeIssueMessage>",
+		// The condition still has to reach the ADMF — in the field that permits it.
+		"x3EgressDown",
 		"X3 egress socket unavailable",
+		// And as specific a code as the registry offers.
+		"<ns1:issueCode>9020</ns1:issueCode>",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("report body missing %q\n%s", want, body)
@@ -464,5 +471,47 @@ func TestTaskDetailsQueryAnswersWhatIsHeld(t *testing.T) {
 	m = query("GetAllDetailsRequest", taskedXID)
 	if m.Type != "GetAllDetailsResponse" || len(m.Tasks) != 1 {
 		t.Errorf("GetAllDetails = %+v, want one task", m)
+	}
+}
+
+// TestNEIssueEncodingsAreConformant checks every condition this implementation can
+// report against the enumeration TS 103 221-1 actually defines. The failure this
+// guards against is not subtle but was invisible: a value outside the enumeration
+// is discarded by a conformant ADMF, so the fault it describes is never heard —
+// and the test rig, which accepts anything, cannot tell the difference.
+func TestNEIssueEncodingsAreConformant(t *testing.T) {
+	allowed := map[string]bool{
+		neIssueWarning: true, neIssueFaultCleared: true,
+		neIssueFaultReport: true, neIssueAlert: true,
+	}
+
+	conditions := []string{
+		NEIssueX1ListenFailed, NEIssueX3EgressDown, NEIssueMDFUnreachable,
+		NEIssueInvalidConfig, NEIssueContentUntasked, NEIssueX3PuntLost,
+		NEIssueX3FramingLost, NEIssueX3DeliveryLost, NEIssueX3TagInvalid,
+		NEIssueReconcileFailed, NEIssueTaskingPurged, NEIssueTaskingAbsent,
+	}
+
+	for _, c := range conditions {
+		e, known := neIssueEncodings[c]
+		if !known {
+			t.Errorf("%s has no encoding, so it would be reported only generically", c)
+
+			continue
+		}
+
+		if !allowed[e.kind] {
+			t.Errorf("%s reports type %q, which is not one of the four the schema permits", c, e.kind)
+		}
+
+		if e.code == 0 {
+			t.Errorf("%s carries no issue code; the standard asks for the most specific available", c)
+		}
+	}
+
+	// An unknown condition must still produce a valid message: reporting a fault
+	// less specifically beats having it discarded.
+	if fallback := encodeNEIssue("something-added-later"); !allowed[fallback.kind] {
+		t.Errorf("an unmapped condition yields type %q, which the schema does not permit", fallback.kind)
 	}
 }
