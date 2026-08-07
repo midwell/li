@@ -38,13 +38,13 @@ Three network functions act as POIs:
    (mTLS)        └─────────────┘
                    │ X1        │ X1
                    ▼           ▼
-              ┌────────┐   ┌────────┐  PFCP  ┌──────┐
+              ┌────────┐   ┌────────┐  PFCP   ┌──────┐
               │  AMF   │   │  SMF   │──DUPL──▶│ UPF  │
               │ IRI-POI│   │IRI-POI │  FAR    │CC-POI│
               │        │   │ CC-TF  │───X1───▶│      │
               └────┬───┘   └───┬────┘ trigger └──┬───┘
-             xIRI  │   xIRI    │              xCC │
-             X2    ▼   X2      ▼              X3  ▼
+             xIRI  │   xIRI    │             xCC │
+             X2    ▼   X2      ▼             X3  ▼
               ┌──────────────────┐         ┌──────────┐
               │       MDF2       │         │   MDF3   │   (external)
               └──────────────────┘         └──────────┘
@@ -105,9 +105,10 @@ no block present, LI is inactive. Before enabling, you need:
    receive xIRI/xCC). Note their addresses.
 3. The **LI-enabled NF images** deployed.
 
-The MDF2/MDF3 delivery endpoints are taken from the NF's own configuration (one
-MDF2 per AMF/SMF, one MDF3 per UPF); per-task destination provisioning over X1 is
-not used in this release.
+The MDF2/MDF3 delivery endpoints come from NF configuration, not from the ADMF's
+per-task provisioning over X1 (which this release does not use): the MDF2 from
+each AMF/SMF, and the MDF3 from the SMF, which provisions it to every UPF it
+triggers — the UPF holds no MDF3 of its own.
 
 ### AMF and SMF
 
@@ -131,7 +132,7 @@ configuration:
     # that nobody can attribute, which the SMF reports to the ADMF as a fault.
     mdf3: "mdf3.li.example:9001"          # X3 delivery destination (MDF3 host:port)
     upfTriggers:
-      - nodeId: "10.0.1.5"                # the UPF's N4 node address
+      - nodeId: "upf"                     # the UPF's N4 node address — IP or DNS name (resolved as on the PFCP path)
         x1Url: "https://upf-1:8443/X1/NE" # its X1 endpoint; the host must be a name its certificate covers
         neId: "upf-1"                     # the identifier its certificate is bound to
     # --- optional: NE→ADMF fault reporting + keepalive fail-safe ---
@@ -186,6 +187,22 @@ The UPF also requires the **content-egress datapath** to be active:
 - The BESS and pfcpiface containers must **share** that socket path (e.g. an
   `emptyDir` volume mounted at its directory in both containers), so the datapath
   can tee copies to the socket the pfcpiface agent reads.
+
+### Deploying with Helm or OnRamp
+
+The blocks above are what LI reads on disk; deployment tooling sets them for you.
+
+- **SD-Core Helm charts** expose one `config.<nf>.li` intent block per NF, gated by
+  `config.<nf>.li.enabled`. The chart merges it into that NF's `configuration.li`
+  (the UPF's `li`) and derives the pieces that must stay in step — the X1 bind
+  address, the externally-reachable X1 `Service` (a NodePort for the ADMF to reach),
+  and the LI PKI `Secret` mount — from the same values, so they cannot drift apart.
+  With `enabled: false` (the default) the render is byte-identical to a non-LI deploy.
+- **Aether OnRamp** wraps that in the `main-li.yml` blueprint: a single
+  `lawful_intercept:` block (ADMF/MDF endpoints + the two X1 NodePorts) flips the
+  chart's `config.<nf>.li` values. Its header lists the deployment prerequisites,
+  including the out-of-band LI PKI `Secret` and firewalling the X1 NodePorts to the
+  ADMF (see [Restricting who can reach X1](#restricting-who-can-reach-x1)).
 
 ### Configuration reference
 
