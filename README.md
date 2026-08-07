@@ -10,9 +10,8 @@ X1/X2/X3 interfaces that let SD-Core meet a Communication Service Provider's
 Lawful Interception (LI) obligations. It is imported by the AMF, SMF, and UPF.
 
 The Administration (ADMF/LIPF) and Mediation & Delivery (MDF2/MDF3) functions
-are **external, third-party systems** (e.g. OpenLI, or the sipgate
-X1/X2/X3 simulator for testing) — SD-Core implements only the POIs and the
-interfaces toward them.
+are **external, third-party systems** (e.g. the sipgate X1/X2/X3 simulator for
+testing) — SD-Core implements only the POIs and the interfaces toward them.
 
 LI is **opt-in and undetectable**: with no LI configuration a network function
 behaves and looks exactly as before, and even when active it emits nothing to
@@ -331,9 +330,8 @@ the rest of that host's firewall is persisted.
 
 Because the ADMF and MDF are external, LI is exercised end to end against a
 third-party stack — for example the **sipgate `li-simulator-x1x2x3`** (an
-independent ETSI TS 103 221 implementation, useful as an interop reference) or
-**OpenLI** (which ingests X2/X3 and mediates through to an emulated LEA). Point
-the NFs' `mdf2`/`mdf3`/`admfUrl` at the simulator's endpoints (`mdf3` on the SMF,
+independent ETSI TS 103 221 implementation, useful as an interop reference).
+Point the NFs' `mdf2`/`mdf3`/`admfUrl` at the simulator's endpoints (`mdf3` on the SMF,
 which passes it to each UPF) and provision a
 task over its X1 client.
 
