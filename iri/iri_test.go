@@ -88,6 +88,7 @@ func TestAbsentOptionalChoice(t *testing.T) {
 		t.Fatalf("EncodeXIRI with absent optionals: %v", err)
 	}
 	// Absent optionals must shrink the encoding versus the all-present sample.
+	//nolint:errcheck // test
 	full, _ := EncodeXIRI(ctx, sampleRegistration())
 	if len(der) >= len(full) {
 		t.Errorf("absent-optional encoding (%d) not smaller than full (%d)", len(der), len(full))
@@ -221,14 +222,14 @@ func TestIdentifierAssociationRoundTrip(t *testing.T) {
 		t.Errorf("association DER missing high-tag-number form for [62]: % x", der)
 	}
 	var g1 XIRIPayload
-	if _, err := ctx.Decode(der, &g1); err != nil {
-		t.Fatalf("association decode: %v", err)
+	if _, decErr := ctx.Decode(der, &g1); decErr != nil {
+		t.Fatalf("association decode: %v", decErr)
 	}
 	a, ok := g1.Event.(AMFIdentifierAssociation)
 	if !ok {
 		t.Fatalf("event decoded as %T, want AMFIdentifierAssociation", g1.Event)
 	}
-	if supi, ok := a.SUPI.(IMSI); !ok || supi != "262019876543210" {
+	if supi, isIMSI := a.SUPI.(IMSI); !isIMSI || supi != "262019876543210" {
 		t.Errorf("association SUPI = %#v", a.SUPI)
 	}
 	if a.GUTI != guti {
@@ -357,8 +358,8 @@ func TestSMFModificationAndReleaseRoundTrip(t *testing.T) {
 		t.Fatalf("modification encode: %v", err)
 	}
 	var g1 XIRIPayload
-	if _, err := ctx.Decode(der, &g1); err != nil {
-		t.Fatalf("modification decode: %v", err)
+	if _, decErr := ctx.Decode(der, &g1); decErr != nil {
+		t.Fatalf("modification decode: %v", decErr)
 	}
 	if m, ok := g1.Event.(SMFPDUSessionModification); !ok || m.RequestType != SMRequestModification || m.PDUSessionID != 5 {
 		t.Errorf("modification: %#v", g1.Event)

@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: 2026 Forsway Scandinavia AB
+# SPDX-License-Identifier: Apache-2.0
+#
+# There is no release-image job: li ships as a Go module, not a container. The
+# tag this produces is what makes the module resolvable — the network functions
+# require github.com/omec-project/li at a version, so an untagged repository
+# cannot be built from a clean checkout, only from a workspace.
+name: Release Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "VERSION"
+
+permissions:
+  contents: read
+
+jobs:
+  tag-github:
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    uses: omec-project/.github/.github/workflows/tag-github.yml@c6f69e74f8ee9034dcc237ccbd719de59526aee5 # v0.0.30
+    secrets: inherit
+
+  update-version:
+    needs: tag-github
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      id-token: write
+    uses: omec-project/.github/.github/workflows/update-version.yml@c6f69e74f8ee9034dcc237ccbd719de59526aee5 # v0.0.30
+    with:
+      changed: ${{ needs.tag-github.outputs.changed }}
+      version: ${{ needs.tag-github.outputs.version }}
+    secrets: inherit
+
+  sbom-source:
+    needs: tag-github
+    permissions:
+      contents: read
+      actions: read
+    uses: omec-project/.github/.github/workflows/sbom-source.yml@c6f69e74f8ee9034dcc237ccbd719de59526aee5 # v0.0.30
+    with:
+      changed: ${{ needs.tag-github.outputs.changed }}
+      branch_name: ${{ github.ref }}
+      artifact_name: ${{ github.event.repository.name }}-${{ needs.tag-github.outputs.version }}.spdx.json
+      sbom_format: spdx-json
+      path: .
+
+  grype-scan:
+    needs: [tag-github, sbom-source]
+    permissions:
+      contents: read
+      actions: read
+      security-events: write # Required for SARIF upload to Code Scanning
+    uses: omec-project/.github/.github/workflows/grype-scan.yml@c6f69e74f8ee9034dcc237ccbd719de59526aee5 # v0.0.30
+    with:
+      changed: ${{ needs.tag-github.outputs.changed }}
+      artifact_name: ${{ github.event.repository.name }}-${{ needs.tag-github.outputs.version }}.spdx.json

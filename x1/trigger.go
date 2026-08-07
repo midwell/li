@@ -5,6 +5,7 @@ package x1
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/xml"
 	"fmt"
@@ -330,7 +331,7 @@ func (r *Requester) TaskXIDs() ([]types.XID, error) {
 		return nil, err
 	}
 
-	resp, err := r.client.Post(r.neURL, "application/xml", &body)
+	resp, err := r.postXML(&body)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +397,7 @@ func (r *Requester) send(tmpl *template.Template, data any) error {
 	if err := tmpl.Execute(&body, data); err != nil {
 		return err
 	}
-	resp, err := r.client.Post(r.neURL, "application/xml", &body)
+	resp, err := r.postXML(&body)
 	if err != nil {
 		return err
 	}
@@ -421,9 +422,24 @@ func (r *Requester) send(tmpl *template.Template, data any) error {
 	return nil
 }
 
+// postXML sends an X1 request body to the NE and returns the response, which the
+// caller must close. net/http's Post helper carries no context; these requests
+// are bounded by the client's own timeout, but the linter is right that the shape
+// should be explicit.
+func (r *Requester) postXML(body *bytes.Buffer) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, r.neURL, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/xml")
+
+	return r.client.Do(req)
+}
+
 // escapeXML escapes text for inclusion in an XML element body.
 func escapeXML(s string) string {
 	var b bytes.Buffer
+	//nolint:errcheck // writing to a bytes.Buffer cannot fail
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
 }

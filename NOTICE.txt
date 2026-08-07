@@ -1,0 +1,16 @@
+li
+Copyright 2026 Forsway Scandinavia AB
+SPDX-License-Identifier: Apache-2.0
+
+
+This module implements the in-network parts of the 3GPP/ETSI Lawful
+Interception architecture for SD-Core: the X1 provisioning interface
+(ETSI TS 103 221-1), the X2/X3 delivery framing (ETSI TS 103 221-2), the
+TS 33.128 xIRI codec, the intercept-task store and the LI PKI helpers.
+
+
+The asn1/ directory is a vendored copy of
+https://github.com/PromonLogicalis/asn1, Copyright (c) 2016 PromonLogicalis,
+licensed under the MIT License (see LICENSES/MIT.txt). Local modifications are
+documented in asn1/README.md and marked in the source with "LOCAL PATCH
+(omec/li)".

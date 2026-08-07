@@ -336,22 +336,27 @@ type XIRIPayload struct {
 // used by the corresponding ASN.1 CHOICE alternative.
 func NewContext() *asn1.Context {
 	ctx := asn1.NewContext()
+	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
 	_ = ctx.AddChoice("supi", []asn1.Choice{
 		{Type: reflect.TypeOf(IMSI("")), Options: "tag:1"},
 		{Type: reflect.TypeOf(NAI("")), Options: "tag:2"},
 	})
+	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
 	_ = ctx.AddChoice("pei", []asn1.Choice{
 		{Type: reflect.TypeOf(IMEI("")), Options: "tag:1"},
 		{Type: reflect.TypeOf(IMEISV("")), Options: "tag:2"},
 	})
+	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
 	_ = ctx.AddChoice("gpsi", []asn1.Choice{
 		{Type: reflect.TypeOf(MSISDN("")), Options: "tag:1"},
 		{Type: reflect.TypeOf(NAI("")), Options: "tag:2"},
 	})
+	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
 	_ = ctx.AddChoice("amfFailureCause", []asn1.Choice{
 		{Type: reflect.TypeOf(FiveGMMCause(0)), Options: "tag:1"},
 		{Type: reflect.TypeOf(FiveGSMCause(0)), Options: "tag:2"},
 	})
+	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
 	_ = ctx.AddChoice("xiriEvent", []asn1.Choice{
 		{Type: reflect.TypeOf(AMFRegistration{}), Options: "tag:1"},
 		{Type: reflect.TypeOf(AMFDeregistration{}), Options: "tag:2"},

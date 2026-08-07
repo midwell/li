@@ -4,6 +4,7 @@
 package x2x3
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -73,7 +74,11 @@ func (c *Client) sendBytes(b []byte) error {
 }
 
 func (c *Client) dialLocked() error {
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: c.dialTimeout}, "tcp", c.addr, c.tlsConfig)
+	ctx, cancel := context.WithTimeout(context.Background(), c.dialTimeout)
+	defer cancel()
+
+	d := tls.Dialer{NetDialer: &net.Dialer{}, Config: c.tlsConfig}
+	conn, err := d.DialContext(ctx, "tcp", c.addr)
 	if err != nil {
 		return fmt.Errorf("x2x3: dial %s: %w", c.addr, err)
 	}
@@ -86,6 +91,7 @@ func (c *Client) writeLocked(b []byte) error {
 	// other Send behind the mutex) indefinitely; a timeout is treated as any other
 	// write error — drop + one redial.
 	if c.writeTimeout > 0 {
+		//nolint:errcheck // a deadline a connection will not take is not actionable here
 		_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
 	}
 	_, err := c.conn.Write(b)

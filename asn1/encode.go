@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2016 PromonLogicalis
+// SPDX-FileCopyrightText: 2026 Forsway Scandinavia AB
+// SPDX-License-Identifier: MIT
+
 package asn1
 
 import (

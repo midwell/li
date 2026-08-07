@@ -35,6 +35,7 @@ func supiTarget(v string) types.TargetIdentifier {
 func TestReportNEIssue(t *testing.T) {
 	var got []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		//nolint:errcheck // test handler read
 		got, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -206,7 +207,7 @@ func TestProcessActivate(t *testing.T) {
 		t.Fatalf("got %d response messages, want 1", len(resp.Messages))
 	}
 	rm := resp.Messages[0]
-	if rm.Type != "ActivateTaskResponse" || rm.OK != "AcknowledgedAndCompleted" {
+	if rm.Type != "ActivateTaskResponse" || rm.OK != ackOK {
 		t.Errorf("response = %+v", rm)
 	}
 	if rm.X1TransactionID != "3741800e-971b-4aa9-85f4-466d2b1adc7f" || rm.NeIdentifier != "neID" {
@@ -348,7 +349,7 @@ func TestProcessDeactivate(t *testing.T) {
 	if _, ok := st.Get(testXID); ok {
 		t.Error("task still present after DeactivateTask")
 	}
-	if resp.Messages[0].Type != "DeactivateTaskResponse" || resp.Messages[0].OK != "AcknowledgedAndCompleted" {
+	if resp.Messages[0].Type != "DeactivateTaskResponse" || resp.Messages[0].OK != ackOK {
 		t.Errorf("response = %+v", resp.Messages[0])
 	}
 }
@@ -363,7 +364,12 @@ func TestServeHTTPWithoutCertificateRejected(t *testing.T) {
 	ts := httptest.NewServer(NewServer(st, "neID"))
 	defer ts.Close()
 
-	res, err := http.Post(ts.URL+"/X1/NE", "application/xml", strings.NewReader(activateXML))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/X1/NE", strings.NewReader(activateXML))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/xml")
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
@@ -398,7 +404,7 @@ func TestRejectsUnknownAndBadTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	if resp.Messages[0].Type != "ErrorResponse" || resp.Messages[0].ErrorInformation == nil {
+	if resp.Messages[0].Type != errorResponse || resp.Messages[0].ErrorInformation == nil {
 		t.Errorf("unknown type should yield ErrorResponse, got %+v", resp.Messages[0])
 	}
 	if st.Len() != 0 {
@@ -423,7 +429,7 @@ func TestModifyUnknownTaskRefused(t *testing.T) {
 	}
 
 	m := resp.Messages[0]
-	if m.Type != "ErrorResponse" || m.ErrorInformation == nil {
+	if m.Type != errorResponse || m.ErrorInformation == nil {
 		t.Fatalf("modify of an unheld task = %+v, want ErrorResponse", m)
 	}
 	if m.ErrorInformation.ErrorCode != errCodeNoSuchTask {
@@ -449,7 +455,7 @@ func TestActivateReplacesHeldTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
-	if m := resp.Messages[0]; m.OK != "AcknowledgedAndCompleted" {
+	if m := resp.Messages[0]; m.OK != ackOK {
 		t.Fatalf("re-activation = %+v, want acknowledged", m)
 	}
 	task, ok := st.Get(testXID)
@@ -515,14 +521,12 @@ func TestTaskDetailsQueryAnswersWhatIsHeld(t *testing.T) {
 
 	// Nothing tasked: asking about a warrant must say so rather than acknowledge.
 	m := query("GetTaskDetailsRequest", taskedXID)
-	if m.Type != "ErrorResponse" || m.ErrorInformation == nil || m.ErrorInformation.ErrorCode != errCodeNoSuchTask {
+	if m.Type != errorResponse || m.ErrorInformation == nil || m.ErrorInformation.ErrorCode != errCodeNoSuchTask {
 		t.Errorf("query against an untasked element = %+v, want error %d", m, errCodeNoSuchTask)
 	}
 
 	// Now task it, and the same query must report the task.
-	if _, err := processWith(t, st, peer, activateXML), error(nil); err != nil {
-		t.Fatal(err)
-	}
+	processWith(t, st, peer, activateXML)
 	if st.Len() != 1 {
 		t.Fatalf("setup: store holds %d tasks, want 1", st.Len())
 	}

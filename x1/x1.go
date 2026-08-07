@@ -23,12 +23,27 @@ import (
 
 const maxRequestBytes = 1 << 20
 
+// The TS 103 221-1 deliveryType values, which appear both as something this
+// element parses from a request and as something it emits in a details answer.
+const (
+	deliveryX2Only  = "X2Only"
+	deliveryX3Only  = "X3Only"
+	deliveryX2andX3 = "X2andX3"
+)
+
+// The two X1 response shapes: an acknowledgement, or an error carrying a code.
+const (
+	ackOK         = "AcknowledgedAndCompleted"
+	errorResponse = "ErrorResponse"
+)
+
 // responseTemplate emits an X1Response in the conventional TS 103 221-1 wire
 // form (xsi/ns1 prefixes, xsi:type QName), which Go's encoding/xml can't
 // produce cleanly. Input is still parsed structurally with encoding/xml.
 var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncMap{
 	"esc": func(v any) string {
 		var b bytes.Buffer
+		//nolint:errcheck // writing to a bytes.Buffer cannot fail
 		_ = xml.EscapeText(&b, []byte(fmt.Sprintf("%s", v)))
 		return b.String()
 	},
@@ -53,11 +68,11 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
 		cc := slices.Contains(p, types.ProductCC)
 		switch {
 		case iri && cc:
-			return "X2andX3"
+			return deliveryX2andX3
 		case cc:
-			return "X3Only"
+			return deliveryX3Only
 		default:
-			return "X2Only"
+			return deliveryX2Only
 		}
 	},
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
@@ -227,6 +242,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/xml")
+	//nolint:errcheck // a peer that hung up mid-response is not actionable, and must not be logged
 	_, _ = w.Write(out)
 }
 
@@ -278,7 +294,7 @@ func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) 
 		}
 
 		return X1ResponseMessage{
-			Type:             "ErrorResponse",
+			Type:             errorResponse,
 			AdmfIdentifier:   m.AdmfIdentifier,
 			NeIdentifier:     s.neID,
 			MessageTimestamp: s.now().Format(time.RFC3339Nano),
@@ -446,13 +462,13 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	}
 
 	if err != nil {
-		rm.Type = "ErrorResponse"
+		rm.Type = errorResponse
 		if code == 0 {
 			code = errCodeGeneric
 		}
 		rm.ErrorInformation = &X1Error{ErrorCode: code, ErrorDescription: err.Error()}
 	} else {
-		rm.OK = "AcknowledgedAndCompleted"
+		rm.OK = ackOK
 	}
 	return rm
 }
@@ -506,7 +522,7 @@ func deliveryEndpoint(d DestinationDetails) (types.DeliveryEndpoint, error) {
 	// as X3 here only when the task that references it wants CC, so keep the
 	// delivery type the provisioner stated.
 	dt := types.DeliveryX3
-	if d.DeliveryType == "X2Only" {
+	if d.DeliveryType == deliveryX2Only {
 		dt = types.DeliveryX2
 	}
 	return types.DeliveryEndpoint{
@@ -659,11 +675,11 @@ func mapExtensionTarget(ext *TargetIdentifierExtension) (types.TargetIdentifier,
 
 func deliveryProducts(dt string) ([]types.ProductType, error) {
 	switch dt {
-	case "X2Only":
+	case deliveryX2Only:
 		return []types.ProductType{types.ProductIRI}, nil
-	case "X3Only":
+	case deliveryX3Only:
 		return []types.ProductType{types.ProductCC}, nil
-	case "X2andX3":
+	case deliveryX2andX3:
 		return []types.ProductType{types.ProductIRI, types.ProductCC}, nil
 	}
 	return nil, fmt.Errorf("unknown deliveryType %q", dt)

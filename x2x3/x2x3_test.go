@@ -9,9 +9,11 @@ import (
 	"testing"
 )
 
-// sampleXID is a fixed 16-byte XID (UUID) for deterministic vectors.
-var sampleXID = [16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
-var sampleCID = [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+// Fixed XID and correlation identifier, for deterministic vectors.
+var (
+	sampleXID = [16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	sampleCID = [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+)
 
 // TestMarshalGolden pins the exact byte layout against a hand-derived vector so
 // any drift from the TS 103 221-2 / sipgate wire format is caught.
@@ -83,6 +85,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestUnmarshalIncomplete(t *testing.T) {
+	//nolint:errcheck // test
 	full, _ := (&PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128, Payload: []byte("payload")}).Marshal()
 	for _, n := range []int{0, 5, 11, len(full) - 1} {
 		if _, _, err := Unmarshal(full[:n]); !errors.Is(err, ErrIncomplete) {
@@ -96,6 +99,7 @@ func TestUnmarshalIncomplete(t *testing.T) {
 
 func TestRejectsBadVersionAndFormat(t *testing.T) {
 	// Bad version on the wire.
+	//nolint:errcheck // test
 	b, _ := (&PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128}).Marshal()
 	b[0] = 9 // corrupt major version
 	if _, _, err := Unmarshal(b); err == nil {

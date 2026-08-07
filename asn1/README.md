@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Forsway Scandinavia AB
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # asn1 (vendored)
 
 This package is a vendored copy of [`github.com/PromonLogicalis/asn1`](https://github.com/PromonLogicalis/asn1)

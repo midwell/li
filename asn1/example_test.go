@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2016 PromonLogicalis
+// SPDX-License-Identifier: MIT
+
 package asn1_test
 
 import (

@@ -320,7 +320,12 @@ func TestServeHTTPMutualTLS(t *testing.T) {
 				Certificates: []tls.Certificate{{Certificate: [][]byte{clientCert.Raw}, PrivateKey: clientKey}},
 				MinVersion:   tls.VersionTLS12,
 			}}}
-			res, err := client.Post(ts.URL+"/X1/NE", "application/xml", strings.NewReader(activateXML))
+			httpReq, reqErr := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/X1/NE", strings.NewReader(activateXML))
+			if reqErr != nil {
+				t.Fatalf("build request: %v", reqErr)
+			}
+			httpReq.Header.Set("Content-Type", "application/xml")
+			res, err := client.Do(httpReq)
 			if err != nil {
 				t.Fatalf("POST: %v", err)
 			}

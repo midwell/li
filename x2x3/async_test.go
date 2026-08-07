@@ -70,6 +70,7 @@ func TestAsyncSenderErrorCallback(t *testing.T) {
 	var mu sync.Mutex
 	errs := 0
 	a := NewAsyncSender(rec, 8, func(error) { mu.Lock(); errs++; mu.Unlock() }, nil)
+	//nolint:errcheck // test
 	_ = a.Send(&PDU{Type: PDUTypeX2})
 	_ = a.Close()
 	mu.Lock()

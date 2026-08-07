@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2016 PromonLogicalis
+// SPDX-License-Identifier: MIT
+
 // Package asn1 implements encoding and decoding of ASN.1 data structures using
 // both Basic Encoding Rules (BER) or its subset, the Distinguished Encoding
 // Rules (BER).

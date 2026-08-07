@@ -32,7 +32,7 @@ func requesterTo(t *testing.T, h http.Handler) (*Requester, *string) {
 	t.Helper()
 	var body string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
+		b, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 		body = string(b)
 		// Put the body back: the handler under test has to read it too.
 		r.Body = io.NopCloser(bytes.NewReader(b))
@@ -48,7 +48,7 @@ func requesterTo(t *testing.T, h http.Handler) (*Requester, *string) {
 // that let review R33's wrong field tags survive.
 func TestTriggerWireForm(t *testing.T) {
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><oK>AcknowledgedAndCompleted</oK></x1ResponseMessage></X1Response>`))
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><oK>AcknowledgedAndCompleted</oK></x1ResponseMessage></X1Response>`)) //nolint:errcheck // test handler
 	})
 	req, body := requesterTo(t, okHandler)
 	if err := req.ActivateTask(testTrigger()); err != nil {
@@ -79,7 +79,7 @@ func TestTriggerWireForm(t *testing.T) {
 	dids := strings.Index(*body, "<ns1:listOfDIDs>")
 	corr := strings.Index(*body, "<ns1:correlationID>")
 	prod := strings.Index(*body, "<ns1:productID>")
-	if !(dids < corr && corr < prod) {
+	if dids >= corr || corr >= prod {
 		t.Errorf("taskDetails element order violates the xs:sequence: listOfDIDs=%d correlationID=%d productID=%d", dids, corr, prod)
 	}
 }
@@ -98,7 +98,7 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
 	peer := certWithUID(t, "smf-1")
 	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 		resp, err := srv.Process(body, peer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -109,7 +109,7 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		_, _ = w.Write(out)
+		_, _ = w.Write(out) //nolint:errcheck // test handler
 	}))
 
 	tr := testTrigger()
@@ -158,7 +158,7 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 // address is mandatory, so an NE that cannot parse it has nowhere to send product.
 func TestCreateDestinationWireForm(t *testing.T) {
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><oK>AcknowledgedAndCompleted</oK></x1ResponseMessage></X1Response>`))
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><oK>AcknowledgedAndCompleted</oK></x1ResponseMessage></X1Response>`)) //nolint:errcheck // test handler
 	})
 
 	t.Run("ipv4", func(t *testing.T) {
@@ -224,14 +224,14 @@ func TestDestinationProvisioningResolvesDIDs(t *testing.T) {
 	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
 	peer := certWithUID(t, "smf-1")
 	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 		resp, err := srv.Process(body, peer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		out, _ := marshalResponse(resp)
-		_, _ = w.Write(out)
+		out, _ := marshalResponse(resp) //nolint:errcheck // test handler
+		_, _ = w.Write(out)             //nolint:errcheck // test handler
 	}))
 
 	const did = "33333333-3333-4333-8333-333333333333"
@@ -337,7 +337,7 @@ func TestTriggerRejectsUnattributableTask(t *testing.T) {
 func TestTriggerSurfacesErrorCode(t *testing.T) {
 	t.Run("error response", func(t *testing.T) {
 		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><errorInformation><errorCode>1030</errorCode><errorDescription>identity mismatch</errorDescription></errorInformation></x1ResponseMessage></X1Response>`))
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><errorInformation><errorCode>1030</errorCode><errorDescription>identity mismatch</errorDescription></errorInformation></x1ResponseMessage></X1Response>`)) //nolint:errcheck // test handler
 		})
 		req, _ := requesterTo(t, h)
 		err := req.ActivateTask(testTrigger())
@@ -352,7 +352,7 @@ func TestTriggerSurfacesErrorCode(t *testing.T) {
 
 	t.Run("empty acknowledgement", func(t *testing.T) {
 		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage/></X1Response>`))
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage/></X1Response>`)) //nolint:errcheck // test handler
 		})
 		req, _ := requesterTo(t, h)
 		if err := req.ActivateTask(testTrigger()); err == nil {
@@ -379,14 +379,14 @@ func TestKeepaliveIsAcknowledged(t *testing.T) {
 	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
 	peer := certWithUID(t, "smf-1")
 	req, body := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
+		b, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 		resp, err := srv.Process(b, peer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		out, _ := marshalResponse(resp)
-		_, _ = w.Write(out)
+		out, _ := marshalResponse(resp) //nolint:errcheck // test handler
+		_, _ = w.Write(out)             //nolint:errcheck // test handler
 	}))
 
 	if err := req.Keepalive(); err != nil {
@@ -405,14 +405,14 @@ func TestTaskXIDsReportsWhatThePOIHolds(t *testing.T) {
 	srv := NewServer(st, "upf-1", WithADMF("smf-1"), RequireResolvableDIDs())
 	peer := certWithUID(t, "smf-1")
 	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
+		b, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 		resp, err := srv.Process(b, peer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		out, _ := marshalResponse(resp)
-		_, _ = w.Write(out)
+		out, _ := marshalResponse(resp) //nolint:errcheck // test handler
+		_, _ = w.Write(out)             //nolint:errcheck // test handler
 	}))
 
 	// Nothing tasked yet.
@@ -425,16 +425,16 @@ func TestTaskXIDsReportsWhatThePOIHolds(t *testing.T) {
 	}
 
 	const did = "33333333-3333-4333-8333-333333333333"
-	if err := req.CreateDestination(Destination{
+	if createErr := req.CreateDestination(Destination{
 		DID: did, DeliveryType: "X3Only", Address: "10.0.60.122", Port: 42069,
-	}); err != nil {
-		t.Fatalf("CreateDestination: %v", err)
+	}); createErr != nil {
+		t.Fatalf("CreateDestination: %v", createErr)
 	}
 
 	tr := testTrigger()
 	tr.DIDs = []string{did}
-	if err := req.ActivateTask(tr); err != nil {
-		t.Fatalf("ActivateTask: %v", err)
+	if activateErr := req.ActivateTask(tr); activateErr != nil {
+		t.Fatalf("ActivateTask: %v", activateErr)
 	}
 
 	xids, err = req.TaskXIDs()

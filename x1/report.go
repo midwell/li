@@ -5,6 +5,7 @@ package x1
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
@@ -264,6 +265,7 @@ func (r *Reporter) Notify(issueType, description string) {
 	if r == nil {
 		return
 	}
+	//nolint:errcheck // fire-and-forget by design; see the doc comment
 	_ = r.ReportNEIssue(issueType, description)
 }
 
@@ -273,6 +275,7 @@ func (r *Reporter) NotifyTask(xid, reportType, details string) {
 	if r == nil {
 		return
 	}
+	//nolint:errcheck // fire-and-forget by design; see the doc comment
 	_ = r.ReportTaskIssue(xid, reportType, details)
 }
 
@@ -302,7 +305,7 @@ func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
 		return err
 	}
 
-	resp, err := r.client.Post(r.admfURL, "application/xml", &body)
+	resp, err := r.postXML(r.admfURL, &body)
 	if err != nil {
 		return err
 	}
@@ -349,7 +352,7 @@ func (r *Reporter) ReportNEIssue(issueType, description string) error {
 		return err
 	}
 
-	resp, err := r.client.Post(r.admfURL, "application/xml", &body)
+	resp, err := r.postXML(r.admfURL, &body)
 	if err != nil {
 		return err
 	}
@@ -368,10 +371,26 @@ func NewUUID() string {
 	return newUUID()
 }
 
+// postXML sends an X1 request body to url and returns the response, which the
+// caller must close. It exists so both report kinds go out the same way, and
+// because net/http's Post helper carries no context — this plane's requests are
+// bounded by the client's own timeout, but the linter is right that the shape
+// should be explicit.
+func (r *Reporter) postXML(url string, body *bytes.Buffer) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/xml")
+
+	return r.client.Do(req)
+}
+
 // newUUID returns a random RFC 4122 v4 UUID for the x1TransactionId, without an
 // external dependency (the li module has none).
 func newUUID() string {
 	var b [16]byte
+	//nolint:errcheck // crypto/rand.Read never returns an error
 	_, _ = rand.Read(b[:])
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant

@@ -110,6 +110,7 @@ func TestMutualTLS(t *testing.T) {
 
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		//nolint:errcheck // test
 		_, _ = io.WriteString(w, "ok")
 	}))
 	ts.TLS = serverMat.ServerTLS()
@@ -118,7 +119,11 @@ func TestMutualTLS(t *testing.T) {
 
 	get := func(cfg *tls.Config) (int, error) {
 		c := &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}}
-		resp, err := c.Get(ts.URL)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL, nil)
+		if err != nil {
+			return 0, err
+		}
+		resp, err := c.Do(req)
 		if err != nil {
 			return 0, err
 		}
@@ -178,7 +183,11 @@ func TestClientVerifiesMDF(t *testing.T) {
 	defer ts.Close()
 
 	c := &http.Client{Transport: &http.Transport{TLSClientConfig: clientMat.ClientTLS()}}
-	resp, err := c.Get(ts.URL)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := c.Do(req)
 	if err == nil {
 		_ = resp.Body.Close()
 		t.Error("X2/X3 client accepted an MDF whose cert is not signed by the LI CA")
@@ -198,8 +207,11 @@ func TestLoadRejectsBadInputs(t *testing.T) {
 	cp := filepath.Join(dir, "tls.crt")
 	kp := filepath.Join(dir, "tls.key")
 	bad := filepath.Join(dir, "bad-ca.crt")
+	//nolint:errcheck // test
 	_ = os.WriteFile(cp, cert, 0o600)
+	//nolint:errcheck // test
 	_ = os.WriteFile(kp, key, 0o600)
+	//nolint:errcheck // test
 	_ = os.WriteFile(bad, []byte("not a certificate"), 0o600)
 	if _, err := Load(cp, kp, bad); err == nil {
 		t.Error("Load accepted a CA file with no certificate")
