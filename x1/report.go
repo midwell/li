@@ -71,6 +71,12 @@ const (
 	// interception is running but its product is not correlatable — a fault the ADMF
 	// must know about even though content keeps flowing.
 	NEIssueX3TagInvalid = "x3TagInvalid"
+	// NEIssueContentTaskOverlap: more than one interception task covers the same
+	// session, and this element delivers each duplicated packet under exactly one of
+	// them. The task with the lowest XID receives the session's content in full and
+	// the others receive none of it. Which warrants overlap is the ADMF's to know
+	// and not this element's to say, so the report carries only that it happened.
+	NEIssueContentTaskOverlap = "contentTaskOverlap"
 	// NEIssueX1AuthFailed: a peer holding an LI-CA certificate tried to provision
 	// this element under an identity it is not bound to, or one this element does
 	// not answer to. Nothing is malfunctioning — the request was refused — but
@@ -124,8 +130,12 @@ var neIssueEncodings = map[string]neIssueEncoding{
 	NEIssueX3DeliveryLost:  {neIssueFaultReport, issueCodeNonTerminatingFault},
 	NEIssueX3TagInvalid:    {neIssueFaultReport, issueCodeNonTerminatingFault},
 	NEIssueReconcileFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueTaskingPurged:   {neIssueFaultReport, issueCodeKeepalivesNotRcvd},
-	NEIssueTaskingAbsent:   {neIssueAlert, issueCodeDatabaseCleared},
+	// Nothing has broken — every packet is delivered under some warrant — so this is
+	// a Warning rather than a FaultReport. What it warns of is that one warrant's
+	// product is complete at the cost of another's being empty.
+	NEIssueContentTaskOverlap: {neIssueWarning, issueCodeNonTerminatingFault},
+	NEIssueTaskingPurged:      {neIssueFaultReport, issueCodeKeepalivesNotRcvd},
+	NEIssueTaskingAbsent:      {neIssueAlert, issueCodeDatabaseCleared},
 	// A rejected provisioning attempt is not a fault — nothing has broken and
 	// interception is unaffected — so it is an Alert rather than a FaultReport, the
 	// enumeration value clause 6.5.4 pairs with a current security issue on the NE.
@@ -348,6 +358,14 @@ func (r *Reporter) ReportNEIssue(issueType, description string) error {
 		return fmt.Errorf("x1: ADMF returned status %d for NE issue report", resp.StatusCode)
 	}
 	return nil
+}
+
+// NewUUID returns a random RFC 4122 v4 UUID — the form TS 103 221-1 requires of
+// an x1TransactionId, an XID and a DID alike. Exported because a Triggering
+// Function allocates XIDs and DIDs of its own and should not reimplement the
+// generator to do it.
+func NewUUID() string {
+	return newUUID()
 }
 
 // newUUID returns a random RFC 4122 v4 UUID for the x1TransactionId, without an

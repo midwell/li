@@ -182,6 +182,21 @@ The UPF also requires the **content-egress datapath** to be active:
   run by default — and `conf/closed_loop.bess` carry it. A pipeline **without** the
   tee drops a tasked subscriber's traffic outright, because the PFCP agent marks it
   with a forwarding action that such a pipeline has no gate for.
+
+> **Upgrade the BESS pipeline before, or with, the PFCP agent — never after.**
+> This applies to **every** UPF, including ones with no `li` block at all, and it
+> is the one ordering constraint LI adds to an existing deployment.
+>
+> The agent writes an extra `fwd_action` value on every FAR it installs, which the
+> pipeline's `farLookup::ExactMatch` must declare. BESS rejects a rule whose value
+> count does not match the table, so an agent from an LI-capable image running
+> against a pipeline from an older one fails **every** FAR insertion — no
+> forwarding rules at all, for any subscriber, tasked or not. The two ship as
+> separate images (`upf-pfcpiface` and `upf-bess`), so nothing prevents them being
+> rolled independently. Pin both to the same release, or roll `upf-bess` first.
+>
+> The failure is loud (no user-plane forwarding) rather than silent, but it is a
+> full data-plane outage and it looks nothing like a lawful-interception problem.
 - Set the BESS container's `LI_X3_SOCKET_PATH` environment variable to the **same
   path** as `li.x3_sockaddr` (both default to `/tmp/li_x3`).
 - The BESS and pfcpiface containers must **share** that socket path (e.g. an

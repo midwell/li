@@ -300,11 +300,22 @@ func (s *Server) recordActivity() {
 // arrives from the ADMF within timeout, all tasking is purged (the controlling
 // ADMF is presumed gone, so warrants must not persist). It blocks — run it in a
 // goroutine; timeout must be > 0.
-func (s *Server) WatchKeepalive(timeout time.Duration) {
+//
+// It returns when stop is closed. A network function passes nil, since the
+// fail-safe must run for as long as the element can hold tasking; a nil channel
+// never becomes ready, so the watchdog simply never stops. Tests pass a real
+// channel so each one does not leave a ticker and a goroutine behind.
+func (s *Server) WatchKeepalive(timeout time.Duration, stop <-chan struct{}) {
 	s.recordActivity() // seed, so a freshly-started NE does not purge immediately
 	ticker := time.NewTicker(timeout / 2)
-	for range ticker.C {
-		s.purgeIfLapsed(timeout)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.purgeIfLapsed(timeout)
+		case <-stop:
+			return
+		}
 	}
 }
 
@@ -347,24 +358,43 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		// retargets to a *different* identifier (the new target's already-present
 		// state needs a scan too) — but not on a modify that leaves the target
 		// unchanged, which would re-emit for UEs already covered.
+		//
+		// An activation naming an XID this element already holds replaces it rather
+		// than being refused, which is deliberate: re-provisioning is how an ADMF
+		// restores tasking after an element restarts (review R38), and refusing it
+		// would break the recovery path the fault reporting exists to trigger.
+		// Modifying tasking that is *not* held has no such reading and is refused
+		// below.
 		isModify := localType(m.Type) == "ModifyTaskRequest"
 		var prevTask types.InterceptTask
 		var hadPrev bool
 		if isModify && m.TaskDetails != nil {
 			prevTask, hadPrev = s.store.Get(types.XID(m.TaskDetails.XID))
 		}
-		var task types.InterceptTask
-		task, err = s.activate(m)
-		if err == nil {
-			retargeted := isModify && hadPrev && task.Target != prevTask.Target
-			if s.onActivate != nil && (!isModify || retargeted) {
-				s.onActivate(task)
-			}
-			// A retarget must undo product/state applied for the old target (e.g.
-			// clear the SMF's CC duplication on the old target's sessions), which
-			// re-evaluates against the now-updated task set. (review R19/R15)
-			if retargeted && s.onDeactivate != nil {
-				s.onDeactivate(prevTask)
+		switch {
+		case isModify && m.TaskDetails == nil:
+			err = fmt.Errorf("missing taskDetails")
+		case isModify && !hadPrev:
+			// Applying this would silently create the task, leaving the ADMF believing
+			// it had adjusted an interception that never existed here — the same class
+			// of undetected divergence as tasking lost to a restart (review R38/R40).
+			// Answering "no such task" is what lets it activate the warrant instead.
+			err = fmt.Errorf("no such task")
+			code = errCodeNoSuchTask
+		default:
+			var task types.InterceptTask
+			task, err = s.activate(m)
+			if err == nil {
+				retargeted := isModify && hadPrev && task.Target != prevTask.Target
+				if s.onActivate != nil && (!isModify || retargeted) {
+					s.onActivate(task)
+				}
+				// A retarget must undo product/state applied for the old target (e.g.
+				// clear the SMF's CC duplication on the old target's sessions), which
+				// re-evaluates against the now-updated task set. (review R19/R15)
+				if retargeted && s.onDeactivate != nil {
+					s.onDeactivate(prevTask)
+				}
 			}
 		}
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)

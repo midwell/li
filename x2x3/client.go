@@ -116,17 +116,28 @@ func (c *Client) Close() error {
 // receiver reads them exactly as it would separate writes. Fewer syscalls and
 // fuller TLS records matter when a heavy target's content is the thing being
 // delivered.
+//
+// A PDU that cannot be marshalled is skipped rather than discarding the batch
+// around it, but the failure is returned once the rest has been sent: intercept
+// product was lost, and losing it quietly is the one outcome this plane may not
+// have (design D11). A delivery failure takes precedence, being the larger loss.
 func (c *Client) SendBatch(pdus []*PDU) error {
 	if len(pdus) == 0 {
 		return nil
 	}
 
-	var buf []byte
+	var (
+		buf        []byte
+		marshalErr error
+	)
 
 	for _, pdu := range pdus {
 		b, err := pdu.Marshal()
 		if err != nil {
-			// One malformed PDU must not discard the batch around it.
+			if marshalErr == nil {
+				marshalErr = err
+			}
+
 			continue
 		}
 
@@ -134,8 +145,12 @@ func (c *Client) SendBatch(pdus []*PDU) error {
 	}
 
 	if len(buf) == 0 {
-		return nil
+		return marshalErr
 	}
 
-	return c.sendBytes(buf)
+	if err := c.sendBytes(buf); err != nil {
+		return err
+	}
+
+	return marshalErr
 }

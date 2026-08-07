@@ -8,6 +8,8 @@
 package store
 
 import (
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/omec-project/li/types"
@@ -78,7 +80,6 @@ func (s *Store) unindex(xid types.XID) {
 	}
 }
 
-// Get returns the active task for an XID.
 // DeactivateAll removes every active task. It backs the X1 keepalive fail-safe:
 // per TS 103 221-1 the NE purges all tasking when the controlling ADMF goes
 // silent, so warrants never outlive an operational controller.
@@ -89,6 +90,7 @@ func (s *Store) DeactivateAll() {
 	clear(s.byTarget)
 }
 
+// Get returns the active task for an XID.
 func (s *Store) Get(xid types.XID) (types.InterceptTask, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -112,7 +114,8 @@ func cloneTask(t types.InterceptTask) types.InterceptTask {
 // Snapshot returns a copy of every active task. It backs the keepalive fail-safe:
 // the caller runs per-task teardown (OnDeactivate) over the snapshot so a purge
 // undoes each task's side effects (e.g. UPF CC duplication), not just the store
-// entries. The result is a fresh slice usable without holding any lock.
+// entries. The result is a fresh slice usable without holding any lock, ordered
+// by XID (see Match on why the order is fixed rather than a map's).
 func (s *Store) Snapshot() []types.InterceptTask {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -120,11 +123,20 @@ func (s *Store) Snapshot() []types.InterceptTask {
 	for xid := range s.byXID {
 		out = append(out, cloneTask(s.byXID[xid]))
 	}
+	sortByXID(out)
 	return out
 }
 
-// Match returns the active tasks targeting the given identifier. The result is a
-// fresh slice the caller may use without holding any lock; nil if no task matches.
+// Match returns the active tasks targeting the given identifier, ordered by XID.
+// The result is a fresh slice the caller may use without holding any lock; nil if
+// no task matches.
+//
+// The order is fixed deliberately. Both indexes are maps, so an unsorted result
+// varies between calls on the same set of tasks, and a caller that acts on one
+// element of it — a triggered CC-POI choosing which warrant a duplicated packet
+// belongs to, say — would attribute successive packets of one session to different
+// warrants at random, splitting the product so that no agency receives a complete
+// stream. Callers that use every element are unaffected either way.
 func (s *Store) Match(id types.TargetIdentifier) []types.InterceptTask {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -136,7 +148,16 @@ func (s *Store) Match(id types.TargetIdentifier) []types.InterceptTask {
 	for xid := range set {
 		out = append(out, cloneTask(s.byXID[xid]))
 	}
+	sortByXID(out)
 	return out
+}
+
+// sortByXID orders tasks by their X1 identifier, which is unique per task and so
+// a total order.
+func sortByXID(tasks []types.InterceptTask) {
+	slices.SortFunc(tasks, func(a, b types.InterceptTask) int {
+		return strings.Compare(string(a.XID), string(b.XID))
+	})
 }
 
 // Len returns the number of active tasks.

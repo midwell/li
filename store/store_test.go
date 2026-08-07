@@ -149,3 +149,38 @@ func TestDeactivateUnknownXID(t *testing.T) {
 		t.Error("Deactivate of unknown XID returned true")
 	}
 }
+
+// TestMatchOrderIsStable pins the ordering guarantee Match documents. Both store
+// indexes are maps, so before this the result order varied between calls on an
+// unchanged store — and a caller that acts on one element of it (the triggered
+// CC-POI picking which warrant a duplicated packet belongs to) attributed
+// successive packets of one session to different warrants at random, so that
+// neither agency received a complete stream.
+func TestMatchOrderIsStable(t *testing.T) {
+	s := New()
+	target := types.TargetIdentifier{Type: types.TargetSUPI, Value: "001010000000001"}
+	for _, xid := range []types.XID{"c", "a", "d", "b"} {
+		s.Activate(types.InterceptTask{XID: xid, Target: target})
+	}
+
+	want := []types.XID{"a", "b", "c", "d"}
+	// Repeat: a single pass can agree with the expected order by luck.
+	for i := range 20 {
+		got := s.Match(target)
+		if len(got) != len(want) {
+			t.Fatalf("pass %d: matched %d tasks, want %d", i, len(got), len(want))
+		}
+		for j, xid := range want {
+			if got[j].XID != xid {
+				t.Fatalf("pass %d: Match()[%d] = %q, want %q", i, j, got[j].XID, xid)
+			}
+		}
+	}
+
+	snap := s.Snapshot()
+	for j, xid := range want {
+		if snap[j].XID != xid {
+			t.Fatalf("Snapshot()[%d] = %q, want %q", j, snap[j].XID, xid)
+		}
+	}
+}

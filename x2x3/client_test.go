@@ -131,3 +131,51 @@ func TestSendMarshalError(t *testing.T) {
 		t.Error("Send accepted an invalid PDU")
 	}
 }
+
+// TestSendBatchReportsMarshalFailure: a PDU that cannot be framed is intercept
+// product lost. The batch around it is still delivered, but the loss must be
+// returned rather than swallowed — an AsyncSender turns that error into the ADMF
+// fault report that is this plane's only way of saying anything (design D11).
+func TestSendBatchReportsMarshalFailure(t *testing.T) {
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{selfSignedServer(t)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	received := make(chan *PDU, 4)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			p, err := readPDU(conn)
+			if err != nil {
+				return
+			}
+			received <- p
+		}
+	}()
+
+	client := NewClient(ln.Addr().String(), &tls.Config{InsecureSkipVerify: true})
+	defer client.Close()
+
+	good := &PDU{Type: PDUTypeX3, PayloadFormat: PayloadFormatIPv4, Payload: []byte{0x45, 0x00}}
+	// SIP is an X2-only payload format, so this one cannot be framed as X3.
+	bad := &PDU{Type: PDUTypeX3, PayloadFormat: PayloadFormatSIP, Payload: []byte("INVITE")}
+
+	if err := client.SendBatch([]*PDU{good, bad, good}); err == nil {
+		t.Fatal("SendBatch discarded an unframeable PDU without reporting it")
+	}
+
+	// The rest of the batch must still have been delivered.
+	for i := range 2 {
+		select {
+		case <-received:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timeout waiting for framable PDU %d of 2", i+1)
+		}
+	}
+}

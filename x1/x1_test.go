@@ -406,6 +406,83 @@ func TestRejectsUnknownAndBadTarget(t *testing.T) {
 	}
 }
 
+// TestModifyUnknownTaskRefused: a ModifyTaskRequest naming tasking this element
+// does not hold used to create it, so an ADMF correcting a warrant that had been
+// lost — to a restart, say — was told the correction succeeded while the element
+// silently invented a task from whatever the modify happened to carry. It must be
+// refused with "XID does not exist on NE" instead, which is the answer that sends
+// the ADMF to activate the warrant properly.
+func TestModifyUnknownTaskRefused(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID")
+
+	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
+	resp, err := srv.Process([]byte(modifyXML), admfPeer(t))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	m := resp.Messages[0]
+	if m.Type != "ErrorResponse" || m.ErrorInformation == nil {
+		t.Fatalf("modify of an unheld task = %+v, want ErrorResponse", m)
+	}
+	if m.ErrorInformation.ErrorCode != errCodeNoSuchTask {
+		t.Errorf("error code = %d, want %d (XID does not exist on NE)", m.ErrorInformation.ErrorCode, errCodeNoSuchTask)
+	}
+	if st.Len() != 0 {
+		t.Errorf("modify created %d tasks, want 0 — it must not invent tasking", st.Len())
+	}
+}
+
+// TestActivateReplacesHeldTask is the counterpart: re-activating an XID this
+// element already holds is how an ADMF restores tasking after the element
+// restarts, so it must be accepted and applied, not refused as a duplicate.
+func TestActivateReplacesHeldTask(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID")
+
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	retargeted := strings.Replace(activateXML, "2125552368", "5551234567", 1)
+	resp, err := srv.Process([]byte(retargeted), admfPeer(t))
+	if err != nil {
+		t.Fatalf("re-activate: %v", err)
+	}
+	if m := resp.Messages[0]; m.OK != "AcknowledgedAndCompleted" {
+		t.Fatalf("re-activation = %+v, want acknowledged", m)
+	}
+	task, ok := st.Get(testXID)
+	if !ok || task.Target.Value != "5551234567" {
+		t.Errorf("stored task = %+v, want the re-activated target 5551234567", task)
+	}
+	if st.Len() != 1 {
+		t.Errorf("store holds %d tasks, want 1", st.Len())
+	}
+}
+
+// TestMissingNeIdentifierRefused: neIdentifier is mandatory in the schema, so a
+// request without one carries no evidence it was meant for this element. Waving
+// it through would let tasking intended for a different network element be
+// applied here.
+func TestMissingNeIdentifierRefused(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID")
+
+	noNE := strings.Replace(activateXML, "<ns1:neIdentifier>neID</ns1:neIdentifier>", "", 1)
+	resp, err := srv.Process([]byte(noNE), admfPeer(t))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	m := resp.Messages[0]
+	if m.ErrorInformation == nil || m.ErrorInformation.ErrorCode != errCodeUnexpectedNE {
+		t.Errorf("missing neIdentifier = %+v, want error %d", m, errCodeUnexpectedNE)
+	}
+	if st.Len() != 0 {
+		t.Errorf("task applied without an NE identifier, len=%d", st.Len())
+	}
+}
+
 // TestTaskDetailsQueryAnswersWhatIsHeld is review R38: a network element keeps its
 // tasking in memory, so a restart discards every warrant an ADMF provisioned and
 // nothing pushes that fact anywhere. The ADMF's only recourse is to ask — so the

@@ -85,8 +85,11 @@ func (s *Server) authenticate(m X1RequestMessage, peer *x509.Certificate) (int, 
 		return errCodeUnexpectedADMF, "unexpected ADMF identifier"
 	}
 	// A request addressed to a different network element was misrouted; applying it
-	// here would provision tasking the ADMF believes lives elsewhere.
-	if m.NeIdentifier != "" && m.NeIdentifier != s.neID {
+	// here would provision tasking the ADMF believes lives elsewhere. An absent
+	// identifier is refused on the same grounds rather than waved through: the
+	// schema makes neIdentifier mandatory, so a request without one carries no
+	// evidence it was meant for this element at all.
+	if m.NeIdentifier != s.neID {
 		return errCodeUnexpectedNE, "unexpected NE identifier"
 	}
 	if !certBinds(peer, roleADMF, m.AdmfIdentifier) {
