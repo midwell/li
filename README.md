@@ -68,9 +68,10 @@ Three network functions act as POIs:
   Parameters on the target session's FAR; the UPF's BESS datapath tees a copy of
   the packets to a userspace socket, and the UPF's X3 shipper frames and
   delivers them.
-- **Keepalive fail-safe:** if the controlling ADMF goes silent (no X1 message
-  within the configured window) the network function purges all tasking — so
-  warrants never outlive an operational controller.
+- **Keepalive fail-safe (opt-in):** when a `keepaliveTimeout` is configured and
+  the controlling ADMF goes silent (no X1 message within that window) the network
+  function purges all tasking — so warrants never outlive an operational
+  controller. It is off until that window is set.
 - **Security:** X1/X2/X3 all use mutual TLS with credentials from a dedicated LI
   PKI, kept separate from the SBI certificates. Verification is never skipped.
 
@@ -217,7 +218,7 @@ The blocks above are what LI reads on disk; deployment tooling sets them for you
 | `cert` / `key` / `caCert` | `cert` / `key` / `ca_cert` | LI PKI credential file paths | yes |
 | `admfUrl` | `admf_url` | ADMF X1 endpoint for NE-initiated fault reports | optional |
 | `admfId` | `admf_id` | Responsible ADMF identifier — on the AMF/SMF it also restricts who may task the NF (recommended) | optional |
-| `keepaliveTimeout` | — | Purge-all-tasking window (Go duration, e.g. `30s`) | AMF/SMF: optional |
+| `keepaliveTimeout` | — | Purge-all-tasking window (Go duration, e.g. `30s`). The fail-safe is **off unless set**; leave it unset until you know the ADMF's keepalive cadence, since a window shorter than that purges live warrants | AMF/SMF: optional |
 | — | `x3_sockaddr` | Datapath X3 tee socket (match `LI_X3_SOCKET_PATH`) | UPF: yes |
 
 ### Certificate requirements
@@ -324,7 +325,8 @@ the rest of that host's firewall is persisted.
   are reported to the ADMF over X1 when `admfUrl`/`admf_url` is configured, not
   to general logs.
 - Removing the `li` block (or deactivating a warrant) stops all product for it;
-  if the ADMF stops sending keepalives, all tasking is purged automatically.
+  and, when `keepaliveTimeout` is set, all tasking is purged automatically if the
+  ADMF stops sending keepalives.
 
 ## Testing
 
