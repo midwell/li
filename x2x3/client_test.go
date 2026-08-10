@@ -135,7 +135,7 @@ func TestSendMarshalError(t *testing.T) {
 // TestSendBatchReportsMarshalFailure: a PDU that cannot be framed is intercept
 // product lost. The batch around it is still delivered, but the loss must be
 // returned rather than swallowed — an AsyncSender turns that error into the ADMF
-// fault report that is this plane's only way of saying anything (design D11).
+// fault report that is this plane's only way of saying anything.
 func TestSendBatchReportsMarshalFailure(t *testing.T) {
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{selfSignedServer(t)}})
 	if err != nil {

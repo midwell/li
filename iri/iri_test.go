@@ -283,7 +283,7 @@ func sampleEstablishment() SMFPDUSessionEstablishment {
 //     missing but misread as a different identifier.
 //
 // Asserting on the encoded tags is what catches this class; a decode assertion
-// cannot (review R33).
+// cannot.
 func TestIdentifierRecordMandatoryTags(t *testing.T) {
 	ctx := NewContext()
 	guti := FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 42}

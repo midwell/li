@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// TestListenerBoundsEveryPhase covers review R42. net/http applies no deadline
+// TestListenerBoundsEveryPhase. net/http applies no deadline
 // unless one is set, so before this an unauthenticated peer could open a
 // connection, stall the TLS handshake, and hold it for as long as it liked. The
 // assertion is deliberately on the server the network functions actually get,
@@ -37,7 +37,7 @@ func TestListenerBoundsEveryPhase(t *testing.T) {
 	}
 
 	// The other half of what this constructor exists to guarantee: handshake
-	// failures must not reach the general operator log (review R35).
+	// failures must not reach the general operator log.
 	if srv.ErrorLog == nil || srv.ErrorLog.Writer() != io.Discard {
 		t.Error("server errors are not discarded; a failed handshake would name the LI domain in the operator log")
 	}

@@ -278,9 +278,9 @@ type AMFIdentifierAssociation struct {
 	GUTI FiveGGUTI `asn1:"tag:5"`
 	// location [6] is MANDATORY in this record, unlike the other records that
 	// carry a Location, where deferring the deep subtree was harmless. Omitting it
-	// made every association record fail schema validation (review R33). The
-	// minimal Location the other records use satisfies the requirement; filling in
-	// the detail remains the deferred increment.
+	// made every association record fail schema validation. The minimal Location
+	// the other records use satisfies the requirement; filling in the detail
+	// remains the deferred increment.
 	Location Location `asn1:"tag:6"`
 }
 
@@ -291,7 +291,7 @@ type AMFIdentifierAssociation struct {
 //
 // The GUTI was previously emitted as [2] and optional, which is where sUCI lives:
 // a conformant receiver read the 5G-GUTI as a SUCI and separately reported the
-// mandatory gUTI missing (review R33).
+// mandatory gUTI missing.
 type AMFIdentifierDeassociation struct {
 	SUPI any       `asn1:"tag:1,explicit,choice:supi"`
 	GUTI FiveGGUTI `asn1:"tag:5"`

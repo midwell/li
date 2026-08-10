@@ -260,7 +260,7 @@ func (r *Requester) task(msgType string, t Trigger) error {
 		return fmt.Errorf("x1: trigger needs an XID")
 	case t.ProductID == "":
 		// Without it the POI would label product with the trigger's XID, which
-		// no MDF can attribute to the warrant (review R34).
+		// no MDF can attribute to the warrant.
 		return fmt.Errorf("x1: trigger needs a ProductID (the warrant XID)")
 	case t.CorrelationID == 0:
 		// Zero is indistinguishable from "unset" and leaves the content
@@ -324,7 +324,7 @@ var detailsTemplate = template.Must(template.New("x1all").Funcs(template.FuncMap
 // A requester needs this after it has itself restarted: it comes back with no
 // record of what it installed, while the NE still holds all of it, and tasking
 // nobody can withdraw is exactly what must not exist. A liveness signal cannot
-// substitute — a restarted requester is perfectly alive (review R40).
+// substitute — a restarted requester is perfectly alive.
 func (r *Requester) TaskXIDs() ([]types.XID, error) {
 	var body bytes.Buffer
 	if err := detailsTemplate.Execute(&body, struct{ Header header }{Header: r.header("GetAllDetailsRequest")}); err != nil {
@@ -370,7 +370,7 @@ func (r *Requester) TaskXIDs() ([]types.XID, error) {
 // tasking when its requester goes quiet would otherwise purge whenever no new task
 // happened to arrive, and a requester that never announces itself cannot be
 // distinguished from one that has died. Tasking that outlives the party
-// responsible for it is the failure this pair prevents (review R39).
+// responsible for it is the failure this pair prevents.
 func (r *Requester) Keepalive() error {
 	return r.send(keepaliveTemplate, struct{ Header header }{Header: r.header("KeepaliveRequest")})
 }

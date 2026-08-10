@@ -32,13 +32,13 @@ const (
 	// interception task covers. A triggered POI cannot label such content with a
 	// warrant, and a mediation function discards what it cannot attribute, so the
 	// content is dropped — but an authorised interception may be silently producing
-	// nothing, which only the ADMF can resolve (review R34).
+	// nothing, which only the ADMF can resolve.
 	NEIssueContentUntasked = "contentUntasked"
 	// The three places content can be lost on its way to the MDF each get their
 	// own type, because the ADMF's response to them differs — datapath capacity,
 	// this element's CPU, or the mediation function's ingest rate — and because
 	// reports are throttled per type, so sharing one would let whichever fired
-	// first hide the others (review R36).
+	// first hide the others.
 	//
 	// NEIssueX3PuntLost: the datapath could not hand the copy to this element at
 	// all; its egress socket was full. Datapath-side capacity.
@@ -65,7 +65,7 @@ const (
 	// enabled and no tasking at all. On a first deployment that is simply true and
 	// harmless; after a restart it is the only notice the ADMF gets that the
 	// warrants it provisioned are gone, since tasking is held in memory and nothing
-	// else announces the loss (review R38).
+	// else announces the loss.
 	NEIssueTaskingAbsent = "taskingAbsent"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
@@ -82,13 +82,13 @@ const (
 	// this element under an identity it is not bound to, or one this element does
 	// not answer to. Nothing is malfunctioning — the request was refused — but
 	// somebody inside the LI trust domain is attempting to task or untask network
-	// elements, and this channel is the only place that can be said (review R44).
+	// elements, and this channel is the only place that can be said.
 	NEIssueX1AuthFailed = "x1AuthFailed"
 )
 
 // TS 103 221-1 table 6.5.4-1: TypeOfNEIssueMessage is a closed enumeration, not
 // free text. Anything else is schema-invalid and a conformant ADMF discards the
-// message — which for a fault channel means the fault is never heard (review R41).
+// message — which for a fault channel means the fault is never heard.
 const (
 	neIssueWarning      = "Warning"
 	neIssueFaultCleared = "FaultCleared"
@@ -250,9 +250,9 @@ var reportTaskTemplate = template.Must(template.New("x1taskissue").Funcs(templat
 </ns1:X1Request>`))
 
 // Notify reports an NE-level issue and discards the outcome. It is the form the
-// network functions call: an issue report is best-effort by design (design D11 —
-// the LI plane must not surface faults through anything but this channel, so a
-// failed report has nowhere to go and nothing to do), and expressing that as a
+// network functions call: an issue report is best-effort by design — the LI plane
+// must not surface faults through anything but this channel, so a failed report
+// has nowhere to go and nothing to do — and expressing that as a
 // void call keeps every call site from blank-assigning an error the linter then
 // flags. A nil Reporter is a no-op, so a network function with no ADMF configured
 // need not guard every call — though existing callers may still, and must when

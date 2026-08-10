@@ -17,9 +17,8 @@ type Sender interface {
 // the PDU onto a bounded buffer drained by a single background worker and returns
 // immediately, so a slow or unreachable MDF never blocks a signalling or
 // data-plane path — the target-observable timing side channel and availability
-// risk that synchronous delivery introduces (review R3b; design D11 mandates
-// "async X2/X3 delivery"; li-security-isolation "Delivery decoupled from
-// signalling and data-plane processing").
+// risk that synchronous delivery introduces. Delivery must stay decoupled from
+// signalling and data-plane processing.
 //
 // A single worker preserves per-POI delivery order (the MDF correlates by
 // CIN/sequence, not arrival, so strict ordering is not required, but it is free

@@ -240,8 +240,7 @@ func TestAuthenticationAcceptsBoundPeer(t *testing.T) {
 // TestUnauthenticatedRequestDoesNotResetWatchdog checks an unauthenticated peer
 // cannot hold the keepalive fail-safe open. Were unauthenticated traffic to count
 // as ADMF liveness, anyone able to reach the X1 port could keep warrants alive
-// indefinitely after the real ADMF went dark — defeating the purge (design D11
-// Part B).
+// indefinitely after the real ADMF went dark, defeating the purge.
 func TestUnauthenticatedRequestDoesNotResetWatchdog(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: testXID, Target: supiTarget("imsi-1")})
@@ -360,13 +359,13 @@ func TestServeHTTPMutualTLS(t *testing.T) {
 func TestUnsupportedRequestUsesStandardCode(t *testing.T) {
 	st := store.New()
 	// A type this element genuinely does not implement. GetTaskDetails used to serve
-	// here and no longer can, which is the point of review R38: an ADMF must be able
+	// here and no longer can, which is the point: an ADMF must be able
 	// to ask what tasking an element holds.
 	body := strings.Replace(activateXML, "ActivateTaskRequest", "SomeFutureRequest", 1)
 	assertRejected(t, processWith(t, st, admfPeer(t), body), st, errCodeUnsupportedRequest)
 }
 
-// TestAuthFailureIsReported covers review R44: a refused provisioning attempt was
+// TestAuthFailureIsReported: a refused provisioning attempt was
 // refused correctly and then recorded nowhere. This interface keeps deliberately
 // out of operator logs, so the callback is the only thing standing between an
 // attack on LI provisioning and complete silence.

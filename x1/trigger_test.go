@@ -45,7 +45,7 @@ func requesterTo(t *testing.T, h http.Handler) (*Requester, *string) {
 // TestTriggerWireForm pins the element names and namespaces against the official
 // schemas (TS_103_221_01.xsd and urn_3GPP_ns_li_3GPPX1Extensions.xsd). These are
 // the details a round-trip through our own codec cannot police — the same gap
-// that let review R33's wrong field tags survive.
+// that let a set of wrong field tags survive.
 func TestTriggerWireForm(t *testing.T) {
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><oK>AcknowledgedAndCompleted</oK></x1ResponseMessage></X1Response>`)) //nolint:errcheck // test handler
@@ -130,7 +130,7 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 	if got.ProductID != tr.ProductID {
 		t.Errorf("ProductID = %q, want %q", got.ProductID, tr.ProductID)
 	}
-	// The whole point of R34: product is labelled with the warrant, not with the
+	// The whole point: product is labelled with the warrant, not with the
 	// trigger task that installed it.
 	if got.DeliveryXID() != tr.ProductID {
 		t.Errorf("DeliveryXID() = %q, want the warrant XID %q", got.DeliveryXID(), tr.ProductID)
@@ -306,10 +306,10 @@ func TestXIDBytes(t *testing.T) {
 	}
 }
 
-// TestTriggerRejectsUnattributableTask covers the fields whose absence produced
-// R34 in the first place. The requester refuses to send a trigger that would make
-// the POI emit product no MDF can attribute, rather than leaving it to be noticed
-// downstream — where, as R34 showed, nothing notices.
+// TestTriggerRejectsUnattributableTask covers the fields whose absence is what
+// made this interface necessary in the first place. The requester refuses to send a
+// trigger that would make the POI emit product no MDF can attribute, rather than
+// leaving it to be noticed downstream — where nothing notices.
 func TestTriggerRejectsUnattributableTask(t *testing.T) {
 	req, _ := requesterTo(t, http.NotFoundHandler())
 
@@ -373,7 +373,7 @@ func asRequestError(err error, out **RequestError) bool {
 
 // TestKeepaliveIsAcknowledged covers the message that makes a POI's fail-safe
 // usable: without it, tasking either lapses whenever no new task arrives or never
-// lapses at all (review R39).
+// lapses at all.
 func TestKeepaliveIsAcknowledged(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
@@ -399,7 +399,7 @@ func TestKeepaliveIsAcknowledged(t *testing.T) {
 
 // TestTaskXIDsReportsWhatThePOIHolds is what a restarted requester needs: it has
 // no record of what it installed, the NE still holds all of it, and tasking nobody
-// can withdraw must not exist (review R40).
+// can withdraw must not exist.
 func TestTaskXIDsReportsWhatThePOIHolds(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "upf-1", WithADMF("smf-1"), RequireResolvableDIDs())

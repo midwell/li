@@ -111,7 +111,7 @@ func TestAsyncSenderDropsWhenFull(t *testing.T) {
 }
 
 // TestAsyncSenderBatchesWhatIsAlreadyQueued covers the delivery coalescing added
-// for review R36: PDUs that are already waiting share one write, which is where
+// PDUs that are already waiting share one write, which is where
 // the syscall and TLS-record saving comes from. It must never wait for a batch to
 // fill, or delivery latency would depend on how idle the target is.
 func TestAsyncSenderBatchesWhatIsAlreadyQueued(t *testing.T) {

@@ -126,7 +126,7 @@ func (c *Client) Close() error {
 // A PDU that cannot be marshalled is skipped rather than discarding the batch
 // around it, but the failure is returned once the rest has been sent: intercept
 // product was lost, and losing it quietly is the one outcome this plane may not
-// have (design D11). A delivery failure takes precedence, being the larger loss.
+// have. A delivery failure takes precedence, being the larger loss.
 func (c *Client) SendBatch(pdus []*PDU) error {
 	if len(pdus) == 0 {
 		return nil

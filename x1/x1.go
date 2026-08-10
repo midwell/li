@@ -129,7 +129,7 @@ type Server struct {
 	onActivate   func(types.InterceptTask)
 	onDeactivate func(types.InterceptTask)
 	// onAuthFailure is told the X1 error code when a peer fails clause 8.2.4
-	// authentication. Nil leaves such failures unreported, which is the pre-R44
+	// authentication. Nil leaves such failures unreported, which is the earlier
 	// behaviour: refused and invisible.
 	onAuthFailure func(code int)
 
@@ -174,7 +174,7 @@ func OnDeactivate(fn func(types.InterceptTask)) Option {
 // *triggered* POI: its triggering function has no other way to discover that the
 // destination it provisioned has been lost (a restart, say), so an acknowledgement
 // it cannot honour leaves content being dropped while the triggering function
-// believes interception is running (review R37).
+// believes interception is running.
 func RequireResolvableDIDs() Option {
 	return func(s *Server) { s.requireDIDs = true }
 }
@@ -186,8 +186,8 @@ func RequireResolvableDIDs() Option {
 //
 // A POI wires this to its ADMF reporter. Without it an attack on the provisioning
 // interface is refused correctly and then recorded nowhere, since this plane
-// deliberately keeps out of operator logs (review R44). The callback runs
-// synchronously on the X1 request goroutine, so it must not block.
+// deliberately keeps out of operator logs. The callback runs synchronously on the
+// X1 request goroutine, so it must not block.
 func OnAuthFailure(fn func(code int)) Option {
 	return func(s *Server) { s.onAuthFailure = fn }
 }
@@ -282,7 +282,7 @@ func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) 
 		// enough on its own: undetectability means we deliberately log nothing, so
 		// without this the most security-relevant event this interface can witness
 		// would leave no trace anywhere at all. Clause 6.5.4 anticipates that, listing
-		// a current security issue on the NE among the reasons to report (review R44).
+		// a current security issue on the NE among the reasons to report.
 		//
 		// Only the error code reaches the ADMF, never the identifier the peer asserted:
 		// that is attacker-chosen text, and an LI management channel is the last place
@@ -339,8 +339,8 @@ func (s *Server) WatchKeepalive(timeout time.Duration, stop <-chan struct{}) {
 // It clears the store first, then runs the deactivation hook over the tasks that
 // were present, so a POI re-evaluating against the (now empty) task set actually
 // tears its product down — e.g. the SMF clearing UPF CC duplication. Clearing the
-// store alone is not a complete purge (review R19 / design D11 Part B). After the
-// first purge the snapshot is empty, so subsequent lapsed ticks are no-ops.
+// store alone is not a complete purge. After the first purge the snapshot is
+// empty, so subsequent lapsed ticks are no-ops.
 func (s *Server) purgeIfLapsed(timeout time.Duration) {
 	s.mu.Lock()
 	idle := s.now().Sub(s.lastSeen)
@@ -377,7 +377,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		//
 		// An activation naming an XID this element already holds replaces it rather
 		// than being refused, which is deliberate: re-provisioning is how an ADMF
-		// restores tasking after an element restarts (review R38), and refusing it
+		// restores tasking after an element restarts, and refusing it
 		// would break the recovery path the fault reporting exists to trigger.
 		// Modifying tasking that is *not* held has no such reading and is refused
 		// below.
@@ -393,8 +393,8 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		case isModify && !hadPrev:
 			// Applying this would silently create the task, leaving the ADMF believing
 			// it had adjusted an interception that never existed here — the same class
-			// of undetected divergence as tasking lost to a restart (review R38/R40).
-			// Answering "no such task" is what lets it activate the warrant instead.
+			// of undetected divergence as tasking lost to a restart. Answering
+			// "no such task" is what lets it activate the warrant instead.
 			err = fmt.Errorf("no such task")
 			code = errCodeNoSuchTask
 		default:
@@ -407,7 +407,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 				}
 				// A retarget must undo product/state applied for the old target (e.g.
 				// clear the SMF's CC duplication on the old target's sessions), which
-				// re-evaluates against the now-updated task set. (review R19/R15)
+				// re-evaluates against the now-updated task set.
 				if retargeted && s.onDeactivate != nil {
 					s.onDeactivate(prevTask)
 				}
@@ -432,7 +432,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		// lost the tasking it was given — a restart discards it, and nothing pushes
 		// that fact anywhere. Answering these is what lets an ADMF audit and
 		// re-provision instead of believing an interception is running that is not
-		// (review R38, and the TS 103 221-1 requirement noted at task 7.2).
+		// — which TS 103 221-1 also requires.
 		if localType(m.Type) == "GetAllDetailsRequest" {
 			rm.Tasks = s.store.Snapshot()
 		} else if t, found := s.store.Get(types.XID(m.XID)); found {

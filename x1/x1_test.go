@@ -52,7 +52,7 @@ func TestReportNEIssue(t *testing.T) {
 		"<ns1:neIdentifier>neID</ns1:neIdentifier>",
 		// TypeOfNEIssueMessage is a closed enumeration. This assertion used to
 		// require the condition string itself, which is how an entire fault channel
-		// came to be schema-invalid without anything noticing (review R41).
+		// came to be schema-invalid without anything noticing.
 		"<ns1:typeOfNeIssueMessage>FaultReport</ns1:typeOfNeIssueMessage>",
 		// The condition still has to reach the ADMF — in the field that permits it.
 		"x3EgressDown",
@@ -96,7 +96,7 @@ func TestKeepaliveWatchdogPurgesTasking(t *testing.T) {
 // TestKeepalivePurgeRunsDeactivateHook verifies the fail-safe purge runs the
 // per-task OnDeactivate hook (so a POI tears down product it applied elsewhere,
 // e.g. UPF CC duplication), clears the store, and is a no-op on subsequent
-// lapsed ticks once the store is empty (review R19).
+// lapsed ticks once the store is empty.
 func TestKeepalivePurgeRunsDeactivateHook(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: "a", Target: supiTarget("1"), Products: []types.ProductType{types.ProductCC}})
@@ -259,7 +259,7 @@ func TestOnActivateCallback(t *testing.T) {
 // TestModifyRetargetRunsDeactivateHook verifies a retargeting ModifyTask tears
 // down the OLD target's applied state via OnDeactivate (not only scanning the new
 // target via OnActivate), so a warrant that moves to a new identifier does not
-// leave stale product running for the old one (review R19/R15).
+// leave stale product running for the old one.
 func TestModifyRetargetRunsDeactivateHook(t *testing.T) {
 	st := store.New()
 	var activated, deactivated []types.TargetIdentifier
@@ -356,8 +356,8 @@ func TestProcessDeactivate(t *testing.T) {
 
 // TestServeHTTPWithoutCertificateRejected checks the handler is fail-closed when
 // no client certificate reaches it — the shape of a request arriving over plain
-// HTTP, or through a proxy that terminated TLS instead of passing it through
-// (design D13). The response must still be well-formed X1 the ADMF can decode.
+// HTTP, or through a proxy that terminated TLS instead of passing it through.
+// The response must still be well-formed X1 the ADMF can decode.
 // The authorized round trip over real mutual TLS is TestServeHTTPMutualTLS.
 func TestServeHTTPWithoutCertificateRejected(t *testing.T) {
 	st := store.New()
@@ -489,7 +489,7 @@ func TestMissingNeIdentifierRefused(t *testing.T) {
 	}
 }
 
-// TestTaskDetailsQueryAnswersWhatIsHeld is review R38: a network element keeps its
+// TestTaskDetailsQueryAnswersWhatIsHeld: a network element keeps its
 // tasking in memory, so a restart discards every warrant an ADMF provisioned and
 // nothing pushes that fact anywhere. The ADMF's only recourse is to ask — so the
 // answer has to be truthful about an absence, not merely about a presence.

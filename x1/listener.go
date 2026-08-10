@@ -16,7 +16,7 @@ import (
 // net/http applies none at all, and a peer that opens a connection and then stalls
 // — during the TLS handshake, before authentication has happened or can happen —
 // holds it open indefinitely. Enough such connections and the element can no longer
-// be tasked or, more to the point, untasked (review R42).
+// be tasked or, more to the point, untasked.
 const (
 	// x1ReadHeaderTimeout also bounds the TLS handshake, which is what makes it the
 	// one that matters here: the stall an unauthenticated peer can cause happens
@@ -32,7 +32,7 @@ const (
 //
 // It exists so the three network functions cannot drift apart. They previously
 // each constructed their own server, and a disclosure fixed in one had to be
-// fixed again in the other two (review R35); the same would be true of every
+// fixed again in the other two; the same would be true of every
 // timeout here.
 func NewListener(handler http.Handler, tlsConfig *tls.Config) *http.Server {
 	return &http.Server{
@@ -48,8 +48,8 @@ func NewListener(handler http.Handler, tlsConfig *tls.Config) *http.Server {
 		// would print the peer's address to this process's stderr and hence to the
 		// general operator log — publishing the LI domain's address and marking the
 		// element as running a mutually authenticated listener that nothing else in
-		// its configuration explains. Faults on this plane go to the ADMF over X1
-		// (design D11), which is the only channel entitled to know (review R35).
+		// its configuration explains. Faults on this plane go to the ADMF over X1,
+		// which is the only channel entitled to know.
 		ErrorLog: log.New(io.Discard, "", 0),
 	}
 }

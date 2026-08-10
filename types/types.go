@@ -48,7 +48,7 @@ type XID string
 // the X2/X3 PDU header (TS 103 221-2 clause 5.2.7). An unparseable value yields
 // the zero XID, which is what an MDF treats as unattributable, so callers that
 // must not deliver unattributable product check the result rather than assuming
-// it (review R34).
+// it.
 func (x XID) Bytes() [16]byte {
 	var out [16]byte
 
@@ -132,7 +132,7 @@ func (t InterceptTask) WantsProduct(p ProductType) bool {
 // clause 6.2.1.2). Every X2/X3 sender must label product through this method —
 // an MDF attributes a PDU to an intercept by its XID alone, so a POI that labels
 // product with a trigger's XID, or with nothing, produces material the MDF
-// cannot attribute and discards without complaint (review R34).
+// cannot attribute and discards without complaint.
 func (t InterceptTask) DeliveryXID() XID {
 	if t.ProductID != "" {
 		return t.ProductID
