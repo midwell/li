@@ -5,7 +5,7 @@ package asn1
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"reflect"
 )
@@ -20,7 +20,6 @@ import (
 //	// And call decode or encode functions
 //	bytes, err := ctx.EncodeWithOptions(value, "explicit,application,tag:5")
 //	...
-//
 type Context struct {
 	log     *log.Logger
 	choices map[string][]choiceEntry
@@ -165,7 +164,6 @@ func (ctx *Context) addChoiceEntry(choice string, entry choiceEntry) error {
 // To encode a choice value, all that is necessary is to set the choice field
 // with the proper object. To decode a choice value, a type switch can be used
 // to determine which type was used.
-//
 func (ctx *Context) AddChoice(choice string, entries []Choice) error {
 	for _, e := range entries {
 		opts, err := parseOptions(e.Options)
@@ -198,7 +196,7 @@ func (ctx *Context) AddChoice(choice string, entries []Choice) error {
 // defaultLogger returns the default Logger. It's used to initialize a new context
 // or when the logger is set to nil.
 func defaultLogger() *log.Logger {
-	return log.New(ioutil.Discard, "", 0)
+	return log.New(io.Discard, "", 0)
 }
 
 // SetLogger defines the logger used.

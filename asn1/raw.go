@@ -7,7 +7,6 @@ package asn1
 import (
 	"bytes"
 	"io"
-	"io/ioutil"
 	"strconv"
 )
 
@@ -231,7 +230,7 @@ func readEoc(reader io.Reader) error {
 			return parseError("primitive node with indefinite length")
 		}
 
-		if class == 0 && tag == 0 && indefinite == false && length == 0 {
+		if class == 0 && tag == 0 && !indefinite && length == 0 {
 			break
 		}
 
@@ -345,6 +344,6 @@ func readByte(reader io.Reader) (byte, error) {
 }
 
 func skipBytes(reader io.Reader, count int64) error {
-	_, err := io.CopyN(ioutil.Discard, reader, count)
+	_, err := io.CopyN(io.Discard, reader, count)
 	return err
 }

@@ -174,6 +174,13 @@ func (ctx *Context) applyOptions(value reflect.Value, raw *rawValue, opts *field
 			return nil, err
 		}
 		raw, err = ctx.applyOptions(value, raw, entry.opts)
+		// applyOptions returns a nil rawValue together with its error, so skipping
+		// this check does not merely lose the error: the assignments below then
+		// dereference nil and panic. Reachable whenever a choice entry's own options
+		// fail validation.
+		if err != nil {
+			return nil, err
+		}
 		raw.Class = entry.class
 		raw.Tag = entry.tag
 	}
