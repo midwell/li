@@ -306,8 +306,8 @@ destination port is the pod's, not the node port — the rule has to run before
 that, in `raw/PREROUTING`:
 
 ```sh
-ADMF=10.0.60.122            # the LI system's address
-NODE=10.0.179.176           # this node's address
+ADMF=192.0.2.1            # the LI system's address
+NODE=192.0.2.10           # this node's address
 X1_PORTS=30843,30844        # the amf-x1 and smf-x1 node ports
 
 sudo iptables -t raw -N LI-X1 2>/dev/null || sudo iptables -t raw -F LI-X1

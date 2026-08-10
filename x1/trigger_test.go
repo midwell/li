@@ -166,7 +166,7 @@ func TestCreateDestinationWireForm(t *testing.T) {
 		err := req.CreateDestination(Destination{
 			DID:          "33333333-3333-4333-8333-333333333333",
 			DeliveryType: "X3Only",
-			Address:      "10.0.60.122",
+			Address:      "192.0.2.1",
 			Port:         42069,
 		})
 		if err != nil {
@@ -177,7 +177,7 @@ func TestCreateDestinationWireForm(t *testing.T) {
 			`<ns1:dId>33333333-3333-4333-8333-333333333333</ns1:dId>`,
 			`<ns1:deliveryType>X3Only</ns1:deliveryType>`,
 			`<ns1:ipAddressAndPort>`,
-			`<c:IPv4Address>10.0.60.122</c:IPv4Address>`,
+			`<c:IPv4Address>192.0.2.1</c:IPv4Address>`,
 			`<c:port>42069</c:port>`,
 		} {
 			if !strings.Contains(*body, want) {
@@ -236,7 +236,7 @@ func TestDestinationProvisioningResolvesDIDs(t *testing.T) {
 
 	const did = "33333333-3333-4333-8333-333333333333"
 	if err := req.CreateDestination(Destination{
-		DID: did, DeliveryType: "X3Only", Address: "10.0.60.122", Port: 42069,
+		DID: did, DeliveryType: "X3Only", Address: "192.0.2.1", Port: 42069,
 	}); err != nil {
 		t.Fatalf("CreateDestination: %v", err)
 	}
@@ -262,8 +262,8 @@ func TestDestinationProvisioningResolvesDIDs(t *testing.T) {
 	if len(task.Deliveries) != 1 {
 		t.Fatalf("Deliveries = %+v, want the one provisioned destination", task.Deliveries)
 	}
-	if got := task.Deliveries[0].Address; got != "10.0.60.122:42069" {
-		t.Errorf("destination address = %q, want 10.0.60.122:42069", got)
+	if got := task.Deliveries[0].Address; got != "192.0.2.1:42069" {
+		t.Errorf("destination address = %q, want 192.0.2.1:42069", got)
 	}
 	if got := task.Deliveries[0].Type; got != types.DeliveryX3 {
 		t.Errorf("destination type = %q, want X3", got)
@@ -426,7 +426,7 @@ func TestTaskXIDsReportsWhatThePOIHolds(t *testing.T) {
 
 	const did = "33333333-3333-4333-8333-333333333333"
 	if createErr := req.CreateDestination(Destination{
-		DID: did, DeliveryType: "X3Only", Address: "10.0.60.122", Port: 42069,
+		DID: did, DeliveryType: "X3Only", Address: "192.0.2.1", Port: 42069,
 	}); createErr != nil {
 		t.Fatalf("CreateDestination: %v", createErr)
 	}
