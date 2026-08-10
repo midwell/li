@@ -39,7 +39,6 @@ const (
 // it's equivalent to:
 //
 //	data, err = asn1.NewContext().Encode(obj)
-//
 func Encode(obj interface{}) (data []byte, err error) {
 	ctx := NewContext()
 	return ctx.EncodeWithOptions(obj, "")
@@ -49,7 +48,6 @@ func Encode(obj interface{}) (data []byte, err error) {
 // EncodeWithOptions uses a default Context and it's equivalent to:
 //
 //	data, err = asn1.NewContext().EncodeWithOptions(obj, options)
-//
 func EncodeWithOptions(obj interface{}, options string) (data []byte, err error) {
 	ctx := NewContext()
 	return ctx.EncodeWithOptions(obj, options)
@@ -60,7 +58,6 @@ func EncodeWithOptions(obj interface{}, options string) (data []byte, err error)
 // default Context and is equivalent to:
 //
 //	rest, err := asn1.NewContext().Decode(data, &obj)
-//
 func Decode(data []byte, obj interface{}) (rest []byte, err error) {
 	ctx := NewContext()
 	return ctx.DecodeWithOptions(data, obj, "")
@@ -71,7 +68,6 @@ func Decode(data []byte, obj interface{}) (rest []byte, err error) {
 // the parsed data. Decode uses a default Context and is equivalent to:
 //
 //	rest, err := asn1.NewContext().DecodeWithOptions(data, &obj, options)
-//
 func DecodeWithOptions(data []byte, obj interface{}, options string) (rest []byte, err error) {
 	ctx := NewContext()
 	return ctx.DecodeWithOptions(data, obj, options)

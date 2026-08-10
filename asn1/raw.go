@@ -55,7 +55,6 @@ type rawValue struct {
 }
 
 func (raw *rawValue) encode() ([]byte, error) {
-
 	if raw == nil {
 		return []byte{}, nil
 	}
@@ -84,7 +83,6 @@ func (raw *rawValue) encode() ([]byte, error) {
 }
 
 func encodeIdentifier(node *rawValue) ([]byte, error) {
-
 	if node.Class > 0x03 {
 		return nil, syntaxError("invalid class value: %d", node.Class)
 	}
@@ -110,7 +108,6 @@ func encodeIdentifier(node *rawValue) ([]byte, error) {
 }
 
 func encodeMultiByteTag(tag uint) []byte {
-
 	// A tag is encoded in a big endian sequence of octets each one holding a 7 bit value.
 	// The most significant bit of each octet must be 1, with the exception of the last octet that must be zero.
 	// Example:  1xxxxxxx 1xxxxxxx ... 0xxxxxxx
@@ -133,7 +130,6 @@ func encodeMultiByteTag(tag uint) []byte {
 }
 
 func encodeLength(length uint) []byte {
-
 	// The first bit indicates if length is encoded in a single byte
 	if length < 0x80 {
 		return []byte{byte(length)}
@@ -168,7 +164,6 @@ func removeLeadingBytes(buf []byte, target byte) []byte {
 }
 
 func decodeRawValue(reader io.Reader) (*rawValue, error) {
-
 	class, tag, constructed, err := decodeIdentifier(reader)
 	if err != nil {
 		return nil, err
@@ -214,7 +209,6 @@ func decodeRawValue(reader io.Reader) (*rawValue, error) {
 }
 
 func readEoc(reader io.Reader) error {
-
 	for {
 		class, tag, constructed, err := decodeIdentifier(reader)
 		if err != nil {
@@ -271,7 +265,6 @@ func decodeMultiByteTag(reader io.Reader) (uint, error) {
 }
 
 func decodeIdentifier(reader io.Reader) (class uint, tag uint, constructed bool, err error) {
-
 	b, err := readByte(reader)
 	if err != nil {
 		return
@@ -296,45 +289,48 @@ func decodeIdentifier(reader io.Reader) (class uint, tag uint, constructed bool,
 }
 
 func decodeLength(reader io.Reader) (length uint, indefinite bool, err error) {
-
 	// Read length
 	b, err := readByte(reader)
 	if err != nil {
-		return
+		return length, indefinite, err
 	}
 
 	// Short form
 	if b&0x80 == 0 {
 		length = uint(b)
-		return
+
+		return length, indefinite, err
 	}
 
 	// Indefinite form
 	if b == 0x80 {
 		indefinite = true
-		return
+
+		return length, indefinite, err
 	}
 
 	// Long form
 	if b == 0xff {
 		err = parseError("invalid number of length octets: %x", b)
-		return
+
+		return length, indefinite, err
 	}
 	octets := make([]byte, int(b&0x7f))
 	_, err = io.ReadFull(reader, octets)
 	if err != nil {
-		return
+		return length, indefinite, err
 	}
 	for _, b = range octets {
 		msb := uint64(0xff) << (intBits - 8)
 		if uint64(length)&msb != 0 {
 			err = parseError("multi byte length too big")
-			return
+
+			return length, indefinite, err
 		}
 		length = (length << 8) | uint(b)
 	}
 
-	return
+	return length, indefinite, err
 }
 
 func readByte(reader io.Reader) (byte, error) {

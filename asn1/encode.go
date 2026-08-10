@@ -22,7 +22,6 @@ func (ctx *Context) Encode(obj interface{}) (data []byte, err error) {
 // See (*Context).DecodeWithOptions() for further details regarding types and
 // options.
 func (ctx *Context) EncodeWithOptions(obj interface{}, options string) (data []byte, err error) {
-
 	opts, err := parseOptions(options)
 	if err != nil {
 		return nil, err
@@ -39,7 +38,6 @@ func (ctx *Context) EncodeWithOptions(obj interface{}, options string) (data []b
 
 // Main encode function
 func (ctx *Context) encode(value reflect.Value, opts *fieldOptions) (*rawValue, error) {
-
 	// Skip the interface type
 	switch value.Kind() {
 	case reflect.Interface:
@@ -92,7 +90,6 @@ func (ctx *Context) encode(value reflect.Value, opts *fieldOptions) (*rawValue, 
 }
 
 func (ctx *Context) encodeValue(value reflect.Value, opts *fieldOptions) (raw *rawValue, err error) {
-
 	raw = &rawValue{}
 	encoder := encoderFunction(nil)
 
@@ -153,12 +150,12 @@ func (ctx *Context) encodeValue(value reflect.Value, opts *fieldOptions) (raw *r
 		return nil, syntaxError("invalid Go type: %s", value.Type())
 	}
 	raw.Content, err = encoder(value)
-	return
+
+	return raw, err
 }
 
 // applyOptions modifies a raw value based on the given options.
 func (ctx *Context) applyOptions(value reflect.Value, raw *rawValue, opts *fieldOptions) (*rawValue, error) {
-
 	// Change sequence to set
 	if opts.set {
 		if raw.Class != classUniversal || raw.Tag != tagSequence {

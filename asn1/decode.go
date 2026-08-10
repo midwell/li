@@ -135,7 +135,6 @@ func (ctx *Context) Decode(data []byte, obj interface{}) (rest []byte, err error
 // Similarly, a struct marked with "set" always enforces that same order when
 // decoding in DER.
 func (ctx *Context) DecodeWithOptions(data []byte, obj interface{}, options string) (rest []byte, err error) {
-
 	opts, err := parseOptions(options)
 	if err != nil {
 		return nil, err
@@ -162,7 +161,6 @@ func (ctx *Context) DecodeWithOptions(data []byte, obj interface{}, options stri
 
 // Main decode function
 func (ctx *Context) decode(reader io.Reader, value reflect.Value, opts *fieldOptions) error {
-
 	// Parse an Asn.1 element
 	raw, err := decodeRawValue(reader)
 	if err != nil {
@@ -191,11 +189,10 @@ func (ctx *Context) decode(reader io.Reader, value reflect.Value, opts *fieldOpt
 // used as hint when decoding choices.
 // TODO: consider replacing raw for class and tag number.
 func (ctx *Context) getExpectedElement(raw *rawValue, elemType reflect.Type, opts *fieldOptions) (elem expectedElement, err error) {
-
 	// Get the expected universal tag and its decoder for the given Go type
 	elem, err = ctx.getUniversalTag(elemType, opts)
 	if err != nil {
-		return
+		return elem, err
 	}
 
 	// Modify the expected tag and decoder function based on the given options
@@ -220,7 +217,7 @@ func (ctx *Context) getExpectedElement(raw *rawValue, elemType reflect.Type, opt
 			reader := bytes.NewBuffer(data)
 			return ctx.decode(reader, value, opts)
 		}
-		return
+		return elem, err
 	}
 
 	if opts.choice != nil {
@@ -228,7 +225,7 @@ func (ctx *Context) getExpectedElement(raw *rawValue, elemType reflect.Type, opt
 		var entry choiceEntry
 		entry, err = ctx.getChoiceByTag(*opts.choice, raw.Class, raw.Tag)
 		if err != nil {
-			return
+			return elem, err
 		}
 
 		// Get the decoder for the new value
@@ -249,12 +246,12 @@ func (ctx *Context) getExpectedElement(raw *rawValue, elemType reflect.Type, opt
 	if elem.decoder == nil {
 		err = parseError("go type not supported '%s'", elemType)
 	}
-	return
+
+	return elem, err
 }
 
 // getUniversalTag maps an type to a Asn.1 universal type.
 func (ctx *Context) getUniversalTag(objType reflect.Type, opts *fieldOptions) (elem expectedElement, err error) {
-
 	elem.class = classUniversal
 
 	// Special types:
@@ -286,7 +283,6 @@ func (ctx *Context) getUniversalTag(objType reflect.Type, opts *fieldOptions) (e
 
 // getUniversalTagByKind uses type kind to defined the decoder.
 func (ctx *Context) getUniversalTagByKind(objType reflect.Type, opts *fieldOptions) (elem expectedElement) {
-
 	switch objType.Kind() {
 	case reflect.Bool:
 		elem.tag = tagBoolean
@@ -329,7 +325,7 @@ func (ctx *Context) getUniversalTagByKind(objType reflect.Type, opts *fieldOptio
 			elem.decoder = ctx.decodeSlice
 		}
 	}
-	return
+	return elem
 }
 
 func (ctx *Context) getExpectedFieldElements(value reflect.Value) ([]expectedFieldElement, error) {
@@ -459,7 +455,6 @@ func (ctx *Context) setMissingFieldValue(e expectedFieldElement) error {
 
 // decodeStruct decodes struct fields in order
 func (ctx *Context) decodeStruct(data []byte, value reflect.Value) error {
-
 	expectedValues, err := ctx.getExpectedFieldElements(value)
 	if err != nil {
 		return err
@@ -479,7 +474,6 @@ func (ctx *Context) decodeStruct(data []byte, value reflect.Value) error {
 // encoded in the ascending order of the tags. So when decoding with DER, we
 // simply do not sort the raw values and use them in their natural order.
 func (ctx *Context) decodeStructAsSet(data []byte, value reflect.Value) error {
-
 	// Get the expected values
 	expectedElements, err := ctx.getExpectedFieldElements(value)
 	if err != nil {

@@ -103,11 +103,6 @@ linters:
       - third_party$
       - builtin$
       - examples$
-      # asn1/ is a vendored copy of github.com/PromonLogicalis/asn1 carrying four
-      # local patches that are meant to go back upstream (see asn1/README.md).
-      # Reformatting it to this project's taste would bury those four diffs in
-      # hundreds of cosmetic ones, so it is linted by its own project, not ours.
-      - asn1
 issues:
   uniq-by-line: true
   new-from-rev: ""
@@ -135,8 +130,3 @@ formatters:
       - third_party$
       - builtin$
       - examples$
-      # asn1/ is a vendored copy of github.com/PromonLogicalis/asn1 carrying four
-      # local patches that are meant to go back upstream (see asn1/README.md).
-      # Reformatting it to this project's taste would bury those four diffs in
-      # hundreds of cosmetic ones, so it is linted by its own project, not ours.
-      - asn1

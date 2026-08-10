@@ -182,9 +182,11 @@ func (ctx *Context) decodeUint(data []byte, value reflect.Value) error {
 func (ctx *Context) encodeOctetString(value reflect.Value) ([]byte, error) {
 	// Check type
 	kind := value.Kind()
-	if !(kind == reflect.Array || kind == reflect.Slice) &&
-		value.Type().Elem().Kind() == reflect.Uint8 {
-		// Invalid type or element type
+	if (kind != reflect.Array && kind != reflect.Slice) ||
+		value.Type().Elem().Kind() != reflect.Uint8 {
+		// Invalid type or element type. Testing the kind first matters: reflect
+		// panics on Type().Elem() for a kind that has no element type, so the
+		// short circuit is what keeps a plain int from crashing the encoder.
 		return nil, wrongType("array or slice of bytes", value)
 	}
 	if kind == reflect.Slice {
@@ -200,9 +202,10 @@ func (ctx *Context) encodeOctetString(value reflect.Value) ([]byte, error) {
 func (ctx *Context) decodeOctetString(data []byte, value reflect.Value) error {
 	// Check type
 	kind := value.Kind()
-	if !(kind == reflect.Array || kind == reflect.Slice) &&
-		value.Type().Elem().Kind() == reflect.Uint8 {
-		// Invalid type or element type
+	if (kind != reflect.Array && kind != reflect.Slice) ||
+		value.Type().Elem().Kind() != reflect.Uint8 {
+		// Invalid type or element type. See encodeOctetString on why the kind is
+		// tested before Type().Elem().
 		return wrongType("array or slice of bytes", value)
 	}
 	if value.Kind() == reflect.Array {

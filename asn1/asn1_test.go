@@ -294,8 +294,13 @@ func TestSimpleOid(t *testing.T) {
 
 	// Cases that should fail
 	oids := []Oid{
-		{3, 0}, {4, 0}, {5, 0}, {256, 0},
-		{0, 40}, {0, 41}, {0, 256},
+		{3, 0},
+		{4, 0},
+		{5, 0},
+		{256, 0},
+		{0, 40},
+		{0, 41},
+		{0, 256},
 	}
 	for _, oid := range oids {
 		_, err := ctx.Encode(oid)
@@ -537,7 +542,6 @@ func TestTag(t *testing.T) {
 		true,
 		[]byte{0xbf, 0x87, 0x68, 0x3, 0x1, 0x1, 0xff},
 	})
-
 }
 
 func TestIndefinite(t *testing.T) {
@@ -574,20 +578,24 @@ func TestIndefinite(t *testing.T) {
 	testEncodeDecode(t, ctx, "indefinite", testCases...)
 }
 
-func TestChoice(t *testing.T) {
+// testChoiceValue is the string arm used by the choice round-trip tests.
+const testChoiceValue = "abc"
 
+func TestChoice(t *testing.T) {
 	type Type struct {
 		Num int
 		Msg interface{} `asn1:"choice:msg"`
 	}
 
 	ctx := NewContext()
-	ctx.AddChoice("msg", []Choice{
+	if err := ctx.AddChoice("msg", []Choice{
 		{reflect.TypeOf(""), "tag:0"},
 		{reflect.TypeOf(int(0)), "tag:1"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	choice := "abc"
+	choice := testChoiceValue
 	obj := Type{1, choice}
 	data, err := ctx.Encode(obj)
 	if err != nil {
@@ -607,10 +615,12 @@ func TestChoice(t *testing.T) {
 
 func TestExplicitChoice(t *testing.T) {
 	ctx := NewContext()
-	ctx.AddChoice("msg", []Choice{
+	if err := ctx.AddChoice("msg", []Choice{
 		{reflect.TypeOf(int(0)), "explicit,tag:0"},
 		{reflect.TypeOf(""), "explicit,tag:1"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	obj := "abc"
 	data, err := ctx.EncodeWithOptions(obj, "choice:msg")
@@ -636,12 +646,14 @@ func TestNestedExplicitChoice(t *testing.T) {
 	}
 
 	ctx := NewContext()
-	ctx.AddChoice("msg", []Choice{
+	if err := ctx.AddChoice("msg", []Choice{
 		{reflect.TypeOf(int(0)), "explicit,tag:0"},
 		{reflect.TypeOf(""), "explicit,tag:1"},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	choice := "abc"
+	choice := testChoiceValue
 	obj := Type{1, choice}
 	data, err := ctx.Encode(obj)
 	if err != nil {

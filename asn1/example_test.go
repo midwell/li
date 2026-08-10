@@ -17,7 +17,7 @@ func Example() {
 	ctx.SetDer(false, false)
 
 	// Add a CHOICE
-	ctx.AddChoice("value", []asn1.Choice{
+	if err := ctx.AddChoice("value", []asn1.Choice{
 		{
 			Type:    reflect.TypeOf(""),
 			Options: "tag:0",
@@ -26,7 +26,9 @@ func Example() {
 			Type:    reflect.TypeOf(int(0)),
 			Options: "tag:1",
 		},
-	})
+	}); err != nil {
+		log.Fatal(err)
+	}
 
 	type Message struct {
 		Id    int

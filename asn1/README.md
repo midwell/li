@@ -57,3 +57,24 @@ been archived.
    element longer than `maxElementLength` (16 MiB, far above any real xIRI/X2/X3
    element) before allocating. **This one matters most for an archived
    dependency: nobody else is going to fix it.**
+
+5. `types.go` (`encodeOctetString`, `decodeOctetString`): both guards read
+   `if !(kind == Array || kind == Slice) && value.Type().Elem().Kind() == Uint8`,
+   which contradicts the "Invalid type or element type" comment directly above
+   them and is wrong in both directions. Because `&&` does not short circuit on a
+   true first operand, a kind that is neither array nor slice reached
+   `Type().Elem()`, which `reflect` panics on for a type with no element type — so
+   handing the codec a plain `int` crashed it instead of returning `wrongType`.
+   And an array or slice short circuited the check away entirely, so one whose
+   elements are not bytes was accepted and then panicked later on a type
+   assertion. Both now test the kind first and use `||`, and
+   `octetstring_test.go` covers each shape on both the encode and decode paths.
+
+6. Housekeeping, no behaviour change: `io/ioutil` replaced with `io` (deprecated
+   since Go 1.19), a comparison to a bool constant simplified, the discarded
+   error from the recursive `applyOptions` call in `encode.go` checked, naked
+   returns made explicit, and the test files' unchecked `AddChoice` errors
+   handled. This directory is no longer excluded from the linters: it is code
+   this project owns, so it meets the same standard as the rest, and keeping an
+   exception meant CI's separate staticcheck job disagreed with a local
+   `golangci-lint` run — which is how patch 5 stayed hidden.
