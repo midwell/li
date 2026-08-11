@@ -1,0 +1,226 @@
+// SPDX-FileCopyrightText: 2026 Forsway Scandinavia AB
+// SPDX-License-Identifier: Apache-2.0
+
+package x1
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/omec-project/li/store"
+	"github.com/omec-project/li/types"
+)
+
+// The element names below are taken from the published schemas — the plain
+// identifiers from ETSI TS 103 221-1 (TS_103_221_01.xsd) and the extension arms
+// from the 3GPP LI_T3 extension schema, namespace
+// urn:3GPP:ns:li:3GPPX1Extensions:r18:v6. They are pinned here as *wire text*
+// rather than as Go structs, because a struct tag typo is invisible to a test that
+// builds the message through the same struct: encoding/xml silently drops an
+// element no field claims, so a mis-tagged criterion would parse as absent and the
+// task would be accepted intercepting less than it was told to.
+const extNS = `xmlns:ns2="urn:3GPP:ns:li:3GPPX1Extensions:r18:v6"`
+
+// withTarget replaces the fixture's e164Number identifier with the given XML,
+// keeping the rest of a real ActivateTaskRequest intact.
+func withTarget(inner string) string {
+	body := strings.Replace(activateXML,
+		"<ns1:e164Number>2125552368</ns1:e164Number>", inner, 1)
+
+	// The extension arms live in the 3GPP namespace, declared on the envelope the
+	// way a real requester declares it.
+	return strings.Replace(body,
+		`xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`,
+		`xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" `+extNS, 1)
+}
+
+// ext wraps one extension criterion in the targetIdentifierExtension element.
+func ext(inner string) string {
+	return `<ns1:targetIdentifierExtension>
+            <ns1:Owner>3GPP</ns1:Owner>
+            <ns2:UPFLIT3TargetIdentifierExtensions>
+              <ns2:UPFLIT3TargetIdentifier>` + inner + `</ns2:UPFLIT3TargetIdentifier>
+            </ns2:UPFLIT3TargetIdentifierExtensions>
+          </ns1:targetIdentifierExtension>`
+}
+
+// TestParseLIT3Criteria drives every criterion of TS 33.128 table 6.2.3-7 through
+// the listener as XML and checks the identifier the CC-POI ends up holding. Each
+// case fails if its arm is dropped from the parser: the criterion parses as absent,
+// the task is refused, and Process reports it.
+func TestParseLIT3Criteria(t *testing.T) {
+	cases := []struct {
+		name string
+		xml  string
+		want types.TargetIdentifier
+	}{
+		// The plain TS 103 221-1 identifiers. gtpuTunnelId is the same criterion as
+		// the extension's FTEID — the schema types it as a bare integer, so it maps
+		// to the same identifier type with no address part.
+		{
+			"GTP Tunnel ID", `<ns1:gtpuTunnelId>2415919105</ns1:gtpuTunnelId>`,
+			types.TargetIdentifier{Type: types.TargetFTEID, Value: "2415919105"},
+		},
+		{
+			"UE IPv4 address", `<ns1:ipv4Address>10.250.0.9</ns1:ipv4Address>`,
+			types.TargetIdentifier{Type: types.TargetUEIPv4, Value: "10.250.0.9"},
+		},
+		{
+			"UE IPv6 address", `<ns1:ipv6Address>2001:db8::9</ns1:ipv6Address>`,
+			types.TargetIdentifier{Type: types.TargetUEIPv6, Value: "2001:db8::9"},
+		},
+		{
+			"UE TCP port", `<ns1:tcpPort>443</ns1:tcpPort>`,
+			types.TargetIdentifier{Type: types.TargetTCPPort, Value: "443"},
+		},
+		{
+			"UE UDP port", `<ns1:udpPort>2152</ns1:udpPort>`,
+			types.TargetIdentifier{Type: types.TargetUDPPort, Value: "2152"},
+		},
+
+		// The seven 3GPP extension arms.
+		{
+			"PFCP Session ID", ext(`<ns2:FSEID><ns2:SEID>14426627323429955319</ns2:SEID></ns2:FSEID>`),
+			types.TargetIdentifier{Type: types.TargetFSEID, Value: "14426627323429955319"},
+		},
+		{
+			"F-TEID, TEID only", ext(`<ns2:FTEID><ns2:TEID>16777217</ns2:TEID></ns2:FTEID>`),
+			types.TargetIdentifier{Type: types.TargetFTEID, Value: "16777217"},
+		},
+		{
+			"F-TEID with address",
+			ext(`<ns2:FTEID><ns2:TEID>16777217</ns2:TEID><ns2:IPv4Address>10.76.0.2</ns2:IPv4Address></ns2:FTEID>`),
+			types.TargetIdentifier{Type: types.TargetFTEID, Value: "16777217@10.76.0.2"},
+		},
+		{
+			"PDR ID", ext(`<ns2:PDRID>3</ns2:PDRID>`),
+			types.TargetIdentifier{Type: types.TargetPDRID, Value: "3"},
+		},
+		{
+			"QER ID", ext(`<ns2:QERID>7</ns2:QERID>`),
+			types.TargetIdentifier{Type: types.TargetQERID, Value: "7"},
+		},
+		{
+			// xs:hexBinary, so the value is the encoded octets, normalised to lower
+			// case so that the same instance written either way compares equal.
+			"Network Instance", ext(`<ns2:NetworkInstance>696E7465726E6574</ns2:NetworkInstance>`),
+			types.TargetIdentifier{Type: types.TargetNetworkInstance, Value: "696e7465726e6574"},
+		},
+		{
+			"GTP Tunnel Direction", ext(`<ns2:GTPTunnelDirection>Outbound</ns2:GTPTunnelDirection>`),
+			types.TargetIdentifier{Type: types.TargetGTPTunnelDirection, Value: GTPDirectionOutbound},
+		},
+		{
+			"PDR", ext(`<ns2:PDR>0A01</ns2:PDR>`),
+			types.TargetIdentifier{Type: types.TargetPDR, Value: "0a01"},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := store.New()
+			srv := NewServer(st, "neID")
+			if _, err := srv.Process([]byte(withTarget(c.xml)), admfPeer(t)); err != nil {
+				t.Fatalf("Process: %v", err)
+			}
+			task, ok := st.Get(testXID)
+			if !ok {
+				t.Fatal("task not activated — the criterion did not parse")
+			}
+			if len(task.Targets) != 1 || task.Targets[0] != c.want {
+				t.Fatalf("targets = %+v, want exactly [%+v]", task.Targets, c.want)
+			}
+			// The CC-POI finds its task by the criterion, so an identifier that parses
+			// but does not index is still useless.
+			if m := st.Match(c.want); len(m) != 1 || m[0].XID != testXID {
+				t.Errorf("Match(%+v) = %+v, want the task", c.want, m)
+			}
+		})
+	}
+}
+
+// TestRefuseCriteriaOutsideTheTable checks that a criterion the CC-POI cannot
+// evaluate is refused rather than accepted and ignored. Accepting it would leave
+// the triggering function believing an interception is running that collects
+// nothing, with no way to discover otherwise.
+func TestRefuseCriteriaOutsideTheTable(t *testing.T) {
+	cases := []struct{ name, xml string }{
+		// Stands for any TS 103 221-1 identifier this element does not model:
+		// encoding/xml drops an element no field claims, so the task must be refused
+		// rather than accepted carrying no criterion at all.
+		{"unmodelled identifier", `<ns1:unmodelledIdentifier>10.250.0.9</ns1:unmodelledIdentifier>`},
+		{"empty extension", ext(``)},
+		{"extension owner only", `<ns1:targetIdentifierExtension><ns1:Owner>3GPP</ns1:Owner></ns1:targetIdentifierExtension>`},
+		// An F-SEID with no SEID selects nothing.
+		{"FSEID without a SEID", ext(`<ns2:FSEID><ns2:IPv4Address>10.76.0.2</ns2:IPv4Address></ns2:FSEID>`)},
+		// Outside the closed enumeration: neither direction, so it would either
+		// match nothing or both.
+		{"direction outside the enumeration", ext(`<ns2:GTPTunnelDirection>Uplink</ns2:GTPTunnelDirection>`)},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := store.New()
+			srv := NewServer(st, "neID")
+			resp, err := srv.Process([]byte(withTarget(c.xml)), admfPeer(t))
+			if err != nil {
+				t.Fatalf("Process: %v", err)
+			}
+			assertRejected(t, resp, st, errCodeGeneric)
+			if _, ok := st.Get(testXID); ok {
+				t.Error("task was stored despite the criterion being refused")
+			}
+		})
+	}
+}
+
+// TestSeveralCriteriaInOneTask checks the list form end to end: two criteria on one
+// task both reach the store, and the task is found by either. A triggering function
+// describing the same traffic two ways must not have one description dropped.
+func TestSeveralCriteriaInOneTask(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID")
+	body := withTarget(`<ns1:ipv4Address>10.250.0.9</ns1:ipv4Address>
+        </ns1:targetIdentifier>
+        <ns1:targetIdentifier>
+          ` + ext(`<ns2:FSEID><ns2:SEID>14426627323429955319</ns2:SEID></ns2:FSEID>`))
+	if _, err := srv.Process([]byte(body), admfPeer(t)); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	task, ok := st.Get(testXID)
+	if !ok {
+		t.Fatal("task not activated")
+	}
+	if len(task.Targets) != 2 {
+		t.Fatalf("targets = %+v, want both criteria", task.Targets)
+	}
+	for _, id := range task.Targets {
+		if m := st.Match(id); len(m) != 1 {
+			t.Errorf("Match(%+v) = %+v, want the task", id, m)
+		}
+	}
+}
+
+// TestOneBadCriterionRefusesTheTask checks that a task carrying one evaluable and
+// one unevaluable criterion is refused whole. Keeping the good one would narrow the
+// interception below what was ordered while answering that it had been applied.
+func TestOneBadCriterionRefusesTheTask(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID")
+	body := withTarget(`<ns1:ipv4Address>10.250.0.9</ns1:ipv4Address>
+        </ns1:targetIdentifier>
+        <ns1:targetIdentifier>
+          ` + ext(`<ns2:GTPTunnelDirection>sideways</ns2:GTPTunnelDirection>`))
+	resp, err := srv.Process([]byte(body), admfPeer(t))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	assertRejected(t, resp, st, errCodeGeneric)
+	if _, ok := st.Get(testXID); ok {
+		t.Error("task stored with one criterion dropped")
+	}
+	if m := st.Match(types.TargetIdentifier{Type: types.TargetUEIPv4, Value: "10.250.0.9"}); m != nil {
+		t.Errorf("the evaluable criterion was indexed anyway: %+v", m)
+	}
+}

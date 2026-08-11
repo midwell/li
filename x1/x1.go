@@ -88,9 +88,11 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
       <ns1:taskDetails>
         <ns1:xId>{{esc .XID}}</ns1:xId>
         <ns1:targetIdentifiers>
+{{- range .Targets}}
           <ns1:targetIdentifier>
-            <ns1:{{targetElement .Target.Type}}>{{esc .Target.Value}}</ns1:{{targetElement .Target.Type}}>
+            <ns1:{{targetElement .Type}}>{{esc .Value}}</ns1:{{targetElement .Type}}>
           </ns1:targetIdentifier>
+{{- end}}
         </ns1:targetIdentifiers>
         <ns1:deliveryType>{{deliveryType .Products}}</ns1:deliveryType>
       </ns1:taskDetails>
@@ -416,7 +418,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			var task types.InterceptTask
 			task, err = s.activate(m)
 			if err == nil {
-				retargeted := isModify && hadPrev && task.Target != prevTask.Target
+				retargeted := isModify && hadPrev && !slices.Equal(task.Targets, prevTask.Targets)
 				if s.onActivate != nil && (!isModify || retargeted) {
 					s.onActivate(task)
 				}
@@ -597,14 +599,22 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 	if len(td.TargetIdentifiers) == 0 {
 		return types.InterceptTask{}, fmt.Errorf("no target identifier")
 	}
-	target, err := mapTarget(td.TargetIdentifiers[0])
-	if err != nil {
-		return types.InterceptTask{}, err
+	// Every identifier is mapped, and one unmappable identifier refuses the whole
+	// task. Taking the ones we understand and dropping the rest would narrow the
+	// interception below what was ordered while answering that it had been applied.
+	targets := make([]types.TargetIdentifier, 0, len(td.TargetIdentifiers))
+	for _, ti := range td.TargetIdentifiers {
+		target, err := mapTarget(ti)
+		if err != nil {
+			return types.InterceptTask{}, err
+		}
+		targets = append(targets, target)
 	}
 	products, err := deliveryProducts(td.DeliveryType)
 	if err != nil {
 		return types.InterceptTask{}, err
 	}
+
 	// A provisioned ProductID replaces the XID in delivered PDU headers, and a
 	// provisioned CorrelationID is the value to stamp on them (TS 103 221-1
 	// clause 6.2.1.2). Both are optional in TS 103 221-1 and mandatory for an
@@ -626,7 +636,7 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 
 	return types.InterceptTask{
 		XID:           types.XID(td.XID),
-		Target:        target,
+		Targets:       targets,
 		Products:      products,
 		ProductID:     types.XID(td.ProductID),
 		CorrelationID: correlation,
@@ -661,41 +671,114 @@ func mapTarget(t TargetIdentifier) (types.TargetIdentifier, error) {
 		return types.TargetIdentifier{Type: types.TargetGPSI, Value: t.GPSIMSISDN}, nil
 	case t.E164Number != "":
 		return types.TargetIdentifier{Type: types.TargetGPSI, Value: t.E164Number}, nil
+	// The plain TS 103 221-1 criteria of table 6.2.3-7. These come after the
+	// subscriber identifiers deliberately: a task carrying both is targeting a
+	// subscriber, and the subscriber identifier is the one an IRI-POI can act on.
+	case t.GTPUTunnelID != "":
+		return types.TargetIdentifier{Type: types.TargetFTEID, Value: t.GTPUTunnelID}, nil
+	case t.IPv4Address != "":
+		return types.TargetIdentifier{Type: types.TargetUEIPv4, Value: t.IPv4Address}, nil
+	case t.IPv6Address != "":
+		return types.TargetIdentifier{Type: types.TargetUEIPv6, Value: t.IPv6Address}, nil
+	case t.TCPPort != "":
+		return types.TargetIdentifier{Type: types.TargetTCPPort, Value: t.TCPPort}, nil
+	case t.UDPPort != "":
+		return types.TargetIdentifier{Type: types.TargetUDPPort, Value: t.UDPPort}, nil
 	case t.Extension != nil:
 		return mapExtensionTarget(t.Extension)
 	}
 	return types.TargetIdentifier{}, fmt.Errorf("unsupported target identifier")
 }
 
-// mapExtensionTarget maps the 3GPP LI_T3 packet-detection criteria onto a target
-// identifier. Only the PFCP Session ID (FSEID) is supported — it is what the
-// CC-POI's datapath can match on, and it scopes interception to the whole PDU
-// session, which is the granularity a target-scoped warrant needs.
+// mapExtensionTarget maps the 3GPP LI_T3 packet-detection criteria of TS 33.128
+// table 6.2.3-7 onto a target identifier. Clause 6.2.3 requires a CC-POI to support
+// "at least the identifier types given in table 6.2.3-7", so all of them are
+// accepted here: the three plain TS 103 221-1 arms are handled in mapTarget, and
+// the seven extension arms in mapUPFLIT3Identifier.
 //
-// Be clear about what that means against the specification. TS 33.128 clause
-// 6.2.3 states that "the CC-POI in the UPF shall support at least the identifier
-// types given in table 6.2.3-7", and that table lists nine: GTP Tunnel ID
-// (gtpuTunnelId / F-TEID), UE IP Address, UE TCP/UDP Port, PFCP Session ID,
-// PDR ID, QER ID, Network Instance, GTP Tunnel Direction and PDR. One of the nine
-// is implemented, so this is a conformance gap and not merely a design choice.
-// It is not a functional gap for this deployment, because the CC-TF in the SMF is
-// the only triggering function and only ever sends a PFCP Session ID.
-//
-// Everything else is refused rather than ignored: silently accepting a criterion
-// this element does not evaluate would intercept either nothing or everything,
-// and both are worse than a refusal the Triggering Function can report.
+// Accepting a criterion at this layer means it can be *provisioned*. Whether the
+// CC-POI can then evaluate it against its own session state is a separate question
+// answered further in — and a criterion it cannot evaluate is still refused there
+// rather than accepted and ignored.
 func mapExtensionTarget(ext *TargetIdentifierExtension) (types.TargetIdentifier, error) {
 	if ext.UPFT3 == nil || len(ext.UPFT3.Identifiers) == 0 {
 		return types.TargetIdentifier{}, fmt.Errorf("unsupported target identifier extension")
 	}
-	id := ext.UPFT3.Identifiers[0]
-	if id.FSEID == nil || id.FSEID.SEID == 0 {
-		return types.TargetIdentifier{}, fmt.Errorf("unsupported detection criterion")
+	return mapUPFLIT3Identifier(ext.UPFT3.Identifiers[0])
+}
+
+// mapUPFLIT3Identifier maps one arm of the UPFLIT3TargetIdentifier choice. Each arm
+// is refused rather than defaulted when its value is unusable: a criterion that
+// resolves to nothing would arm an interception that produces no product, and one
+// that resolves to everything would collect beyond the warrant.
+func mapUPFLIT3Identifier(id UPFLIT3Identifier) (types.TargetIdentifier, error) {
+	switch {
+	case id.FSEID != nil:
+		if id.FSEID.SEID == 0 {
+			return types.TargetIdentifier{}, fmt.Errorf("FSEID criterion carries no SEID")
+		}
+
+		return types.TargetIdentifier{
+			Type:  types.TargetFSEID,
+			Value: strconv.FormatUint(id.FSEID.SEID, 10),
+		}, nil
+
+	case id.FTEID != nil:
+		// The address is optional in the schema. Where it is absent the criterion is
+		// the TEID alone, which cannot separate two tunnels sharing one; that is the
+		// triggering function's choice to make, not ours to refuse.
+		v := strconv.FormatUint(uint64(id.FTEID.TEID), 10)
+		if addr := id.FTEID.IPv4Address; addr != "" {
+			v += "@" + addr
+		} else if addr := id.FTEID.IPv6Address; addr != "" {
+			v += "@" + addr
+		}
+
+		return types.TargetIdentifier{Type: types.TargetFTEID, Value: v}, nil
+
+	case id.PDRID != nil:
+		return types.TargetIdentifier{
+			Type:  types.TargetPDRID,
+			Value: strconv.FormatUint(uint64(*id.PDRID), 10),
+		}, nil
+
+	case id.QERID != nil:
+		return types.TargetIdentifier{
+			Type:  types.TargetQERID,
+			Value: strconv.FormatUint(uint64(*id.QERID), 10),
+		}, nil
+
+	case id.NetworkInstance != "":
+		// xs:hexBinary in the schema, so it is carried and compared as the octets it
+		// encodes rather than as a name.
+		return types.TargetIdentifier{
+			Type:  types.TargetNetworkInstance,
+			Value: strings.ToLower(id.NetworkInstance),
+		}, nil
+
+	case id.GTPTunnelDirection != "":
+		// A closed enumeration. Anything else is refused: an unrecognised direction
+		// would either match nothing or both directions, and both are wrong in a way
+		// the triggering function could not detect.
+		switch id.GTPTunnelDirection {
+		case GTPDirectionOutbound, GTPDirectionInbound:
+			return types.TargetIdentifier{
+				Type:  types.TargetGTPTunnelDirection,
+				Value: id.GTPTunnelDirection,
+			}, nil
+		default:
+			return types.TargetIdentifier{}, fmt.Errorf(
+				"GTPTunnelDirection %q is not one of the enumerated values", id.GTPTunnelDirection)
+		}
+
+	case id.PDR != "":
+		return types.TargetIdentifier{
+			Type:  types.TargetPDR,
+			Value: strings.ToLower(id.PDR),
+		}, nil
 	}
-	return types.TargetIdentifier{
-		Type:  types.TargetFSEID,
-		Value: strconv.FormatUint(id.FSEID.SEID, 10),
-	}, nil
+
+	return types.TargetIdentifier{}, fmt.Errorf("unsupported detection criterion")
 }
 
 func deliveryProducts(dt string) ([]types.ProductType, error) {

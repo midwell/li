@@ -243,7 +243,7 @@ func TestAuthenticationAcceptsBoundPeer(t *testing.T) {
 // indefinitely after the real ADMF went dark, defeating the purge.
 func TestUnauthenticatedRequestDoesNotResetWatchdog(t *testing.T) {
 	st := store.New()
-	st.Activate(types.InterceptTask{XID: testXID, Target: supiTarget("imsi-1")})
+	st.Activate(types.InterceptTask{XID: testXID, Targets: []types.TargetIdentifier{supiTarget("imsi-1")}})
 	srv := NewServer(st, "neID")
 
 	base := time.Now()

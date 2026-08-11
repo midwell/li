@@ -32,7 +32,62 @@ const (
 	// the identifiers above this one names a session, not a subscriber, and is
 	// only meaningful within the UPF that allocated it.
 	TargetFSEID TargetIdentifierType = "FSEID"
+
+	// The remaining packet-detection criteria of TS 33.128 table 6.2.3-7. Like
+	// TargetFSEID these name traffic rather than a subscriber, and are only
+	// meaningful within the UPF whose session state defines them. Clause 6.2.3
+	// requires a CC-POI to support at least all of them.
+	//
+	// TargetFTEID is a GTP tunnel endpoint, carried in the ETSI gtpuTunnelId
+	// identifier. That element is a plain integer in the schema, so the criterion
+	// is the TEID alone with no address beside it: matching it against a session
+	// therefore compares the TEID and cannot distinguish two tunnels that share
+	// one. Value is the TEID in decimal.
+	TargetFTEID TargetIdentifierType = "FTEID"
+	// TargetUEIPv4 and TargetUEIPv6 are the subscriber's own address, so they
+	// select that subscriber's session rather than a rule within it. Value is the
+	// address in its textual form.
+	TargetUEIPv4 TargetIdentifierType = "UEIPv4"
+	TargetUEIPv6 TargetIdentifierType = "UEIPv6"
+	// TargetTCPPort and TargetUDPPort narrow to a transport port. Value is the
+	// port in decimal. These are finer than a PDU session, so whether they can be
+	// applied by duplication alone depends on the rules the SMF installed.
+	TargetTCPPort TargetIdentifierType = "TCPPort"
+	TargetUDPPort TargetIdentifierType = "UDPPort"
+	// TargetPDRID and TargetQERID name a rule inside a session by its identifier.
+	// Value is the identifier in decimal. Both are scoped to a PFCP session, so a
+	// criterion using one is only unambiguous alongside the session it belongs to.
+	TargetPDRID TargetIdentifierType = "PDRID"
+	TargetQERID TargetIdentifierType = "QERID"
+	// TargetNetworkInstance selects every session on a network instance (a DNN, in
+	// practice), so it is the one criterion broader than a session. The schema types
+	// it as xs:hexBinary, so the value is those octets hex-encoded, not a name.
+	TargetNetworkInstance TargetIdentifierType = "NetworkInstance"
+	// TargetGTPTunnelDirection narrows to one direction. Value is the schema's
+	// enumeration — "Outbound" or "Inbound", not the uplink/downlink vocabulary used
+	// elsewhere in 3GPP — and is compared as given.
+	TargetGTPTunnelDirection TargetIdentifierType = "GTPTunnelDirection"
+	// TargetPDR carries a whole packet detection rule, encoded per TS 29.244
+	// table 7.5.2.2-1 with the first four octets omitted. Value is that octet
+	// string, hex-encoded; it is the only criterion whose comparison semantics
+	// against a session's own rules are not yet settled.
+	TargetPDR TargetIdentifierType = "PDR"
 )
+
+// IsPacketCriterion reports whether a target identifier names traffic rather than
+// a subscriber. Only the traffic-naming ones may appear on LI_T3, and only they
+// require session state to evaluate — the distinction the CC-POI's resolver and
+// the IRI-POIs' target matching both depend on.
+func (t TargetIdentifierType) IsPacketCriterion() bool {
+	switch t {
+	case TargetFSEID, TargetFTEID, TargetUEIPv4, TargetUEIPv6,
+		TargetTCPPort, TargetUDPPort, TargetPDRID, TargetQERID,
+		TargetNetworkInstance, TargetGTPTunnelDirection, TargetPDR:
+		return true
+	default:
+		return false
+	}
+}
 
 // TargetIdentifier identifies the subject of an interception task.
 type TargetIdentifier struct {
@@ -102,8 +157,18 @@ const (
 // A network function evaluates events and traffic against its active tasks and
 // produces the requested product to the matching delivery endpoints.
 type InterceptTask struct {
-	XID        XID
-	Target     TargetIdentifier
+	XID XID
+	// Targets are the identifiers this task intercepts on, and they are
+	// *alternatives*: traffic or signalling matching any one of them belongs to the
+	// task. That is the ETSI list semantics — each entry in a task's
+	// targetIdentifiers is another way to identify the same target — and it is why
+	// this is a list rather than one identifier even though an ADMF tasking an
+	// IRI-POI by subscriber identity supplies exactly one.
+	//
+	// A triggering function needing traffic that matches a *combination* of
+	// properties cannot express it here; it must send a single criterion that
+	// already carries the combination.
+	Targets    []TargetIdentifier
 	Products   []ProductType      // IRI and/or CC
 	Deliveries []DeliveryEndpoint // X2 and/or X3 destinations
 	State      TaskState
@@ -120,6 +185,22 @@ type InterceptTask struct {
 	// means unset. Supplied by the Triggering Function, never derived locally —
 	// deriving it independently on each side is how the two streams drift apart.
 	CorrelationID uint64
+}
+
+// TargetsAny reports whether any of the task's identifiers is among ids — the
+// identifiers of some entity the caller holds (a subscriber's identities, a
+// session's criteria). It is the disjunction Targets documents, in one place so
+// that each POI does not re-derive it.
+func (t InterceptTask) TargetsAny(ids []TargetIdentifier) bool {
+	for _, want := range t.Targets {
+		for _, have := range ids {
+			if want == have {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // WantsProduct reports whether the task requires the given product type.

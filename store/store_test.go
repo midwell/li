@@ -19,8 +19,8 @@ func supi(v string) types.TargetIdentifier {
 func TestMultiAgencyIsolation(t *testing.T) {
 	st := New()
 	target := supi("262019876543210")
-	a := types.InterceptTask{XID: "agency-a", Target: target, Products: []types.ProductType{types.ProductIRI}}
-	b := types.InterceptTask{XID: "agency-b", Target: target, Products: []types.ProductType{types.ProductIRI, types.ProductCC}}
+	a := types.InterceptTask{XID: "agency-a", Targets: []types.TargetIdentifier{target}, Products: []types.ProductType{types.ProductIRI}}
+	b := types.InterceptTask{XID: "agency-b", Targets: []types.TargetIdentifier{target}, Products: []types.ProductType{types.ProductIRI, types.ProductCC}}
 	if !st.Activate(a) || !st.Activate(b) {
 		t.Fatal("activate failed")
 	}
@@ -56,7 +56,7 @@ func TestMatchReturnsIsolatedSlices(t *testing.T) {
 	st := New()
 	target := supi("262019876543210")
 	st.Activate(types.InterceptTask{
-		XID: "a", Target: target,
+		XID: "a", Targets: []types.TargetIdentifier{target},
 		Products:   []types.ProductType{types.ProductIRI},
 		Deliveries: []types.DeliveryEndpoint{{Type: types.DeliveryX2, Address: "mdf2:1"}},
 	})
@@ -80,7 +80,7 @@ func TestActivateMatchDeactivate(t *testing.T) {
 	target := supi("imsi-001010000000001")
 	task := types.InterceptTask{
 		XID:      "W1",
-		Target:   target,
+		Targets:  []types.TargetIdentifier{target},
 		Products: []types.ProductType{types.ProductIRI, types.ProductCC},
 	}
 
@@ -116,7 +116,7 @@ func TestActivateMatchDeactivate(t *testing.T) {
 
 func TestActivateRejectsEmptyXID(t *testing.T) {
 	s := New()
-	if s.Activate(types.InterceptTask{Target: supi("x")}) {
+	if s.Activate(types.InterceptTask{Targets: []types.TargetIdentifier{supi("x")}}) {
 		t.Error("Activate accepted a task with an empty XID")
 	}
 	if s.Len() != 0 {
@@ -127,10 +127,10 @@ func TestActivateRejectsEmptyXID(t *testing.T) {
 func TestModifyTaskRetargets(t *testing.T) {
 	s := New()
 	oldT, newT := supi("old"), supi("new")
-	s.Activate(types.InterceptTask{XID: "W1", Target: oldT})
+	s.Activate(types.InterceptTask{XID: "W1", Targets: []types.TargetIdentifier{oldT}})
 
 	// X1 ModifyTask: same XID, different target.
-	s.Activate(types.InterceptTask{XID: "W1", Target: newT})
+	s.Activate(types.InterceptTask{XID: "W1", Targets: []types.TargetIdentifier{newT}})
 
 	if m := s.Match(oldT); m != nil {
 		t.Errorf("old target still matches after retarget: %+v", m)
@@ -160,7 +160,7 @@ func TestMatchOrderIsStable(t *testing.T) {
 	s := New()
 	target := types.TargetIdentifier{Type: types.TargetSUPI, Value: "001010000000001"}
 	for _, xid := range []types.XID{"c", "a", "d", "b"} {
-		s.Activate(types.InterceptTask{XID: xid, Target: target})
+		s.Activate(types.InterceptTask{XID: xid, Targets: []types.TargetIdentifier{target}})
 	}
 
 	want := []types.XID{"a", "b", "c", "d"}
@@ -182,5 +182,78 @@ func TestMatchOrderIsStable(t *testing.T) {
 		if snap[j].XID != xid {
 			t.Fatalf("Snapshot()[%d] = %q, want %q", j, snap[j].XID, xid)
 		}
+	}
+}
+
+// ipv4 builds a UE IPv4 address criterion, one of the LI_T3 packet detection
+// criteria of TS 33.128 table 6.2.3-7.
+func ipv4(v string) types.TargetIdentifier {
+	return types.TargetIdentifier{Type: types.TargetUEIPv4, Value: v}
+}
+
+// TestMatchByAnyCriterion checks the list semantics: a task carrying several
+// identifiers is found by each of them, and exactly once by each, since a
+// triggering function may describe the same traffic more than one way.
+func TestMatchByAnyCriterion(t *testing.T) {
+	s := New()
+	seid := types.TargetIdentifier{Type: types.TargetFSEID, Value: "14426627323429955319"}
+	addr := ipv4("10.250.0.9")
+	if !s.Activate(types.InterceptTask{XID: "W1", Targets: []types.TargetIdentifier{seid, addr}}) {
+		t.Fatal("activate failed")
+	}
+
+	for _, id := range []types.TargetIdentifier{seid, addr} {
+		m := s.Match(id)
+		if len(m) != 1 || m[0].XID != "W1" {
+			t.Errorf("Match(%+v) = %+v, want the one task W1", id, m)
+		}
+	}
+	if m := s.Match(ipv4("10.250.0.10")); m != nil {
+		t.Errorf("Match on an untasked address = %+v, want nil", m)
+	}
+
+	// Every index entry must go, or the task keeps intercepting on a criterion it
+	// no longer has.
+	s.Deactivate("W1")
+	for _, id := range []types.TargetIdentifier{seid, addr} {
+		if m := s.Match(id); m != nil {
+			t.Errorf("Match(%+v) after Deactivate = %+v, want nil", id, m)
+		}
+	}
+}
+
+// TestModifyNarrowsCriteria checks that dropping a criterion in a ModifyTask stops
+// interception on it. Table 6.2.3-8 permits the criteria to change mid-task, and a
+// stale index entry would keep collecting on superseded criteria — beyond what the
+// triggering function now asks for.
+func TestModifyNarrowsCriteria(t *testing.T) {
+	s := New()
+	kept, dropped := ipv4("10.250.0.9"), ipv4("10.250.0.10")
+	s.Activate(types.InterceptTask{XID: "W1", Targets: []types.TargetIdentifier{kept, dropped}})
+	s.Activate(types.InterceptTask{XID: "W1", Targets: []types.TargetIdentifier{kept}})
+
+	if m := s.Match(kept); len(m) != 1 {
+		t.Errorf("retained criterion Match = %+v, want the task", m)
+	}
+	if m := s.Match(dropped); m != nil {
+		t.Errorf("dropped criterion still matches: %+v", m)
+	}
+	if s.Len() != 1 {
+		t.Errorf("Len = %d, want 1 — the modify must not duplicate the task", s.Len())
+	}
+}
+
+// TestTargetsAnyDisjunction pins the disjunction InterceptTask.Targets documents:
+// one identifier in common is a match, and none is not.
+func TestTargetsAnyDisjunction(t *testing.T) {
+	task := types.InterceptTask{Targets: []types.TargetIdentifier{supi("262019876543210"), ipv4("10.250.0.9")}}
+	if !task.TargetsAny([]types.TargetIdentifier{ipv4("10.250.0.9")}) {
+		t.Error("TargetsAny = false for an identifier the task carries")
+	}
+	if task.TargetsAny([]types.TargetIdentifier{ipv4("10.250.0.10"), supi("111111111111111")}) {
+		t.Error("TargetsAny = true for identifiers the task does not carry")
+	}
+	if task.TargetsAny(nil) {
+		t.Error("TargetsAny = true against no identifiers")
 	}
 }

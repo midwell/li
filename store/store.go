@@ -43,12 +43,17 @@ func (s *Store) Activate(task types.InterceptTask) bool {
 	s.unindex(task.XID) // drop any prior indexing for this XID
 	task.State = types.TaskActive
 	s.byXID[task.XID] = task
-	set := s.byTarget[task.Target]
-	if set == nil {
-		set = make(map[types.XID]struct{})
-		s.byTarget[task.Target] = set
+	// Indexed under every one of its identifiers, so Match finds the task by any of
+	// them. A task repeating an identifier indexes once under it: the index is a set.
+	for _, id := range task.Targets {
+		set := s.byTarget[id]
+		if set == nil {
+			set = make(map[types.XID]struct{})
+			s.byTarget[id] = set
+		}
+		set[task.XID] = struct{}{}
 	}
-	set[task.XID] = struct{}{}
+
 	return true
 }
 
@@ -65,17 +70,24 @@ func (s *Store) Deactivate(xid types.XID) bool {
 	return true
 }
 
-// unindex removes the target-index entry for xid using its currently stored
-// task. The caller must hold the write lock.
+// unindex removes every target-index entry for xid using its currently stored
+// task. It reads the identifiers from the stored task rather than from a caller's
+// copy, so a ModifyTask that changes the criteria cannot leave the task indexed
+// under an identifier it no longer has — which would keep interception running on
+// superseded criteria. The caller must hold the write lock.
 func (s *Store) unindex(xid types.XID) {
 	prev, ok := s.byXID[xid]
 	if !ok {
 		return
 	}
-	if set := s.byTarget[prev.Target]; set != nil {
+	for _, id := range prev.Targets {
+		set := s.byTarget[id]
+		if set == nil {
+			continue
+		}
 		delete(set, xid)
 		if len(set) == 0 {
-			delete(s.byTarget, prev.Target)
+			delete(s.byTarget, id)
 		}
 	}
 }
@@ -99,7 +111,7 @@ func (s *Store) Get(xid types.XID) (types.InterceptTask, bool) {
 }
 
 // cloneTask copies t's slice fields so a caller cannot mutate the store's backing
-// arrays (Products/Deliveries) outside the lock — a data race and cross-warrant
+// arrays (Targets/Products/Deliveries) outside the lock — a data race and cross-warrant
 // corruption. The value fields are already copied by the return-by-value.
 func cloneTask(t types.InterceptTask) types.InterceptTask {
 	if t.Products != nil {
@@ -107,6 +119,9 @@ func cloneTask(t types.InterceptTask) types.InterceptTask {
 	}
 	if t.Deliveries != nil {
 		t.Deliveries = append([]types.DeliveryEndpoint(nil), t.Deliveries...)
+	}
+	if t.Targets != nil {
+		t.Targets = append([]types.TargetIdentifier(nil), t.Targets...)
 	}
 	return t
 }
@@ -128,6 +143,8 @@ func (s *Store) Snapshot() []types.InterceptTask {
 }
 
 // Match returns the active tasks targeting the given identifier, ordered by XID.
+// A task is returned if the identifier is any of its Targets, and once however many
+// of its identifiers equal this one.
 // The result is a fresh slice the caller may use without holding any lock; nil if
 // no task matches.
 //

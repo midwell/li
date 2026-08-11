@@ -74,7 +74,7 @@ func TestReportNEIssue(t *testing.T) {
 // message arrives within the window, all tasking is purged.
 func TestKeepaliveWatchdogPurgesTasking(t *testing.T) {
 	st := store.New()
-	st.Activate(types.InterceptTask{XID: "a", Target: supiTarget("1")})
+	st.Activate(types.InterceptTask{XID: "a", Targets: []types.TargetIdentifier{supiTarget("1")}})
 	srv := NewServer(st, "neID")
 	now := time.Now()
 	srv.now = func() time.Time { return now }
@@ -99,8 +99,8 @@ func TestKeepaliveWatchdogPurgesTasking(t *testing.T) {
 // lapsed ticks once the store is empty.
 func TestKeepalivePurgeRunsDeactivateHook(t *testing.T) {
 	st := store.New()
-	st.Activate(types.InterceptTask{XID: "a", Target: supiTarget("1"), Products: []types.ProductType{types.ProductCC}})
-	st.Activate(types.InterceptTask{XID: "b", Target: supiTarget("2"), Products: []types.ProductType{types.ProductCC}})
+	st.Activate(types.InterceptTask{XID: "a", Targets: []types.TargetIdentifier{supiTarget("1")}, Products: []types.ProductType{types.ProductCC}})
+	st.Activate(types.InterceptTask{XID: "b", Targets: []types.TargetIdentifier{supiTarget("2")}, Products: []types.ProductType{types.ProductCC}})
 	var torn []types.XID
 	srv := NewServer(st, "neID", OnDeactivate(func(task types.InterceptTask) {
 		torn = append(torn, task.XID)
@@ -131,7 +131,7 @@ func TestKeepalivePurgeRunsDeactivateHook(t *testing.T) {
 // acknowledged and resets the watchdog.
 func TestKeepaliveResetsWatchdog(t *testing.T) {
 	st := store.New()
-	st.Activate(types.InterceptTask{XID: "a", Target: supiTarget("1")})
+	st.Activate(types.InterceptTask{XID: "a", Targets: []types.TargetIdentifier{supiTarget("1")}})
 	srv := NewServer(st, "neID")
 	now := time.Now()
 	srv.now = func() time.Time { return now }
@@ -193,13 +193,13 @@ func TestProcessActivate(t *testing.T) {
 	if !ok {
 		t.Fatal("task was not activated in the store")
 	}
-	if task.Target.Type != types.TargetGPSI || task.Target.Value != "2125552368" {
-		t.Errorf("target = %+v, want GPSI 2125552368", task.Target)
+	if task.Targets[0].Type != types.TargetGPSI || task.Targets[0].Value != "2125552368" {
+		t.Errorf("target = %+v, want GPSI 2125552368", task.Targets[0])
 	}
 	if !task.WantsProduct(types.ProductIRI) || !task.WantsProduct(types.ProductCC) {
 		t.Errorf("products = %v, want IRI+CC (X2andX3)", task.Products)
 	}
-	if m := st.Match(task.Target); len(m) != 1 || m[0].XID != testXID {
+	if m := st.Match(task.Targets[0]); len(m) != 1 || m[0].XID != testXID {
 		t.Errorf("Match(target) = %+v", m)
 	}
 
@@ -251,8 +251,8 @@ func TestOnActivateCallback(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("callback fired %d times after retarget modify, want 2", len(got))
 	}
-	if got[1].Target.Value != "5551234567" {
-		t.Errorf("retarget callback target = %q, want 5551234567", got[1].Target.Value)
+	if got[1].Targets[0].Value != "5551234567" {
+		t.Errorf("retarget callback target = %q, want 5551234567", got[1].Targets[0].Value)
 	}
 }
 
@@ -264,8 +264,8 @@ func TestModifyRetargetRunsDeactivateHook(t *testing.T) {
 	st := store.New()
 	var activated, deactivated []types.TargetIdentifier
 	srv := NewServer(st, "neID",
-		OnActivate(func(task types.InterceptTask) { activated = append(activated, task.Target) }),
-		OnDeactivate(func(task types.InterceptTask) { deactivated = append(deactivated, task.Target) }),
+		OnActivate(func(task types.InterceptTask) { activated = append(activated, task.Targets[0]) }),
+		OnDeactivate(func(task types.InterceptTask) { deactivated = append(deactivated, task.Targets[0]) }),
 	)
 	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
 		t.Fatalf("activate: %v", err)
@@ -321,15 +321,15 @@ func TestParseTargetIdentifierTypes(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: task not activated", c.elem)
 		}
-		if task.Target.Type != c.want || task.Target.Value != c.val {
-			t.Errorf("%s → target %+v, want {%s %q}", c.elem, task.Target, c.want, c.val)
+		if task.Targets[0].Type != c.want || task.Targets[0].Value != c.val {
+			t.Errorf("%s → target %+v, want {%s %q}", c.elem, task.Targets[0], c.want, c.val)
 		}
 	}
 }
 
 func TestProcessDeactivate(t *testing.T) {
 	st := store.New()
-	st.Activate(types.InterceptTask{XID: testXID, Target: types.TargetIdentifier{Type: types.TargetGPSI, Value: "2125552368"}})
+	st.Activate(types.InterceptTask{XID: testXID, Targets: []types.TargetIdentifier{{Type: types.TargetGPSI, Value: "2125552368"}}})
 	srv := NewServer(st, "neID")
 
 	deactivateXML := `<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -459,7 +459,7 @@ func TestActivateReplacesHeldTask(t *testing.T) {
 		t.Fatalf("re-activation = %+v, want acknowledged", m)
 	}
 	task, ok := st.Get(testXID)
-	if !ok || task.Target.Value != "5551234567" {
+	if !ok || task.Targets[0].Value != "5551234567" {
 		t.Errorf("stored task = %+v, want the re-activated target 5551234567", task)
 	}
 	if st.Len() != 1 {

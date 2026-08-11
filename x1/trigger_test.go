@@ -121,8 +121,8 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 	if !ok {
 		t.Fatal("listener did not store the trigger task")
 	}
-	if got.Target.Type != types.TargetFSEID || got.Target.Value != "14426627323429955319" {
-		t.Errorf("target = %+v, want FSEID 14426627323429955319", got.Target)
+	if got.Targets[0].Type != types.TargetFSEID || got.Targets[0].Value != "14426627323429955319" {
+		t.Errorf("target = %+v, want FSEID 14426627323429955319", got.Targets[0])
 	}
 	if got.CorrelationID != tr.CorrelationID {
 		t.Errorf("CorrelationID = %d, want %d", got.CorrelationID, tr.CorrelationID)
@@ -141,7 +141,7 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 
 	// A matching lookup by detection criterion is how the CC-POI will find this
 	// task when a duplicated packet arrives tagged with its F-SEID.
-	if n := len(st.Match(got.Target)); n != 1 {
+	if n := len(st.Match(got.Targets[0])); n != 1 {
 		t.Errorf("Match by F-SEID returned %d tasks, want 1", n)
 	}
 
