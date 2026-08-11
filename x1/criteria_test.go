@@ -4,6 +4,7 @@
 package x1
 
 import (
+	"encoding/xml"
 	"fmt"
 	"strings"
 	"testing"
@@ -268,3 +269,96 @@ func TestCanApplyApprovalStores(t *testing.T) {
 		t.Error("an approved task was not stored")
 	}
 }
+
+// TestReportedIdentifiersRoundTrip is the property that makes GetTaskDetails and
+// GetAllDetails worth answering: what the element reports it holds must be the same
+// identifier it was given. Rendering an identifier as an element name plus a value
+// could not do that for the LI_T3 criteria — they are arms of a 3GPP extension, not
+// plain elements — and criteria with no mapping of their own were reported as
+// `supiimsi`, telling an auditing ADMF the element was tasked by a subscriber when it
+// was tasked by a tunnel or a direction.
+//
+// Each case is activated, reported, and the report parsed back with the same parser
+// that reads a request. A rendering that is merely plausible fails here.
+func TestReportedIdentifiersRoundTrip(t *testing.T) {
+	criteria := []types.TargetIdentifier{
+		{Type: types.TargetSUPI, Value: "262019876543210"},
+		{Type: types.TargetPEI, Value: "35342500000001"},
+		{Type: types.TargetGPSI, Value: "4915123456789"},
+		{Type: types.TargetUEIPv4, Value: "10.250.0.9"},
+		{Type: types.TargetUEIPv6, Value: "2001:db8::9"},
+		{Type: types.TargetTCPPort, Value: "443"},
+		{Type: types.TargetUDPPort, Value: "2152"},
+		{Type: types.TargetFSEID, Value: "14426627323429955319"},
+		{Type: types.TargetFTEID, Value: "16777217"},
+		{Type: types.TargetFTEID, Value: "16777217@10.76.0.2"},
+		{Type: types.TargetPDRID, Value: "3"},
+		{Type: types.TargetQERID, Value: "7"},
+		{Type: types.TargetNetworkInstance, Value: "696e7465726e6574"},
+		{Type: types.TargetGTPTunnelDirection, Value: GTPDirectionOutbound},
+		{Type: types.TargetPDR, Value: "0a01"},
+	}
+
+	for _, id := range criteria {
+		t.Run(string(id.Type)+"/"+id.Value, func(t *testing.T) {
+			st := store.New()
+			srv := NewServer(st, "neID")
+			if !st.Activate(types.InterceptTask{XID: testXID, Targets: []types.TargetIdentifier{id}}) {
+				t.Fatal("Activate failed")
+			}
+
+			resp, err := srv.Process([]byte(getAllDetailsXML), admfPeer(t))
+			if err != nil {
+				t.Fatalf("Process: %v", err)
+			}
+			out, err := marshalResponse(resp)
+			if err != nil {
+				t.Fatalf("marshalResponse: %v", err)
+			}
+
+			// Parsed with the *request-side* identifier type, which is the point: what
+			// the element reports has to be readable by the same code that reads what an
+			// ADMF sends. An identifier rendered under the wrong element name is worse
+			// than none, and only a real parse catches that.
+			var reported struct {
+				Messages []struct {
+					Tasks []struct {
+						Details struct {
+							TargetIdentifiers []TargetIdentifier `xml:"targetIdentifiers>targetIdentifier"`
+						} `xml:"taskDetails"`
+					} `xml:"taskResponseDetails"`
+				} `xml:"x1ResponseMessage"`
+			}
+			if err := xml.Unmarshal(out, &reported); err != nil {
+				t.Fatalf("the reported task is not parseable XML: %v\n%s", err, out)
+			}
+			if len(reported.Messages) != 1 || len(reported.Messages[0].Tasks) != 1 {
+				t.Fatalf("want one reported task, got %s", out)
+			}
+			ids := reported.Messages[0].Tasks[0].Details.TargetIdentifiers
+			if len(ids) != 1 {
+				t.Fatalf("want one reported identifier, got %s", out)
+			}
+
+			got, err := mapTarget(ids[0])
+			if err != nil {
+				t.Fatalf("the reported identifier does not parse back: %v\n%s", err, out)
+			}
+			if got != id {
+				t.Errorf("reported %+v, want %+v\n%s", got, id, out)
+			}
+		})
+	}
+}
+
+// getAllDetailsXML asks the element what tasking it holds.
+const getAllDetailsXML = `<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:GetAllDetailsRequest">
+    <ns1:admfIdentifier>admfID</ns1:admfIdentifier>
+    <ns1:neIdentifier>neID</ns1:neIdentifier>
+    <ns1:messageTimestamp>2026-01-01T00:00:00.000000Z</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>99999999-9999-4999-8999-999999999999</ns1:x1TransactionId>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`

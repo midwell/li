@@ -49,20 +49,7 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
 	},
 	// A details answer has to say what was tasked in the same vocabulary the
 	// request used, so an ADMF can compare it against what it believes it sent.
-	"targetElement": func(t types.TargetIdentifierType) string {
-		switch t {
-		case types.TargetPEI:
-			return "peiImei"
-		case types.TargetGPSI:
-			return "gpsiMsisdn"
-		case types.TargetFSEID:
-			// A triggered task's criterion is a session, not a subscriber; it has no
-			// plain identifier element, so report it in the extension's terms.
-			return "targetIdentifierExtension"
-		default:
-			return "supiimsi"
-		}
-	},
+	"targetXML": targetXML,
 	"deliveryType": func(p []types.ProductType) string {
 		iri := slices.Contains(p, types.ProductIRI)
 		cc := slices.Contains(p, types.ProductCC)
@@ -76,7 +63,7 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
 		}
 	},
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
-<ns1:X1Response xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">{{range .Messages}}
+<ns1:X1Response xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ext="urn:3GPP:ns:li:3GPPX1Extensions:r18:v6">{{range .Messages}}
   <ns1:x1ResponseMessage xsi:type="ns1:{{.Type}}">
     <ns1:admfIdentifier>{{esc .AdmfIdentifier}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .NeIdentifier}}</ns1:neIdentifier>
@@ -89,9 +76,7 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
         <ns1:xId>{{esc .XID}}</ns1:xId>
         <ns1:targetIdentifiers>
 {{- range .Targets}}
-          <ns1:targetIdentifier>
-            <ns1:{{targetElement .Type}}>{{esc .Value}}</ns1:{{targetElement .Type}}>
-          </ns1:targetIdentifier>
+          <ns1:targetIdentifier>{{targetXML .}}</ns1:targetIdentifier>
 {{- end}}
         </ns1:targetIdentifiers>
         <ns1:deliveryType>{{deliveryType .Products}}</ns1:deliveryType>
@@ -671,6 +656,101 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 		CorrelationID: correlation,
 		Deliveries:    deliveries,
 	}, nil
+}
+
+// targetXML renders one target identifier as the contents of a
+// <targetIdentifier> element, in the form the schemas define for it.
+//
+// It exists because an identifier cannot be reported as "element name plus value":
+// the LI_T3 packet-detection criteria are not plain identifier elements but arms of
+// a 3GPP extension, nested inside targetIdentifierExtension with an Owner. Rendering
+// them as a plain element produced XML no ADMF could validate — and, worse, criteria
+// with no mapping of their own were reported as `supiimsi`, telling an auditing ADMF
+// that the element was tasked by a subscriber identity when it was tasked by a
+// tunnel, a port or a direction. GetTaskDetails and GetAllDetails exist so an ADMF
+// can discover what an element actually holds; answering them wrongly defeats the
+// only mechanism it has.
+//
+// The output round-trips: what this emits, mapTarget parses back to the same
+// identifier.
+func targetXML(t types.TargetIdentifier) string {
+	if el, ok := plainTargetElement(t.Type); ok {
+		return "<ns1:" + el + ">" + escapeXML(t.Value) + "</ns1:" + el + ">"
+	}
+
+	arm, ok := extensionTargetArm(t)
+	if !ok {
+		// An identifier this package cannot render is reported as nothing rather than
+		// as something else. An empty targetIdentifier is visibly wrong to an ADMF;
+		// a plausible but incorrect one is not.
+		return ""
+	}
+
+	return "<ns1:targetIdentifierExtension>" +
+		"<ns1:Owner>" + ExtensionOwner3GPP + "</ns1:Owner>" +
+		"<ext:UPFLIT3TargetIdentifierExtensions>" +
+		"<ext:UPFLIT3TargetIdentifier>" + arm + "</ext:UPFLIT3TargetIdentifier>" +
+		"</ext:UPFLIT3TargetIdentifierExtensions>" +
+		"</ns1:targetIdentifierExtension>"
+}
+
+// plainTargetElement gives the TS 103 221-1 element name for identifiers that have
+// one. The names are the schema's, which are lowercase-initial.
+func plainTargetElement(t types.TargetIdentifierType) (string, bool) {
+	switch t {
+	case types.TargetSUPI:
+		return "supiimsi", true
+	case types.TargetPEI:
+		return "peiImei", true
+	case types.TargetGPSI:
+		return "gpsiMsisdn", true
+	case types.TargetUEIPv4:
+		return "ipv4Address", true
+	case types.TargetUEIPv6:
+		return "ipv6Address", true
+	case types.TargetTCPPort:
+		return "tcpPort", true
+	case types.TargetUDPPort:
+		return "udpPort", true
+	default:
+		return "", false
+	}
+}
+
+// extensionTargetArm renders the 3GPP LI_T3 arm for a packet-detection criterion.
+func extensionTargetArm(t types.TargetIdentifier) (string, bool) {
+	el := func(name, v string) string { return "<ext:" + name + ">" + escapeXML(v) + "</ext:" + name + ">" }
+
+	switch t.Type {
+	case types.TargetFSEID:
+		return "<ext:FSEID>" + el("SEID", t.Value) + "</ext:FSEID>", true
+	case types.TargetFTEID:
+		// The value is "TEID" or "TEID@address"; the address, when present, is the
+		// node that terminates the tunnel.
+		teid, addr, hasAddr := strings.Cut(t.Value, "@")
+		arm := "<ext:FTEID>" + el("TEID", teid)
+		if hasAddr {
+			name := "IPv4Address"
+			if strings.Contains(addr, ":") {
+				name = "IPv6Address"
+			}
+			arm += el(name, addr)
+		}
+
+		return arm + "</ext:FTEID>", true
+	case types.TargetPDRID:
+		return el("PDRID", t.Value), true
+	case types.TargetQERID:
+		return el("QERID", t.Value), true
+	case types.TargetNetworkInstance:
+		return el("NetworkInstance", t.Value), true
+	case types.TargetGTPTunnelDirection:
+		return el("GTPTunnelDirection", t.Value), true
+	case types.TargetPDR:
+		return el("PDR", t.Value), true
+	default:
+		return "", false
+	}
 }
 
 // hasDelivery reports whether the endpoints include one of the given type.
