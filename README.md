@@ -89,6 +89,59 @@ Three network functions act as POIs:
 
 ---
 
+## Feature support
+
+What this module and its network functions implement, and what they do not. The
+gaps are listed as plainly as the capabilities: an operator planning an
+integration needs both, and a missing feature discovered during a deployment is
+more expensive than one read here.
+
+### Supported
+
+| Area | Feature | Notes |
+|---|---|---|
+| **X1 provisioning** | `ActivateTask`, `ModifyTask`, `DeactivateTask` | ETSI TS 103 221-1, mutual TLS |
+| | `Keepalive` and the fail-safe purge of all tasking | Purge is opt-in via a keepalive window; off by default |
+| | `GetTaskDetails`, `GetAllDetails` | Lets an ADMF audit what an element actually holds |
+| | `CreateDestination` | DID → endpoint; re-creating a DID is refused (clause 6.3.1.1) |
+| | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
+| | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
+| **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
+| | F-SEID as an LI_T3 detection criterion | 3GPP `UPFLIT3TargetIdentifierExtensions` |
+| **IRI (X2)** | AMF: registration, deregistration, location update, identifier (de)association, unsuccessful procedure, start of interception with a registered UE | 11 record types in total |
+| | SMF: PDU session establishment, modification, release, start of interception with an established session | |
+| | TS 33.128 ASN.1 (BER) encoding | Verified against the published module, not against our own codec |
+| | Activation mid-session, on already-established sessions | |
+| | Delivery asynchronous, off the signalling path | A slow MDF cannot delay a target's signalling |
+| **CC (X3)** | UPF CC-POI duplication via the PFCP `DUPL` apply-action | Both directions |
+| | LI_T3 triggering interface, with the SMF as triggering function | TS 33.128 clause 6.2.3.3 |
+| | Correlation joining X2 and X3 | The session's real F-SEID |
+| | `ProductID` → X2/X3 XID labelling | TS 103 221-1 clause 6.2.1.2, as a general rule |
+| | Untasked or unattributable content dropped **and reported** | Never delivered with a label an MDF would discard |
+| **Security** | Mutual TLS on X1, X2 and X3, from an X0-provisioned LI PKI | |
+| | Undetectability: nothing in any general operator log | No target, warrant, ADMF/MDF address or LI configuration |
+| | Unauthorised peers refused silently, reported only to the ADMF | |
+| | Per-warrant delivery isolation | Several agencies' warrants concurrently |
+| | Subscriber traffic and usage accounting unchanged | Measured exactly once despite duplication |
+| **Operational** | UPF restart: interception continues, with no operator action | The destination is re-provisioned and the POI re-triggered |
+| | SMF/AMF restart: tasking is lost and the ADMF is told (`taskingAbsent`) | |
+| | Tasking left behind by a previous process is withdrawn at startup | |
+| | UPF address change (its Service recreated): triggering recovers | No SMF restart needed |
+
+### Not supported
+
+| Area | Feature | Why, or status |
+|---|---|---|
+| **Delivery destinations** | **An ADMF cannot set an IRI-POI's X2 destination over X1** | The AMF and SMF deliver to the `mdf2` in their own configuration. `CreateDestination` is accepted and a task's `listOfDIDs` is parsed, but unknown DIDs are skipped and the IRI-POIs ignore them. Only the **CC-POI's X3** destination is provisioned over X1, and by the SMF as triggering function rather than by the ADMF |
+| | `ModifyDestination`, `RemoveDestination`, `GetDestinationDetails` | Not implemented |
+| **Targets** | The other six LI_T3 criteria — PDR ID, QER ID, network instance, GTP tunnel direction, F-TEID, PDR | Refused explicitly rather than ignored: a criterion that is not evaluated would intercept either nothing or everything, and both are worse than a refusal the triggering function can report |
+| **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
+| **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook |
+| **Scope** | HI1/HI2/HI3 and delivery to the LEMF | The mediation function's role, not a POI's |
+| | 4G/LTE interception (MME, S-GW) | 5G only |
+| | IMS/voice and SMS content | |
+| | Location detail beyond the mandatory minimum | Records carry the minimal `Location` the schema requires; richer detail is deferred |
+
 ## Enabling LI
 
 LI is turned on per network function by adding an `li` configuration block. With
