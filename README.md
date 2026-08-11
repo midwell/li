@@ -108,6 +108,9 @@ more expensive than one read here.
 | | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
 | | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the ninth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction, PDR; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |
+| | Several criteria on one task, matched as alternatives | Traffic matching any of them is intercepted, and ships **once** however many matched |
+| | Criteria replaced by `ModifyTask`, mid-interception | Table 6.2.3-8. The task is not torn down: superseded traffic stops, newly selected traffic starts, attribution is unchanged |
+| | A criterion this element cannot evaluate is refused **before** the task is acknowledged | Accepting one would leave the requesting function believing an interception is running that can never produce anything — undiscoverable from outside |
 | **IRI (X2)** | AMF: registration, deregistration, location update, identifier (de)association, unsuccessful procedure, start of interception with a registered UE | 11 record types in total |
 | | SMF: PDU session establishment, modification, release, start of interception with an established session | |
 | | TS 33.128 ASN.1 (BER) encoding | Verified against the published module, not against our own codec |
