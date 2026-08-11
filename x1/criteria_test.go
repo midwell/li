@@ -4,6 +4,7 @@
 package x1
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -222,5 +223,48 @@ func TestOneBadCriterionRefusesTheTask(t *testing.T) {
 	}
 	if m := st.Match(types.TargetIdentifier{Type: types.TargetUEIPv4, Value: "10.250.0.9"}); m != nil {
 		t.Errorf("the evaluable criterion was indexed anyway: %+v", m)
+	}
+}
+
+// TestCanApplyRefusesBeforeAcknowledging checks that a POI's own refusal reaches
+// the requester as a refusal and leaves nothing stored. The whole point of asking
+// before acknowledging is that a task in the store is one this element reports as
+// active — so an approval it cannot honour is undiscoverable from outside.
+func TestCanApplyRefusesBeforeAcknowledging(t *testing.T) {
+	st := store.New()
+	var asked []types.XID
+	srv := NewServer(st, "neID", CanApply(func(task types.InterceptTask) error {
+		asked = append(asked, task.XID)
+
+		return fmt.Errorf("this datapath holds no state for that criterion")
+	}))
+
+	resp, err := srv.Process([]byte(activateXML), admfPeer(t))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	assertRejected(t, resp, st, errCodeGeneric)
+	if len(asked) != 1 || asked[0] != testXID {
+		t.Errorf("CanApply asked about %v, want just %q", asked, testXID)
+	}
+	// The reason must travel, or the requesting function has nothing to report.
+	if d := resp.Messages[0].ErrorInformation.ErrorDescription; !strings.Contains(d, "no state for that criterion") {
+		t.Errorf("error description = %q, want the check's own reason", d)
+	}
+	if _, ok := st.Get(testXID); ok {
+		t.Error("a refused task was stored")
+	}
+}
+
+// TestCanApplyApprovalStores checks the other half: an approving check does not
+// change what an acknowledged activation does.
+func TestCanApplyApprovalStores(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID", CanApply(func(types.InterceptTask) error { return nil }))
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if _, ok := st.Get(testXID); !ok {
+		t.Error("an approved task was not stored")
 	}
 }

@@ -134,6 +134,10 @@ type Server struct {
 	// authentication. Nil leaves such failures unreported, which is the earlier
 	// behaviour: refused and invisible.
 	onAuthFailure func(code int)
+	// canApply asks the POI whether it can actually carry out a task before it is
+	// acknowledged. Nil accepts everything, which is right for a POI whose only
+	// question about a task is answered by this package.
+	canApply func(types.InterceptTask) error
 
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
@@ -165,6 +169,24 @@ func OnActivate(fn func(types.InterceptTask)) Option {
 // It runs synchronously on the X1 request goroutine, so it must not block.
 func OnDeactivate(fn func(types.InterceptTask)) Option {
 	return func(s *Server) { s.onDeactivate = fn }
+}
+
+// CanApply registers a check run before a task is stored or acknowledged. An
+// error refuses the activation or modification, with the error's text as the
+// description the requesting function receives.
+//
+// It exists for the things only the POI can answer. A triggered CC-POI is given
+// detection criteria it may be unable to evaluate — an identifier naming state its
+// datapath does not hold — and accepting one would leave the triggering function
+// believing an interception is running that can never produce anything. That is
+// undiscoverable from the outside, which is why the answer has to come before the
+// acknowledgement rather than from a callback after it.
+//
+// The check runs synchronously on the X1 request goroutine, so it must not block.
+// It must not apply anything either: a task it approves may still be refused
+// afterwards for a reason this package owns.
+func CanApply(fn func(types.InterceptTask) error) Option {
+	return func(s *Server) { s.canApply = fn }
 }
 
 // RequireResolvableDIDs makes the server refuse a task that requests content
@@ -583,6 +605,13 @@ func (s *Server) activate(m X1RequestMessage) (types.InterceptTask, error) {
 	task, err := s.taskFromDetails(*m.TaskDetails)
 	if err != nil {
 		return types.InterceptTask{}, err
+	}
+	// Asked before the task is stored, so a refusal leaves nothing behind: a task in
+	// the store is a task this element reports as active and acts on.
+	if s.canApply != nil {
+		if err := s.canApply(task); err != nil {
+			return types.InterceptTask{}, err
+		}
 	}
 	if !s.store.Activate(task) {
 		return types.InterceptTask{}, fmt.Errorf("invalid task")
