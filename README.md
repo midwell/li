@@ -107,7 +107,7 @@ more expensive than one read here.
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
 | | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
-| | F-SEID as an LI_T3 detection criterion | 3GPP `UPFLIT3TargetIdentifierExtensions` |
+| | PFCP Session ID (F-SEID) as an LI_T3 detection criterion | One of the nine types table 6.2.3-7 requires — see *LI_T3 detection criteria* below |
 | **IRI (X2)** | AMF: registration, deregistration, location update, identifier (de)association, unsuccessful procedure, start of interception with a registered UE | 11 record types in total |
 | | SMF: PDU session establishment, modification, release, start of interception with an established session | |
 | | TS 33.128 ASN.1 (BER) encoding | Verified against the published module, not against our own codec |
@@ -134,13 +134,39 @@ more expensive than one read here.
 |---|---|---|
 | **Delivery destinations** | **An ADMF cannot set an IRI-POI's X2 destination over X1** | The AMF and SMF deliver to the `mdf2` in their own configuration. `CreateDestination` is accepted and a task's `listOfDIDs` is parsed, but unknown DIDs are skipped and the IRI-POIs ignore them. Only the **CC-POI's X3** destination is provisioned over X1, and by the SMF as triggering function rather than by the ADMF |
 | | `ModifyDestination`, `RemoveDestination`, `GetDestinationDetails` | Not implemented |
-| **Targets** | The other six LI_T3 criteria — PDR ID, QER ID, network instance, GTP tunnel direction, F-TEID, PDR | Refused explicitly rather than ignored: a criterion that is not evaluated would intercept either nothing or everything, and both are worse than a refusal the triggering function can report |
+| **Targets** | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 | **A conformance gap, not only a design choice:** clause 6.2.3 says "the CC-POI in the UPF shall support **at least** the identifier types given in table 6.2.3-7". One of the nine is implemented. Not a functional gap here, because the CC-TF in the SMF is the only triggering function and only ever sends a PFCP Session ID. See the breakdown below |
+| | Service-type scoping of a task (`listOfServiceTypes`) | Not applied, so a task carrying it is **refused** rather than acknowledged — accepting it would deliver every service for the target when a narrower set was authorised |
 | **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
 | **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook |
 | **Scope** | HI1/HI2/HI3 and delivery to the LEMF | The mediation function's role, not a POI's |
 | | 4G/LTE interception (MME, S-GW) | 5G only |
 | | IMS/voice and SMS content | |
 | | Location detail beyond the mandatory minimum | Records carry the minimal `Location` the schema requires; richer detail is deferred |
+
+#### LI_T3 detection criteria
+
+TS 33.128 clause 6.2.3 requires a CC-POI to support *at least* the identifier
+types in table 6.2.3-7. What this implementation does with each:
+
+| Identifier type | ETSI TS 103 221-1 type | Supported |
+|---|---|---|
+| GTP Tunnel ID | `gtpuTunnelId` (F-TEID) | No |
+| UE IP Address | `IPv4Address` / `IPv6Address` | No |
+| UE TCP/UDP Port | `TCPPort` / `UDPPort` | No |
+| **PFCP Session ID** | `TargetIdentifierExtension/FSEID` | **Yes** |
+| PDR ID | `TargetIdentifierExtension/PDRID` | No |
+| QER ID | `TargetIdentifierExtension/QERID` | No |
+| Network Instance | `TargetIdentifierExtension/NetworkInstance` | No |
+| GTP Tunnel Direction | `TargetIdentifierExtension/GTPTunnelDirection` | No |
+| PDR | `TargetIdentifierExtension/PDR` | No |
+
+The unsupported types are **refused**, not ignored: a criterion this element
+cannot evaluate would intercept either nothing or everything, and both are worse
+than a refusal the triggering function can report. The PFCP Session ID scopes
+interception to the whole PDU session, which is the granularity a target-scoped
+warrant needs — so nothing is under- or over-collected in the deployments this
+supports, but a CC-POI driven by a third-party triggering function would be
+limited to that one criterion.
 
 ## Enabling LI
 

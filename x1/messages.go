@@ -87,6 +87,12 @@ type TaskDetails struct {
 	ListOfDIDs        []string           `xml:"listOfDIDs>dId"`
 	CorrelationID     string             `xml:"correlationID,omitempty"` // xs:nonNegativeInteger
 	ProductID         string             `xml:"productID,omitempty"`     // UUIDv4; overrides XID in X2/X3 headers
+	// ListOfServiceTypes narrows a task to particular CSP service types. Bound so
+	// that it can be *refused*: encoding/xml drops elements a struct does not
+	// declare, so leaving it out meant an instruction to intercept less was
+	// silently discarded and everything delivered instead. Element names per
+	// TS_103_221_01.xsd (listOfServiceTypes containing serviceType).
+	ListOfServiceTypes []string `xml:"listOfServiceTypes>serviceType,omitempty"`
 }
 
 // TargetIdentifier is a CHOICE of target-identifier kinds. Only the subset the

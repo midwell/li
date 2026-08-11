@@ -604,3 +604,40 @@ func TestNEIssueEncodingsAreConformant(t *testing.T) {
 		t.Errorf("an unmapped condition yields type %q, which the schema does not permit", fallback.kind)
 	}
 }
+
+// activateWithServiceTypesXML narrows a task to a CSP service type. TS 33.128
+// clause 5.2.4 lets the LIPF send this, and states that a POI receiving a
+// ServiceType it does not support "shall reject the task with an appropriate
+// error" — because the alternative is delivering every service when a narrower
+// set was authorised, which is more product than the warrant allows.
+const activateWithServiceTypesXML = `<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:ActivateTaskRequest">
+    <ns1:admfIdentifier>admfID</ns1:admfIdentifier>
+    <ns1:neIdentifier>neID</ns1:neIdentifier>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>tx-svc</ns1:x1TransactionId>
+    <ns1:taskDetails>
+      <ns1:xId>50b93d1e-1b53-4d63-aacb-e4d99811bc0b</ns1:xId>
+      <ns1:targetIdentifiers>
+        <ns1:targetIdentifier><ns1:supiimsi>208930100007488</ns1:supiimsi></ns1:targetIdentifier>
+      </ns1:targetIdentifiers>
+      <ns1:deliveryType>X2Only</ns1:deliveryType>
+      <ns1:listOfServiceTypes><ns1:serviceType>Data</ns1:serviceType></ns1:listOfServiceTypes>
+    </ns1:taskDetails>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`
+
+func TestActivateWithServiceTypeScopingIsRefused(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID")
+
+	resp, err := srv.Process([]byte(activateWithServiceTypesXML), admfPeer(t))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	// Refusals travel in the response, not as a Go error, so the ADMF sees a
+	// well-formed ErrorResponse it can act on. assertRejected also checks nothing
+	// was tasked: a refusal that half-applied would be worse than either outcome.
+	assertRejected(t, resp, st, errCodeUnsupportedRequest)
+}

@@ -390,6 +390,21 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		switch {
 		case isModify && m.TaskDetails == nil:
 			err = fmt.Errorf("missing taskDetails")
+		case m.TaskDetails != nil && len(m.TaskDetails.ListOfServiceTypes) > 0:
+			// This element applies no service-type scoping, so honouring the task as
+			// sent would intercept every service for the target when a narrower set
+			// was authorised — more product than the warrant allows, and silently.
+			// TS 33.128 prescribes the remedy for exactly this: an IRI-POI receiving a
+			// ServiceType it does not support "shall reject the task with an
+			// appropriate error". Refusing lets the LIPF see the mismatch and narrow
+			// the warrant by other means; accepting hides it.
+			//
+			// The code is the "unsupported request" one rather than a guess at a more
+			// specific entry: the TS 103 221-1 error registry is in that document's
+			// text, not its schema, so a better-fitting value should be substituted
+			// once confirmed rather than invented here.
+			err = fmt.Errorf("service-type scoping is not supported")
+			code = errCodeUnsupportedRequest
 		case isModify && !hadPrev:
 			// Applying this would silently create the task, leaving the ADMF believing
 			// it had adjusted an interception that never existed here — the same class
@@ -653,12 +668,22 @@ func mapTarget(t TargetIdentifier) (types.TargetIdentifier, error) {
 }
 
 // mapExtensionTarget maps the 3GPP LI_T3 packet-detection criteria onto a target
-// identifier. Only FSEID is supported — it is what the CC-POI's datapath can
-// match on. The other criteria of TS 33.128 table 6.2.3-7 (PDRID, QERID,
-// NetworkInstance, GTPTunnelDirection, FTEID, PDR) are rejected rather than
-// ignored: silently accepting a criterion we do not evaluate would intercept
-// either nothing or everything, and both are worse than a refused trigger the
-// Triggering Function can report.
+// identifier. Only the PFCP Session ID (FSEID) is supported — it is what the
+// CC-POI's datapath can match on, and it scopes interception to the whole PDU
+// session, which is the granularity a target-scoped warrant needs.
+//
+// Be clear about what that means against the specification. TS 33.128 clause
+// 6.2.3 states that "the CC-POI in the UPF shall support at least the identifier
+// types given in table 6.2.3-7", and that table lists nine: GTP Tunnel ID
+// (gtpuTunnelId / F-TEID), UE IP Address, UE TCP/UDP Port, PFCP Session ID,
+// PDR ID, QER ID, Network Instance, GTP Tunnel Direction and PDR. One of the nine
+// is implemented, so this is a conformance gap and not merely a design choice.
+// It is not a functional gap for this deployment, because the CC-TF in the SMF is
+// the only triggering function and only ever sends a PFCP Session ID.
+//
+// Everything else is refused rather than ignored: silently accepting a criterion
+// this element does not evaluate would intercept either nothing or everything,
+// and both are worse than a refusal the Triggering Function can report.
 func mapExtensionTarget(ext *TargetIdentifierExtension) (types.TargetIdentifier, error) {
 	if ext.UPFT3 == nil || len(ext.UPFT3.Identifiers) == 0 {
 		return types.TargetIdentifier{}, fmt.Errorf("unsupported target identifier extension")
