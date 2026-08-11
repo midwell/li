@@ -107,7 +107,7 @@ more expensive than one read here.
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
 | | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
-| | Seven of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the eighth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |
+| | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the ninth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction, PDR; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |
 | **IRI (X2)** | AMF: registration, deregistration, location update, identifier (de)association, unsuccessful procedure, start of interception with a registered UE | 11 record types in total |
 | | SMF: PDU session establishment, modification, release, start of interception with an established session | |
 | | TS 33.128 ASN.1 (BER) encoding | Verified against the published module, not against our own codec |
@@ -138,7 +138,7 @@ more expensive than one read here.
 |---|---|---|
 | **Delivery destinations** | **An ADMF cannot set an IRI-POI's X2 destination over X1** | The AMF and SMF deliver to the `mdf2` in their own configuration. `CreateDestination` is accepted and a task's `listOfDIDs` is parsed, but unknown DIDs are skipped and the IRI-POIs ignore them. Only the **CC-POI's X3** destination is provisioned over X1, and by the SMF as triggering function rather than by the ADMF |
 | | `ModifyDestination`, `RemoveDestination`, `GetDestinationDetails` | Not implemented |
-| **Targets** | One of the nine LI_T3 detection criteria, **PDR**, and the IPv6 form of a second, **UE IP Address** | Both are *refused*, not ignored. IPv6 because SD-Core supports no IPv6 PDU sessions to intercept — an interception scope question, not an LI one; PDR because comparing an encoded TS 29.244 rule to a session's rules needs canonicalisation semantics the agent does not have, and a wrong comparison would intercept the wrong traffic rather than fail visibly. See the breakdown below |
+| **Targets** | The IPv6 form of one LI_T3 detection criterion, **UE IP Address** | *Refused*, not ignored — and an interception-scope question rather than an LI one: SD-Core has no IPv6 PDU sessions to intercept. See the breakdown below |
 | | Service-type scoping of a task (`listOfServiceTypes`) | Not applied, so a task carrying it is **refused** rather than acknowledged — accepting it would deliver every service for the target when a narrower set was authorised |
 | **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
 | **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook |
@@ -163,15 +163,15 @@ types in table 6.2.3-7. What this implementation does with each:
 | QER ID | `TargetIdentifierExtension/QERID` | **Yes** | `qerIDList`, so every PDR the QER polices |
 | Network Instance | `TargetIdentifierExtension/NetworkInstance` | **Yes** | The PDI's Network Instance, so every session on that DNN |
 | GTP Tunnel Direction | `TargetIdentifierExtension/GTPTunnelDirection` | **Yes** | The PDR's source interface, and the datapath's tag on each copy |
-| PDR | `TargetIdentifierExtension/PDR` | No | Would need defined comparison semantics for an encoded TS 29.244 rule |
+| PDR | `TargetIdentifierExtension/PDR` | **Yes** | The encoded Create PDR IE, parsed with the agent's own PFCP parser and compared against a session's rules in that form |
 
 A task's criteria are a list, and its entries are **alternatives**: traffic
 matching any one of them is intercepted, once. A triggering function needing
 traffic that matches a *combination* of properties cannot express it as a list.
 
-What is left is one type, PDR, and the IPv6 form of UE IP Address.
+What is left is the IPv6 form of UE IP Address.
 
-The IPv6 gap is **not an interception limitation**: SD-Core has no IPv6 PDU
+That gap is **not an interception limitation**: SD-Core has no IPv6 PDU
 sessions to intercept. The SMF cannot allocate an IPv6 UE address — its allocator
 computes the pool size over 32 bits, and the NAS session-accept it would build
 leaves the PDU address zero-length — the WebConsole provisions subscribers with
@@ -180,14 +180,28 @@ address is not four octets. An IPv6 criterion could therefore never select traff
 whatever the CC-POI did with it. It becomes supportable when the core does, not
 before.
 
-Both are **refused**, not ignored: a criterion this element
+It is **refused**, not ignored: a criterion this element
 cannot evaluate would intercept either nothing — mandated interception silently
 producing no product — or everything, which is collection beyond the
 authorisation. Both are worse than a refusal the triggering function can report to
 the LIPF. The refusal arrives *before* the task is acknowledged, so nothing is left
 in place appearing to intercept.
 
-One reading is worth stating because the schema does not: **`GTPTunnelDirection` is
+Two readings are worth stating because the schema does not.
+
+**A `PDR` criterion is a Create PDR IE**, and it is compared in the parsed form this
+agent holds its own rules in, not octet-for-octet. PFCP puts no ordering on the IEs
+inside a grouped IE, so two encoders can describe one rule in different bytes and an
+octet comparison would miss the match; parsing both sides with the same parser makes
+that parser the canonical form. Two consequences follow: fields the agent does not
+retain do not take part, so rules differing only in an IE it ignores compare equal;
+and the fields a *session* assigns — which session the rule belongs to, the address
+that sent it, the counter this UPF chose — are excluded, since they are not
+properties of the rule the triggering function described. An Update PDR is refused
+even though it parses: one agreed form, so a triggering function cannot say the same
+thing two ways and get different answers.
+
+**`GTPTunnelDirection` is
 read relative to the UPF.** `Inbound` is the tunnel it receives on, so uplink;
 `Outbound` is the tunnel it sends on, so downlink. The enumeration carries no
 definition of the vantage point, and taking it the other way round would intercept
