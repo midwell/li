@@ -329,8 +329,8 @@ func TestReportedIdentifiersRoundTrip(t *testing.T) {
 					} `xml:"taskResponseDetails"`
 				} `xml:"x1ResponseMessage"`
 			}
-			if err := xml.Unmarshal(out, &reported); err != nil {
-				t.Fatalf("the reported task is not parseable XML: %v\n%s", err, out)
+			if uerr := xml.Unmarshal(out, &reported); uerr != nil {
+				t.Fatalf("the reported task is not parseable XML: %v\n%s", uerr, out)
 			}
 			if len(reported.Messages) != 1 || len(reported.Messages[0].Tasks) != 1 {
 				t.Fatalf("want one reported task, got %s", out)
