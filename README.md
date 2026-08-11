@@ -421,6 +421,17 @@ the rest of that host's firewall is persisted.
 - Removing the `li` block (or deactivating a warrant) stops all product for it;
   and, when `keepaliveTimeout` is set, all tasking is purged automatically if the
   ADMF stops sending keepalives.
+- **One edge worth knowing when restarting the SMF under load.** A PDU session
+  established while an SMF instance is *shutting down* takes its duplication rule
+  from a process that is about to exit. The replacement SMF never knew that
+  session, so it never withdraws the rule, and the UPF's CC-POI can be left
+  duplicating traffic for a warrant no live SMF holds. Content in that state is
+  dropped rather than delivered — the CC-POI refuses to ship what it cannot
+  attribute — so nothing unauthorised reaches an MDF, but the duplication persists
+  for the life of that session unless `trigger_keepalive` is set on the UPF, in
+  which case the fail-safe clears it when the triggering function stops calling.
+  Setting `trigger_keepalive` is the mitigation; draining sessions before replacing
+  the SMF avoids it entirely.
 
 ## Testing
 
