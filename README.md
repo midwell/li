@@ -107,13 +107,17 @@ more expensive than one read here.
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
 | | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
-| | PFCP Session ID (F-SEID) as an LI_T3 detection criterion | One of the nine types table 6.2.3-7 requires — see *LI_T3 detection criteria* below |
+| | Seven of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the eighth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |
 | **IRI (X2)** | AMF: registration, deregistration, location update, identifier (de)association, unsuccessful procedure, start of interception with a registered UE | 11 record types in total |
 | | SMF: PDU session establishment, modification, release, start of interception with an established session | |
 | | TS 33.128 ASN.1 (BER) encoding | Verified against the published module, not against our own codec |
 | | Activation mid-session, on already-established sessions | |
 | | Delivery asynchronous, off the signalling path | A slow MDF cannot delay a target's signalling |
 | **CC (X3)** | UPF CC-POI duplication via the PFCP `DUPL` apply-action | Both directions |
+| | The CC-POI enables duplication itself, for criteria the SMF has not marked | So a task keyed by an address or a tunnel intercepts, rather than being acknowledged and producing nothing |
+| | Duplication survives the SMF's own session modifications | Re-derived from the tasking wherever rules change; the SMF's `DUPL` bit is never overwritten |
+| | Criteria apply to sessions established after the task | No re-tasking when a subscriber attaches later |
+| | Copies the duplication over-collected are dropped before delivery | See *the coverage model* below |
 | | LI_T3 triggering interface, with the SMF as triggering function | TS 33.128 clause 6.2.3.3 |
 | | Correlation joining X2 and X3 | The session's real F-SEID |
 | | `ProductID` → X2/X3 XID labelling | TS 103 221-1 clause 6.2.1.2, as a general rule |
@@ -134,7 +138,7 @@ more expensive than one read here.
 |---|---|---|
 | **Delivery destinations** | **An ADMF cannot set an IRI-POI's X2 destination over X1** | The AMF and SMF deliver to the `mdf2` in their own configuration. `CreateDestination` is accepted and a task's `listOfDIDs` is parsed, but unknown DIDs are skipped and the IRI-POIs ignore them. Only the **CC-POI's X3** destination is provisioned over X1, and by the SMF as triggering function rather than by the ADMF |
 | | `ModifyDestination`, `RemoveDestination`, `GetDestinationDetails` | Not implemented |
-| **Targets** | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 | **A conformance gap, not only a design choice:** clause 6.2.3 says "the CC-POI in the UPF shall support **at least** the identifier types given in table 6.2.3-7". One of the nine is implemented. Not a functional gap here, because the CC-TF in the SMF is the only triggering function and only ever sends a PFCP Session ID. See the breakdown below |
+| **Targets** | One of the nine LI_T3 detection criteria, **PDR**, and the IPv6 form of a second, **UE IP Address** | Both are *refused*, not ignored. IPv6 because this datapath holds a UE address as a 32-bit value and installs IPv4 rules only, so no session it can describe has an IPv6 address to match; PDR because comparing an encoded TS 29.244 rule to a session's rules needs canonicalisation semantics the agent does not have, and a wrong comparison would intercept the wrong traffic rather than fail visibly. See the breakdown below |
 | | Service-type scoping of a task (`listOfServiceTypes`) | Not applied, so a task carrying it is **refused** rather than acknowledged — accepting it would deliver every service for the target when a narrower set was authorised |
 | **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
 | **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook |
@@ -148,25 +152,62 @@ more expensive than one read here.
 TS 33.128 clause 6.2.3 requires a CC-POI to support *at least* the identifier
 types in table 6.2.3-7. What this implementation does with each:
 
-| Identifier type | ETSI TS 103 221-1 type | Supported |
-|---|---|---|
-| GTP Tunnel ID | `gtpuTunnelId` (F-TEID) | No |
-| UE IP Address | `IPv4Address` / `IPv6Address` | No |
-| UE TCP/UDP Port | `TCPPort` / `UDPPort` | No |
-| **PFCP Session ID** | `TargetIdentifierExtension/FSEID` | **Yes** |
-| PDR ID | `TargetIdentifierExtension/PDRID` | No |
-| QER ID | `TargetIdentifierExtension/QERID` | No |
-| Network Instance | `TargetIdentifierExtension/NetworkInstance` | No |
-| GTP Tunnel Direction | `TargetIdentifierExtension/GTPTunnelDirection` | No |
-| PDR | `TargetIdentifierExtension/PDR` | No |
+| Identifier type | ETSI TS 103 221-1 element | Supported | Resolved against |
+|---|---|---|---|
+| GTP Tunnel ID | `gtpuTunnelId`, or the extension's `FTEID` | **Yes** | The uplink PDR's `tunnelTEID`, and its `tunnelIP4Dst` where the criterion names an address |
+| UE IP Address (IPv4) | `ipv4Address` | **Yes** | The PDR's `ueAddress` |
+| UE IP Address (IPv6) | `ipv6Address` | No | This datapath holds a UE address as a 32-bit value |
+| UE TCP/UDP Port | `tcpPort` / `udpPort` | **Yes** | The PDR's SDF filter, or the packet where the filter does not constrain the port |
+| PFCP Session ID | `TargetIdentifierExtension/FSEID` | **Yes** | The session's own SEID |
+| PDR ID | `TargetIdentifierExtension/PDRID` | **Yes** | `pdrID` |
+| QER ID | `TargetIdentifierExtension/QERID` | **Yes** | `qerIDList`, so every PDR the QER polices |
+| Network Instance | `TargetIdentifierExtension/NetworkInstance` | **Yes** | The PDI's Network Instance, so every session on that DNN |
+| GTP Tunnel Direction | `TargetIdentifierExtension/GTPTunnelDirection` | **Yes** | The PDR's source interface, and the datapath's tag on each copy |
+| PDR | `TargetIdentifierExtension/PDR` | No | Would need defined comparison semantics for an encoded TS 29.244 rule |
 
-The unsupported types are **refused**, not ignored: a criterion this element
-cannot evaluate would intercept either nothing or everything, and both are worse
-than a refusal the triggering function can report. The PFCP Session ID scopes
-interception to the whole PDU session, which is the granularity a target-scoped
-warrant needs — so nothing is under- or over-collected in the deployments this
-supports, but a CC-POI driven by a third-party triggering function would be
-limited to that one criterion.
+A task's criteria are a list, and its entries are **alternatives**: traffic
+matching any one of them is intercepted, once. A triggering function needing
+traffic that matches a *combination* of properties cannot express it as a list.
+
+What is left is one type, PDR, and the IPv6 form of UE IP Address. Both are
+**refused**, not ignored: a criterion this element
+cannot evaluate would intercept either nothing — mandated interception silently
+producing no product — or everything, which is collection beyond the
+authorisation. Both are worse than a refusal the triggering function can report to
+the LIPF. The refusal arrives *before* the task is acknowledged, so nothing is left
+in place appearing to intercept.
+
+One reading is worth stating because the schema does not: **`GTPTunnelDirection` is
+read relative to the UPF.** `Inbound` is the tunnel it receives on, so uplink;
+`Outbound` is the tunnel it sends on, so downlink. The enumeration carries no
+definition of the vantage point, and taking it the other way round would intercept
+the opposite direction to the one authorised.
+
+#### The coverage model
+
+Duplication is an apply-action on a **FAR**, and PDRs reference a FAR, so
+duplication covers *the traffic of every PDR pointing at that FAR* — not a criterion,
+and not necessarily a whole session. Two consequences an operator should be able to
+predict:
+
+- **Coverage is enabled per FAR.** Where a criterion selects some but not all of the
+  PDRs sharing a FAR, enabling duplication copies more traffic than the criterion
+  identifies. FARs are never split or cloned to avoid this: that would mutate the
+  subscriber's own forwarding, which is a surface where two target-visible defects
+  have already occurred.
+- **The excess is dropped before delivery.** A copy is delivered only if it matches
+  a criterion, decided from the datapath's tag and the session's rules where
+  possible — a criterion selecting one direction is settled by the tag alone — and
+  from the packet only for a transport port the rules do not constrain. A copy that
+  did not match is not lost content and is not reported as a delivery fault.
+
+So exactness depends on the rule structure the SMF installed, and precision is
+restored by filtering rather than by finer duplication. The residual limitation:
+where a FAR is shared by several PDRs *of the same direction* and the criterion
+selects only some — distinguishable only by their SDF filters — the copies cannot be
+separated by tag or direction, and a criterion without a transport-port test will
+over-collect within that FAR. Duplication granularity is bounded by the PDR/FAR
+structure that exists; this does not provide per-flow duplication.
 
 ## Enabling LI
 
