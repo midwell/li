@@ -138,7 +138,7 @@ more expensive than one read here.
 |---|---|---|
 | **Delivery destinations** | **An ADMF cannot set an IRI-POI's X2 destination over X1** | The AMF and SMF deliver to the `mdf2` in their own configuration. `CreateDestination` is accepted and a task's `listOfDIDs` is parsed, but unknown DIDs are skipped and the IRI-POIs ignore them. Only the **CC-POI's X3** destination is provisioned over X1, and by the SMF as triggering function rather than by the ADMF |
 | | `ModifyDestination`, `RemoveDestination`, `GetDestinationDetails` | Not implemented |
-| **Targets** | One of the nine LI_T3 detection criteria, **PDR**, and the IPv6 form of a second, **UE IP Address** | Both are *refused*, not ignored. IPv6 because this datapath holds a UE address as a 32-bit value and installs IPv4 rules only, so no session it can describe has an IPv6 address to match; PDR because comparing an encoded TS 29.244 rule to a session's rules needs canonicalisation semantics the agent does not have, and a wrong comparison would intercept the wrong traffic rather than fail visibly. See the breakdown below |
+| **Targets** | One of the nine LI_T3 detection criteria, **PDR**, and the IPv6 form of a second, **UE IP Address** | Both are *refused*, not ignored. IPv6 because SD-Core supports no IPv6 PDU sessions to intercept — an interception scope question, not an LI one; PDR because comparing an encoded TS 29.244 rule to a session's rules needs canonicalisation semantics the agent does not have, and a wrong comparison would intercept the wrong traffic rather than fail visibly. See the breakdown below |
 | | Service-type scoping of a task (`listOfServiceTypes`) | Not applied, so a task carrying it is **refused** rather than acknowledged — accepting it would deliver every service for the target when a narrower set was authorised |
 | **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
 | **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook |
@@ -156,7 +156,7 @@ types in table 6.2.3-7. What this implementation does with each:
 |---|---|---|---|
 | GTP Tunnel ID | `gtpuTunnelId`, or the extension's `FTEID` | **Yes** | The uplink PDR's `tunnelTEID`, and its `tunnelIP4Dst` where the criterion names an address |
 | UE IP Address (IPv4) | `ipv4Address` | **Yes** | The PDR's `ueAddress` |
-| UE IP Address (IPv6) | `ipv6Address` | No | This datapath holds a UE address as a 32-bit value |
+| UE IP Address (IPv6) | `ipv6Address` | No | Nothing to resolve against: SD-Core has no IPv6 PDU sessions |
 | UE TCP/UDP Port | `tcpPort` / `udpPort` | **Yes** | The PDR's SDF filter, or the packet where the filter does not constrain the port |
 | PFCP Session ID | `TargetIdentifierExtension/FSEID` | **Yes** | The session's own SEID |
 | PDR ID | `TargetIdentifierExtension/PDRID` | **Yes** | `pdrID` |
@@ -169,8 +169,18 @@ A task's criteria are a list, and its entries are **alternatives**: traffic
 matching any one of them is intercepted, once. A triggering function needing
 traffic that matches a *combination* of properties cannot express it as a list.
 
-What is left is one type, PDR, and the IPv6 form of UE IP Address. Both are
-**refused**, not ignored: a criterion this element
+What is left is one type, PDR, and the IPv6 form of UE IP Address.
+
+The IPv6 gap is **not an interception limitation**: SD-Core has no IPv6 PDU
+sessions to intercept. The SMF cannot allocate an IPv6 UE address — its allocator
+computes the pool size over 32 bits, and the NAS session-accept it would build
+leaves the PDU address zero-length — the WebConsole provisions subscribers with
+`IPv4` as the only allowed session type, and the UPF rejects a PFCP session whose UE
+address is not four octets. An IPv6 criterion could therefore never select traffic,
+whatever the CC-POI did with it. It becomes supportable when the core does, not
+before.
+
+Both are **refused**, not ignored: a criterion this element
 cannot evaluate would intercept either nothing — mandated interception silently
 producing no product — or everything, which is collection beyond the
 authorisation. Both are worse than a refusal the triggering function can report to
