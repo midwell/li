@@ -312,7 +312,21 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			req:  request("RemoveAllDestinationsRequest", ""),
 		},
 		{name: "RemoveAllDestinationsResponse", setup: allowRemoveAll, req: request("RemoveAllDestinationsRequest", "")},
-		{name: "ErrorResponse (unsupported request)", req: request("CreateObjectRequest", "")},
+		{name: "ErrorResponse (Generic Object CRUD refused)", req: request("CreateObjectRequest", "")},
+		{
+			// A request type outside the schema's enumeration entirely, which is the path
+			// that has to fall back to ExtendedRequestMessageType — echoing the peer's own
+			// string would invalidate the very message that refuses it.
+			name: "ErrorResponse (request type the schema does not define)",
+			req:  request("SomethingElseRequest", ""),
+		},
+		{
+			// Answered, not refused: clause 6.4.1 makes it mandatory. What makes the answer
+			// honest is that the list is absent, and what makes it *valid* is that there is
+			// no oK either — this type defines neither as present.
+			name: "GetAllGenericObjectDetailsResponse, Generic Objects unsupported",
+			req:  request("GetAllGenericObjectDetailsRequest", ""),
+		},
 
 		// The interrogation set, each in both states: holding something, and holding
 		// nothing. The empty case is the one a restarted element is in, and the moment an

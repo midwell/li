@@ -56,6 +56,13 @@ func responseBody(m X1ResponseMessage) string {
 		return neStatusDetails(4, m.Faults)
 	case "ListAllDetailsResponse":
 		return listAllDetailsBody(m)
+	case "GetAllGenericObjectDetailsResponse":
+		// Empty on purpose, and it has to be stated here rather than left to the
+		// acknowledgement case below: the schema gives this type one child, the optional
+		// listOfGenericObjectResponseDetails, and no `oK`. Omitting the list is the
+		// specification's own way of saying Generic Objects are not supported; emitting an
+		// acknowledgement instead would not validate.
+		return ""
 	default:
 		// The acknowledgement types: ActivateTask, ModifyTask, DeactivateTask,
 		// CreateDestination, Keepalive, Ping. Their schema definition is X1ResponseMessage

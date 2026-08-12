@@ -577,7 +577,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			// RemoveAllDestinations request while any of the Destinations are referenced by
 			// Tasks."
 			err = fmt.Errorf("%d destination(s) are referenced by tasks", n)
-			code = errCodeGeneric
+			code = errCodeDestinationsInUse
 		} else {
 			s.removeAllDestinations()
 		}
@@ -636,6 +636,30 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			code = errCodeNoSuchTask
 		}
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)
+	case "GetAllGenericObjectDetailsRequest":
+		// Answered rather than refused, because clause 6.4.1 lists it among the requests that
+		// "shall be supported" with no qualifier — unlike DeleteAllObjects below, which is
+		// required only "if the implementation supports Generic Objects".
+		//
+		// The answer omits listOfGenericObjectResponseDetails, which is what the specification
+		// defines for an element in this position: "May be omitted if Generic Objects are not
+		// supported by the NE". The same sentence governs the object lists inside GetAllDetails
+		// and ListAllDetails, which this element already omits, so all three answers now say the
+		// same thing about Generic Objects. An *empty* list would be a different and false
+		// claim — that they are implemented and none is held.
+		rm.Type = "GetAllGenericObjectDetailsResponse"
+	case "CreateObjectRequest", "ModifyObjectRequest", "GetObjectRequest",
+		"DeleteObjectRequest", "ListObjectsOfTypeRequest", "DeleteAllObjectsRequest":
+		// The clause 6.8 object CRUD, which is conditional where the query above is not:
+		// "The DeleteAllObjects request shall be supported if the implementation supports
+		// Generic Objects", and an element that cannot store an object "shall reject the
+		// CreateObjectRequest with an appropriate error response".
+		//
+		// Refused explicitly rather than by falling through to the unknown-type case, so that
+		// the difference between this and the query above is stated where it is decided. An
+		// acknowledgement would tell a provisioning function its object had been stored.
+		err = fmt.Errorf("this NE does not support Generic Objects")
+		code = errCodeUnsupportedRequest
 	case "CreateDestinationRequest":
 		err = s.createDestination(m.DestinationDetails)
 		rm.Type = "CreateDestinationResponse"
