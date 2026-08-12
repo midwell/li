@@ -13,14 +13,31 @@ build. The imports are resolved by `validate.xsd` instead.
 | `TS_103_221_01.xsd` | `http://uri.etsi.org/03221/X1/2017/10` | 1.19.1 |
 | `TS_103_280.xsd` | `http://uri.etsi.org/03280/common/2017/07` | 2.12.1 |
 | `TS_103_221_01_HashedID.xsd` | `http://uri.etsi.org/03221/X1/2017/10/HashedID` | 1.10.1 |
+| `urn_3GPP_ns_li_3GPPX1Extensions.xsd` | `urn:3GPP:ns:li:3GPPX1Extensions:r18:v6` | 3GPP Rel-18 |
 
-Fetched 2026-08-12 from the ETSI Forge schema repository, branch `cr/103120/088`:
+The first three were fetched 2026-08-12 from the ETSI Forge schema repository, branch
+`cr/103120/088`:
 
 ```
 https://forge.etsi.org/rep/li/schemas-definitions/-/raw/cr/103120/088/103221-1/TS_103_221_01.xsd
 https://forge.etsi.org/rep/li/schemas-definitions/-/raw/cr/103120/088/103280/TS_103_280.xsd
 https://forge.etsi.org/rep/li/schemas-definitions/-/raw/cr/103120/088/103221-1/TS_103_221_01_HashedID.xsd
 ```
+
+The fourth is a 3GPP schema, not an ETSI one: it defines the `targetIdentifierExtension`
+content a CC-TF sends in an LI_T3 `ActivateTask`, which TS 103 221-1 leaves as a strict
+wildcard. It comes from the TS 33.128 attachments archive, which is inside the specification
+zip rather than published as a standalone file:
+
+```
+https://www.3gpp.org/ftp/Specs/archive/33_series/33.128/33128-ig0.zip
+  └ 33128-ig0-attachments.zip
+      └ urn_3GPP_ns_li_3GPPX1Extensions.xsd
+```
+
+That same attachments archive holds `TS33128Payloads.asn`, the module the xIRI records are
+validated against (also mirrored at
+`https://forge.3gpp.org/rep/sa3/li/-/raw/main/33128/r18/TS33128Payloads.asn`).
 
 ## A version mismatch to be aware of
 
