@@ -102,7 +102,9 @@ more expensive than one read here.
 |---|---|---|
 | **X1 provisioning** | `ActivateTask`, `ModifyTask`, `DeactivateTask` | ETSI TS 103 221-1, mutual TLS |
 | | `Keepalive` and the fail-safe purge of all tasking | Purge is opt-in via a keepalive window; off by default |
-| | `GetTaskDetails`, `GetAllDetails` | Lets an ADMF audit what an element actually holds |
+| | The whole interrogation set clause 6.4.1 makes mandatory: `GetTaskDetails`, `GetAllDetails`, `GetAllTaskDetails`, `GetDestinationDetails`, `GetAllDestinationDetails`, `GetNEStatus`, `ListAllDetails`, `GetAllGenericObjectDetails` | How an ADMF audits what an element actually holds — and how it reconciles after one restarts. Holding nothing is a successful empty answer, not an error. Every response is validated against the published XSD |
+| | `DeactivateAllTasks`, **enabled by default** | The specification's own default. One authenticated message stops every interception on the element — see *[Bulk deactivation is enabled by default](#bulk-deactivation-is-enabled-by-default)* |
+| | `RemoveAllDestinations`, **disabled by default** | Answered with the specification's error when disabled (8020); when enabled, refused while any destination is referenced by a task (8010) |
 | | `CreateDestination` | DID → endpoint; re-creating a DID is refused (clause 6.3.1.1) |
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
 | | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
@@ -131,7 +133,7 @@ more expensive than one read here.
 | | Per-warrant delivery isolation | Several agencies' warrants concurrently |
 | | Subscriber traffic and usage accounting unchanged | Measured exactly once despite duplication |
 | **Operational** | UPF restart: interception continues, with no operator action | The destination is re-provisioned and the POI re-triggered |
-| | SMF/AMF restart: tasking is lost and the ADMF is told (`taskingAbsent`) | |
+| | SMF/AMF restart: tasking is lost, the ADMF is told, and it can interrogate the element to reconcile | The whole sequence in one place: *[What happens after a restart](#what-happens-after-a-restart-and-what-the-admf-does-about-it)* |
 | | Tasking left behind by a previous process is withdrawn at startup | |
 | | UPF address change (its Service recreated): triggering recovers | No SMF restart needed |
 
@@ -140,11 +142,12 @@ more expensive than one read here.
 | Area | Feature | Why, or status |
 |---|---|---|
 | **Delivery destinations** | **An ADMF cannot set an IRI-POI's X2 destination over X1** | The AMF and SMF deliver to the `mdf2` in their own configuration. `CreateDestination` is accepted and a task's `listOfDIDs` is parsed, but unknown DIDs are skipped and the IRI-POIs ignore them. Only the **CC-POI's X3** destination is provisioned over X1, and by the SMF as triggering function rather than by the ADMF |
-| | `ModifyDestination`, `RemoveDestination`, `GetDestinationDetails` | Not implemented |
+| | `ModifyDestination`, `RemoveDestination` | Not implemented. Both are optional in TS 103 221-1, unlike the interrogation set above |
+| **Generic Objects** | The whole capability, so `CreateObject`, `ModifyObject`, `GetObject`, `DeleteObject`, `ListObjectsOfType`, `DeleteAllObjects` | **Refused**, not acknowledged. These are conditional — "`DeleteAllObjects` shall be supported *if* the implementation supports Generic Objects" — and an acknowledgement would tell an ADMF its object had been stored. The mandatory *query*, `GetAllGenericObjectDetails`, is answered with its object list **omitted**, which is how the standard says a Generic-Object-less element answers; an empty list would claim they are implemented and none is held |
 | **Targets** | The IPv6 form of one LI_T3 detection criterion, **UE IP Address** | *Refused*, not ignored — and an interception-scope question rather than an LI one: SD-Core has no IPv6 PDU sessions to intercept. See the breakdown below |
 | | Service-type scoping of a task (`listOfServiceTypes`) | Not applied, so a task carrying it is **refused** rather than acknowledged — accepting it would deliver every service for the target when a narrower set was authorised |
 | **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
-| **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook |
+| **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook. What the ADMF is told, and what it asks next, is in *[What happens after a restart](#what-happens-after-a-restart-and-what-the-admf-does-about-it)* |
 | **Scope** | HI1/HI2/HI3 and delivery to the LEMF | The mediation function's role, not a POI's |
 | | 4G/LTE interception (MME, S-GW) | 5G only |
 | | IMS/voice and SMS content | |
@@ -235,6 +238,70 @@ selects only some — distinguishable only by their SDF filters — the copies c
 separated by tag or direction, and a criterion without a transport-port test will
 over-collect within that FAR. Duplication granularity is bounded by the PDR/FAR
 structure that exists; this does not provide per-flow duplication.
+
+#### Bulk deactivation is enabled by default
+
+`DeactivateAllTasks` stops **every** interception on a network element, and it is enabled
+unless you disable it. That is the standard's default, stated outright: "By default (if
+there has been no agreement in advance) then DeactivateAllTasks is enabled." So on an
+element with no LI-specific option set, one authenticated X1 message removes every warrant
+it holds and tears down what each warrant was doing — a CC-POI's duplication included, not
+merely the task list.
+
+Two things follow for anyone who can reach an X1 endpoint:
+
+- **The blast radius is the whole element**, not one warrant. Interception stops; it does
+  not restart by itself, and the ADMF is not told separately, because the deactivation
+  *is* its own request.
+- **Reaching the endpoint is the control.** It is gated by clause 8.2.4 peer
+  authentication — an LI-CA certificate whose bound identity is this element's responsible
+  ADMF — and by whatever network controls stand in front of the port. See
+  *[Restricting who can reach X1](#restricting-who-can-reach-x1)*, which matters more once
+  this message is answered than it did when it was refused.
+
+`RemoveAllDestinations` is the opposite way round: **disabled** unless enabled, answered
+with the specification's own error text when it is off. The asymmetry is deliberate and is
+the standard's, not ours. Deactivating everything fails safe — interception stops, which is
+the direction this whole capability fails in anyway. Removing every destination is not
+symmetric with that: it strands an element that is still tasked and now has nowhere to
+deliver, which is why the standard also guards it — an NE refuses the request while any
+destination is still referenced by a task.
+
+Both are library options rather than configuration keys, so a deployment that wants
+non-default behaviour sets them where the X1 server is constructed.
+
+#### What happens after a restart, and what the ADMF does about it
+
+Tasking lives in memory. A restarted AMF or SMF therefore holds **no** warrants — see
+*Warrants persisted across a restart* above for why that is deliberate — and the whole
+recovery path is built out of the messages in this section. In order:
+
+1. **The element says so, unprompted.** On startup with LI enabled and no tasking, it
+   sends `ReportNEIssue` with `taskingAbsent`. Nothing else would tell the ADMF: from
+   outside, an element holding no warrants is indistinguishable from one holding warrants
+   that match nobody.
+2. **It withdraws what its previous life left elsewhere.** A restarted SMF removes tasking
+   it had triggered at a CC-POI, which no other party could ever remove — the UPF would
+   otherwise keep duplicating for a warrant nothing holds.
+3. **The ADMF interrogates to find out where it stands.** `GetNEStatus` for the element's
+   own state, `ListAllDetails` for the identifiers it holds, `GetAllTaskDetails` or
+   `GetAllDetails` for the detail. An element holding nothing answers all of them
+   *successfully*, with empty lists — the specification is explicit that empty is not an
+   error, and that is precisely the state a restarted element is in.
+4. **The ADMF re-provisions.** An `ActivateTask` naming an XID the element already holds
+   replaces it rather than being refused, so re-provisioning is safe to repeat and does not
+   depend on the ADMF knowing what survived.
+
+What the status answer will *not* say is that this element restarted. `GetNEStatus`
+reports the fault conditions that hold at the moment it is asked, computed from what the
+element can observe rather than from a history — so nothing needs clearing and no answer
+can go stale. Lost tasking is an event, and events travel by the push in step 1. The two
+mechanisms answer different questions, "what just went wrong" and "what is wrong now", and
+an operator should expect a restarted, re-provisioned element to answer `OK`.
+
+The UPF is the exception to all of this: its triggering function is the SMF, which is still
+running, so it is re-provisioned and re-triggered with no operator action. A UPF restart is
+invisible to the ADMF.
 
 ## Enabling LI
 
