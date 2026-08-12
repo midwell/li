@@ -49,19 +49,9 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
 	},
 	// A details answer has to say what was tasked in the same vocabulary the
 	// request used, so an ADMF can compare it against what it believes it sent.
-	"targetXML": targetXML,
-	"deliveryType": func(p []types.ProductType) string {
-		iri := slices.Contains(p, types.ProductIRI)
-		cc := slices.Contains(p, types.ProductCC)
-		switch {
-		case iri && cc:
-			return deliveryX2andX3
-		case cc:
-			return deliveryX3Only
-		default:
-			return deliveryX2Only
-		}
-	},
+	"targetXML":    targetXML,
+	"responseBody": responseBody,
+	"deliveryType": deliveryTypeOf,
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Response xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ext="urn:3GPP:ns:li:3GPPX1Extensions:r18:v6">{{range .Messages}}
   <ns1:x1ResponseMessage xsi:type="ns1:{{.Type}}">
@@ -70,28 +60,7 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
     <ns1:messageTimestamp>{{esc .MessageTimestamp}}</ns1:messageTimestamp>
     <ns1:version>{{esc .Version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .X1TransactionID}}</ns1:x1TransactionId>
-{{- range .Tasks}}
-    <ns1:taskResponseDetails>
-      <ns1:taskDetails>
-        <ns1:xId>{{esc .XID}}</ns1:xId>
-        <ns1:targetIdentifiers>
-{{- range .Targets}}
-          <ns1:targetIdentifier>{{targetXML .}}</ns1:targetIdentifier>
-{{- end}}
-        </ns1:targetIdentifiers>
-        <ns1:deliveryType>{{deliveryType .Products}}</ns1:deliveryType>
-      </ns1:taskDetails>
-      <ns1:taskStatus>{{if eq (printf "%s" .State) "active"}}Active{{else}}Inactive{{end}}</ns1:taskStatus>
-    </ns1:taskResponseDetails>
-{{- end}}
-{{- if .OK}}
-    <ns1:oK>{{esc .OK}}</ns1:oK>
-{{- else if .ErrorInformation}}
-    <ns1:errorInformation>
-      <ns1:errorCode>{{.ErrorInformation.ErrorCode}}</ns1:errorCode>
-      <ns1:errorDescription>{{esc .ErrorInformation.ErrorDescription}}</ns1:errorDescription>
-    </ns1:errorInformation>
-{{- end}}
+{{responseBody .}}
   </ns1:x1ResponseMessage>{{end}}
 </ns1:X1Response>`))
 
@@ -328,6 +297,11 @@ func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) 
 			Version:          m.Version,
 			X1TransactionID:  m.X1TransactionID,
 			ErrorInformation: &X1Error{ErrorCode: code, ErrorDescription: desc},
+			// The schema makes requestMessageType mandatory on an ErrorResponse. A refusal
+			// that does not validate is a refusal a peer discards, so the type travels even
+			// on the authentication path — where the request is refused before anything but
+			// its type has been trusted.
+			RequestType: localType(m.Type),
 		}, false
 	}
 	return s.apply(m), true
@@ -477,6 +451,8 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		// — which TS 103 221-1 also requires.
 		if localType(m.Type) == "GetAllDetailsRequest" {
 			rm.Tasks = s.store.Snapshot()
+			rm.Destinations = s.heldDestinations()
+			rm.Faults = s.unresolvedFaults()
 		} else if t, found := s.store.Get(types.XID(m.XID)); found {
 			rm.Tasks = []types.InterceptTask{t}
 		} else if m.XID == "" {
@@ -505,6 +481,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 
 	if err != nil {
 		rm.Type = errorResponse
+		rm.RequestType = localType(m.Type)
 		if code == 0 {
 			code = errCodeGeneric
 		}

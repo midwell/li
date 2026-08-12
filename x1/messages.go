@@ -216,6 +216,39 @@ type X1ResponseMessage struct {
 	// sent, which may include tasks this requester knows nothing about — the point
 	// of asking.
 	TaskResponses []TaskResponseDetails `xml:"taskResponseDetails"`
+	// AllTaskResponses is the same, nested, as GetAllDetailsResponse defines it. The two
+	// answers put a task in different places — GetTaskDetails directly, GetAllDetails inside
+	// listOfTaskResponseDetails — and encoding/xml matches one tag per field, so a requester
+	// that bound only the direct form read *zero* tasks from a GetAllDetails reply. Use
+	// ReportedTasks rather than either field.
+	AllTaskResponses []TaskResponseDetails `xml:"listOfTaskResponseDetails>taskResponseDetails"`
+	// RequestType is the type of the request being answered. It is only rendered on an
+	// ErrorResponse, where the schema makes requestMessageType mandatory — omitting it made
+	// every refusal this element sent invalid.
+	RequestType string `xml:"-"`
+	// Destinations are the destinations this element holds, for the answers that report
+	// them. Carried separately from Tasks for the same reason: the outgoing form is built
+	// from what the element holds, not parsed from a peer.
+	Destinations []ReportedDestination `xml:"-"`
+	// Faults are the element's own unresolved faults, for neStatusDetails. Empty until the
+	// element retains what it reports to the ADMF.
+	Faults []X1Error `xml:"-"`
+}
+
+// ReportedTasks returns the tasks a peer reported, whichever answer carried them.
+func (m X1ResponseMessage) ReportedTasks() []TaskResponseDetails {
+	if len(m.AllTaskResponses) > 0 {
+		return m.AllTaskResponses
+	}
+
+	return m.TaskResponses
+}
+
+// ReportedDestination is one destination as an element reports it: the identifier the ADMF
+// provisioned it under, and where it points.
+type ReportedDestination struct {
+	DID      string
+	Endpoint types.DeliveryEndpoint
 }
 
 // TaskResponseDetails is one task as reported by an element (TS 103 221-1

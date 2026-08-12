@@ -326,7 +326,7 @@ func TestReportedIdentifiersRoundTrip(t *testing.T) {
 						Details struct {
 							TargetIdentifiers []TargetIdentifier `xml:"targetIdentifiers>targetIdentifier"`
 						} `xml:"taskDetails"`
-					} `xml:"taskResponseDetails"`
+					} `xml:"listOfTaskResponseDetails>taskResponseDetails"`
 				} `xml:"x1ResponseMessage"`
 			}
 			if uerr := xml.Unmarshal(out, &reported); uerr != nil {

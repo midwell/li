@@ -354,8 +354,9 @@ func (r *Requester) TaskXIDs() ([]types.XID, error) {
 		return nil, &RequestError{Code: m.ErrorInformation.ErrorCode, Description: m.ErrorInformation.ErrorDescription}
 	}
 
-	xids := make([]types.XID, 0, len(m.TaskResponses))
-	for _, t := range m.TaskResponses {
+	reported := m.ReportedTasks()
+	xids := make([]types.XID, 0, len(reported))
+	for _, t := range reported {
 		if t.TaskDetails.XID != "" {
 			xids = append(xids, types.XID(t.TaskDetails.XID))
 		}

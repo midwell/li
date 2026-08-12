@@ -100,25 +100,18 @@ func checkVendoredSchemas(t *testing.T) {
 // of X1 being schema-conformant, and its length is the honest measure of how far off that
 // is.
 var knownSchemaDefects = map[string][]string{
-	// add-x1-mandatory-messages, group 2.
+	// add-x1-provisioning-conformance group 2a. Both remaining violations are the same
+	// defect — a reported taskDetails omits its mandatory listOfDIDs — seen in the two
+	// answers that report a task. It became visible on GetAllDetails only once that
+	// response was nested correctly; before, the wrapper was missing and masked it.
 	"GetTaskDetailsResponse": {
-		"}oK': This element is not expected",
-		"}taskStatus': Character content other than whitespace is not allowed",
-		"}taskStatus': Missing child element(s)",
 		"}taskDetails': Missing child element(s)",
 	},
 	"GetAllDetailsResponse, with a task held": {
-		"}taskResponseDetails': This element is not expected",
+		"}taskDetails': Missing child element(s)",
 	},
-	"GetAllDetailsResponse, holding nothing": {
-		"}oK': This element is not expected",
-	},
-	"ErrorResponse (unsupported request)": {
-		"}errorInformation': This element is not expected",
-	},
-	// add-x1-provisioning-conformance. The port defect is two-way: we cannot render a
-	// valid destination and we cannot parse a conformant one, which is why it belongs
-	// with the destination work rather than here.
+	// The destination port, rendered as element text where the schema defines a
+	// TCPPort/UDPPort choice. Two-way: a conformant peer's port also parses as zero.
 	"CreateDestination": {
 		"}port': Character content other than whitespace is not allowed",
 		"}port': Missing child element(s)",

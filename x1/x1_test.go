@@ -542,7 +542,15 @@ func TestTaskDetailsQueryAnswersWhatIsHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalResponse: %v", err)
 	}
-	for _, want := range []string{"<ns1:taskResponseDetails>", "<ns1:taskDetails>", "<ns1:taskStatus>Active</ns1:taskStatus>"} {
+	// taskStatus is a complex type carrying provisioningStatus, whose enumeration is
+	// awaitingProvisioning / failed / complete. This assertion previously demanded
+	// "<taskStatus>Active</taskStatus>" — a shape and a value the schema does not define —
+	// and so held the defect in place. What makes the corrected form trustworthy is not this
+	// assertion but TestRenderedResponsesValidate, which checks it against the published XSD.
+	for _, want := range []string{
+		"<ns1:taskResponseDetails>", "<ns1:taskDetails>",
+		"<ns1:provisioningStatus>complete</ns1:provisioningStatus>",
+	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("response missing %s\ngot:\n%s", want, out)
 		}
