@@ -53,7 +53,7 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
 	"responseBody": responseBody,
 	"deliveryType": deliveryTypeOf,
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
-<ns1:X1Response xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ext="urn:3GPP:ns:li:3GPPX1Extensions:r18:v6">{{range .Messages}}
+<ns1:X1Response xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ext="urn:3GPP:ns:li:3GPPX1Extensions:r18:v6" xmlns:c="http://uri.etsi.org/03280/common/2017/07">{{range .Messages}}
   <ns1:x1ResponseMessage xsi:type="ns1:{{.Type}}">
     <ns1:admfIdentifier>{{esc .AdmfIdentifier}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .NeIdentifier}}</ns1:neIdentifier>
@@ -443,6 +443,37 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			}
 		}
 		rm.Type = "DeactivateTaskResponse"
+	case "GetAllTaskDetailsRequest":
+		// One of the interrogation set TS 103 221-1 clause 6.4.1 requires every
+		// implementation to support. It projects the same task state GetAllDetails does,
+		// through the same renderer, so the two answers cannot disagree about what this
+		// element holds — an ADMF that got different answers could not tell which to trust.
+		rm.Tasks = s.store.Snapshot()
+		rm.Type = "GetAllTaskDetailsResponse"
+	case "GetAllDestinationDetailsRequest":
+		rm.Destinations = s.heldDestinations()
+		rm.Type = "GetAllDestinationDetailsResponse"
+	case "ListAllDetailsRequest":
+		// Identifiers only. This is what an ADMF reaches for after being told an element has
+		// lost its tasking: it needs the list before it can reconcile, and answering with an
+		// empty one is a usable answer where an error is not.
+		rm.Tasks = s.store.Snapshot()
+		rm.Destinations = s.heldDestinations()
+		rm.Type = "ListAllDetailsResponse"
+	case "GetNEStatusRequest":
+		rm.Faults = s.unresolvedFaults()
+		rm.Type = "GetNEStatusResponse"
+	case "GetDestinationDetailsRequest":
+		if m.DID == "" {
+			err = fmt.Errorf("missing dId")
+		} else if d, found := s.destinationByDID(m.DID); found {
+			rm.Destinations = []ReportedDestination{d}
+		} else {
+			// A destination the element does not hold is an error, not an empty answer: an
+			// empty success would tell the ADMF the destination exists and is blank.
+			err = fmt.Errorf("no such destination")
+		}
+		rm.Type = "GetDestinationDetailsResponse"
 	case "GetTaskDetailsRequest", "GetAllDetailsRequest":
 		// A provisioning function has no other way to discover that this element has
 		// lost the tasking it was given — a restart discards it, and nothing pushes

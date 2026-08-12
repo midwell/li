@@ -42,6 +42,10 @@ type X1RequestMessage struct {
 	// (CreateDestination). A task references destinations by DID, so they must be
 	// installed before the first task that names them.
 	DestinationDetails *DestinationDetails `xml:"destinationDetails,omitempty"`
+	// DID is a bare destination identifier, as GetDestinationDetails and
+	// RemoveDestination carry it — distinct from the DID inside DestinationDetails,
+	// which is part of a destination being provisioned.
+	DID string `xml:"dId,omitempty"`
 }
 
 // DestinationDetails is a delivery destination (TS 103 221-1 clause 6.3.1.2).

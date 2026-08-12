@@ -34,6 +34,28 @@ func responseBody(m X1ResponseMessage) string {
 		return allDetailsBody(m)
 	case "GetTaskDetailsResponse":
 		return taskDetailsBody(m)
+	case "GetAllTaskDetailsResponse":
+		return listBody(m, "listOfTaskResponseDetails", func(b *strings.Builder) {
+			for _, t := range m.Tasks {
+				b.WriteString(taskResponseDetails(6, t))
+			}
+		})
+	case "GetAllDestinationDetailsResponse":
+		return listBody(m, "listOfDestinationResponseDetails", func(b *strings.Builder) {
+			for _, d := range m.Destinations {
+				b.WriteString(destinationResponseDetails(6, d))
+			}
+		})
+	case "GetDestinationDetailsResponse":
+		if len(m.Destinations) == 0 {
+			return ""
+		}
+
+		return destinationResponseDetails(4, m.Destinations[0])
+	case "GetNEStatusResponse":
+		return neStatusDetails(4, m.Faults)
+	case "ListAllDetailsResponse":
+		return listAllDetailsBody(m)
 	default:
 		// The acknowledgement types: ActivateTask, ModifyTask, DeactivateTask,
 		// CreateDestination, Keepalive, Ping. Their schema definition is X1ResponseMessage
@@ -83,6 +105,48 @@ func allDetailsBody(m X1ResponseMessage) string {
 		b.WriteString(destinationResponseDetails(6, d))
 	}
 	b.WriteString(close(4, "listOfDestinationResponseDetails"))
+
+	return b.String()
+}
+
+// listBody wraps a list in its element. The element is mandatory on GetAllDetails and
+// optional on the per-list answers, and is emitted either way: an empty list is the schema's
+// own answer for "the element holds none", and the specification says so outright — "If there
+// are no destinations, an empty list shall be returned - this is not an error". That matters
+// most for a restarted element, which holds nothing precisely when an ADMF most needs a usable
+// answer.
+func listBody(_ X1ResponseMessage, name string, items func(*strings.Builder)) string {
+	var b strings.Builder
+	b.WriteString(open(4, name))
+	items(&b)
+	b.WriteString(close(4, name))
+
+	return b.String()
+}
+
+// listAllDetailsBody renders a ListAllDetailsResponse: the identifiers only, no details.
+//
+// The element names here are capitalised — ListOfXIDs, ListOfDIDs — unlike every other
+// element in this schema. That is the schema's own inconsistency, not ours, and it is exactly
+// the kind of detail a validator catches and a careful reading does not.
+//
+// ListOfGenericObjectIDs is omitted rather than emitted empty: the schema permits leaving it
+// out when Generic Objects are unsupported, and this element supports none. An empty list
+// would assert that it implements them and holds nothing.
+func listAllDetailsBody(m X1ResponseMessage) string {
+	var b strings.Builder
+
+	b.WriteString(open(4, "ListOfXIDs"))
+	for _, t := range m.Tasks {
+		b.WriteString(el(6, "xId", escapeXML(string(t.XID))))
+	}
+	b.WriteString(close(4, "ListOfXIDs"))
+
+	b.WriteString(open(4, "ListOfDIDs"))
+	for _, d := range m.Destinations {
+		b.WriteString(el(6, "dId", escapeXML(d.DID)))
+	}
+	b.WriteString(close(4, "ListOfDIDs"))
 
 	return b.String()
 }
@@ -348,3 +412,16 @@ func (s *Server) heldDestinations() []ReportedDestination {
 // to report yet. Reporting OK while a pushed fault stands is the wrong answer — connecting
 // the reporter to this is the GetNEStatus work, and when it lands only this function changes.
 func (s *Server) unresolvedFaults() []X1Error { return nil }
+
+// destinationByDID returns one held destination.
+func (s *Server) destinationByDID(did string) (ReportedDestination, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	endpoint, ok := s.destinations[did]
+	if !ok {
+		return ReportedDestination{}, false
+	}
+
+	return ReportedDestination{DID: did, Endpoint: endpoint}, true
+}

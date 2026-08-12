@@ -41,6 +41,9 @@ const schemaDir = "testdata/schemas"
 // demands six fractional digits whatever the value.
 var zeroTailInstant = time.Date(2026, 8, 12, 6, 28, 15, 120000*1000, time.UTC)
 
+// testDID is a UUID, which is what the schema types a DId as.
+const testDID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
 // vendoredSchemaDigests pins the published files. A local edit — including a well-meant
 // one adding the schemaLocation that validate.xsd supplies instead — silently changes what
 // every assertion here means, so it fails the test rather than passing quietly.
@@ -108,6 +111,9 @@ var knownSchemaDefects = map[string][]string{
 		"}taskDetails': Missing child element(s)",
 	},
 	"GetAllDetailsResponse, with a task held": {
+		"}taskDetails': Missing child element(s)",
+	},
+	"GetAllTaskDetailsResponse, with a task held": {
 		"}taskDetails': Missing child element(s)",
 	},
 	// The destination port, rendered as element text where the schema defines a
@@ -193,8 +199,11 @@ func validateAgainstSchema(t *testing.T, doc []byte) []string {
 	var problems []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
-		// The trailing "fails to validate" adds nothing over the specific errors.
-		if line == "" || strings.HasSuffix(line, "fails to validate") {
+		// Keep diagnostics only. xmllint echoes the offending source line and a caret
+		// beneath it, which are not findings and made one namespace mistake look like
+		// twelve.
+		if line == "" || strings.HasSuffix(line, "fails to validate") ||
+			!strings.Contains(line, "error :") {
 			continue
 		}
 		if i := strings.Index(line, "Schemas validity error : "); i >= 0 {
@@ -234,16 +243,27 @@ func TestRenderedResponsesValidate(t *testing.T) {
 	checkVendoredSchemas(t)
 
 	supi := types.TargetIdentifier{Type: types.TargetSUPI, Value: "262019876543210"}
-	held := func(st *store.Store) {
+
+	// Tasks live in the store, destinations on the server, so a case's setup gets both.
+	held := func(st *store.Store, _ *Server) {
 		st.Activate(types.InterceptTask{
 			XID: testXID, Targets: []types.TargetIdentifier{supi},
 			Products: []types.ProductType{types.ProductIRI},
 		})
 	}
+	withDestination := func(_ *store.Store, srv *Server) {
+		srv.destinations[testDID] = types.DeliveryEndpoint{
+			Type: types.DeliveryX2, Address: "10.0.60.122:42069",
+		}
+	}
+	bothHeld := func(st *store.Store, srv *Server) {
+		held(st, srv)
+		withDestination(st, srv)
+	}
 
 	cases := []struct {
 		name  string
-		setup func(*store.Store)
+		setup func(*store.Store, *Server)
 		req   []byte
 	}{
 		{name: "ActivateTaskResponse", req: []byte(activateXML)},
@@ -278,16 +298,37 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			req:  request("DeactivateTaskRequest", "\n    <ns1:xId>cccccccc-cccc-4ccc-8ccc-cccccccccccc</ns1:xId>"),
 		},
 		{name: "ErrorResponse (unsupported request)", req: request("RemoveAllDestinationsRequest", "")},
+
+		// The interrogation set, each in both states: holding something, and holding
+		// nothing. The empty case is the one a restarted element is in, and the moment an
+		// ADMF most needs a usable answer rather than an error.
+		{name: "GetAllTaskDetailsResponse, with a task held", setup: held, req: request("GetAllTaskDetailsRequest", "")},
+		{name: "GetAllTaskDetailsResponse, holding nothing", req: request("GetAllTaskDetailsRequest", "")},
+		{name: "GetAllDestinationDetailsResponse, with a destination", setup: withDestination, req: request("GetAllDestinationDetailsRequest", "")},
+		{name: "GetAllDestinationDetailsResponse, holding nothing", req: request("GetAllDestinationDetailsRequest", "")},
+		{name: "ListAllDetailsResponse, with a task and a destination", setup: bothHeld, req: request("ListAllDetailsRequest", "")},
+		{name: "ListAllDetailsResponse, holding nothing", req: request("ListAllDetailsRequest", "")},
+		{name: "GetNEStatusResponse", req: request("GetNEStatusRequest", "")},
+		{
+			name: "GetDestinationDetailsResponse", setup: withDestination,
+			req: request("GetDestinationDetailsRequest",
+				"\n    <ns1:dId>"+testDID+"</ns1:dId>"),
+		},
+		{
+			name: "ErrorResponse (no such destination)",
+			req: request("GetDestinationDetailsRequest",
+				"\n    <ns1:dId>dddddddd-dddd-4ddd-8ddd-dddddddddddd</ns1:dId>"),
+		},
 	}
 
 	var failed int
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			st := store.New()
-			if c.setup != nil {
-				c.setup(st)
-			}
 			srv := NewServer(st, "neID")
+			if c.setup != nil {
+				c.setup(st, srv)
+			}
 			// A fixed instant whose microseconds end in four zeros. Go's
 			// trailing-zero-stripping formats render this as ".12", so any regression to
 			// one fails *every* case here rather than one run in ten — which is how the
