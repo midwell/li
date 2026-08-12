@@ -66,49 +66,37 @@ func TestNEStatusReportsConditionsThatHoldNow(t *testing.T) {
 	}
 }
 
-// TestNEStatusReportsUndeliverableTasking covers the one condition this package can observe
-// without a POI's help: it holds tasking it cannot deliver the product of.
+// TestTaskWithNoResolvedDestinationIsNotAnElementFault guards a probe that was shipped and
+// withdrawn, because re-adding it is the obvious thing to do while reading this package.
 //
-// This is a fault about the element, not about one task — the element is producing something
-// that goes nowhere — and it is deliberately quantified rather than named. An NE-level answer
-// says how much is wrong, never whose: naming the XID or the target here would put interception
-// detail in an answer that is not scoped to a warrant.
-func TestNEStatusReportsUndeliverableTasking(t *testing.T) {
+// "The element holds tasking that no destination resolves for" looks like a condition this
+// package can observe alone, and it is — but it is not a *fault*, in any POI this library
+// serves. The AMF delivers X2 to the MDF2 in its own configuration; the SMF provisions its
+// configured MDF3 at the CC-POI; and the UPF, the one element that does deliver to a task's
+// resolved destinations, refuses a content task without one before it is stored. So every
+// ordinary task an ADMF provisions without DIDs satisfied the condition, and a deployed AMF
+// answered "Faults" while delivering every record correctly.
+//
+// It was caught by running against a deployment and not by any test here, which is the
+// interesting part: the condition is about how the *network functions* deliver, and this
+// package cannot see that.
+func TestTaskWithNoResolvedDestinationIsNotAnElementFault(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "neID")
 	srv.now = func() time.Time { return zeroTailInstant }
 
+	// Exactly what an ADMF provisions when it names no destinations, which is the documented
+	// and supported case for an IRI-POI.
 	st.Activate(types.InterceptTask{
 		XID:      testXID,
 		Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
-		Products: []types.ProductType{types.ProductCC},
-		// No Deliveries: an ADMF named destinations this element never had.
+		Products: []types.ProductType{types.ProductIRI},
+		// No Deliveries: the POI has an MDF address of its own.
 	})
 
-	got := statusOf(t, srv)
-	if !strings.Contains(got, "<ns1:neStatus>Faults</ns1:neStatus>") {
-		t.Errorf("a task that cannot be delivered is a fault about this element\ngot:\n%s", got)
-	}
-	if !strings.Contains(got, "1 task(s) require delivery but no destination resolves") {
-		t.Errorf("the answer does not say what is wrong\ngot:\n%s", got)
-	}
-	for _, leak := range []string{string(testXID), "262019876543210"} {
-		if strings.Contains(got, leak) {
-			t.Errorf("the NE-level answer names %q; it must say how much is wrong, not whose", leak)
-		}
-	}
-
-	// Give it somewhere to deliver, and the condition stops holding.
-	st.Activate(types.InterceptTask{
-		XID:      testXID,
-		Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
-		Products: []types.ProductType{types.ProductCC},
-		Deliveries: []types.DeliveryEndpoint{
-			{Type: types.DeliveryX3, Address: "10.0.60.122:42069"},
-		},
-	})
 	if got := statusOf(t, srv); !strings.Contains(got, "<ns1:neStatus>OK</ns1:neStatus>") {
-		t.Errorf("with a destination, want OK\ngot:\n%s", got)
+		t.Errorf("an ordinary task with no resolved destination made the element report itself "+
+			"faulty; delivery does not come from the task in any POI this library serves\ngot:\n%s", got)
 	}
 }
 

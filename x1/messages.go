@@ -234,8 +234,8 @@ type X1ResponseMessage struct {
 	// them. Carried separately from Tasks for the same reason: the outgoing form is built
 	// from what the element holds, not parsed from a peer.
 	Destinations []ReportedDestination `xml:"-"`
-	// Faults are the element's own unresolved faults, for neStatusDetails. Empty until the
-	// element retains what it reports to the ADMF.
+	// Faults are the element's own unresolved faults, for neStatusDetails: the conditions a
+	// registered probe says hold at the moment the status was asked for, never a history.
 	Faults []X1Error `xml:"-"`
 }
 
