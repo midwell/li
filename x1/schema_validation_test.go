@@ -6,6 +6,7 @@ package x1
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -121,6 +122,19 @@ var knownSchemaDefects = map[string][]string{
 	"CreateDestination": {
 		"}port': Character content other than whitespace is not allowed",
 		"}port': Missing child element(s)",
+	},
+	// add-li-x1-provisioning-conformance 2a.4. Every response echoes the request's version
+	// and x1TransactionId, and the schema restricts both — a pattern and a UUID. So a peer
+	// can choose header values that make *our* answer invalid, and the answer it can do that
+	// to most easily is the one refusing it, where nothing about the request has been
+	// trusted yet.
+	//
+	// The consequence is the one this project's own requirement calls out: a refusal a
+	// conformant ADMF discards is a refusal that was never sent, and this is the refusal
+	// that says somebody is trying to task the element as someone they are not.
+	"ErrorResponse (peer authentication failed, malformed headers)": {
+		"}version': [facet 'pattern']",
+		"}x1TransactionId': [facet 'pattern']",
 	},
 }
 
@@ -271,6 +285,11 @@ func TestRenderedResponsesValidate(t *testing.T) {
 		name  string
 		setup func(*store.Store, *Server)
 		req   []byte
+		// peer presents the certificate the request arrives with. It defaults to a properly
+		// bound ADMF, so the two cases that set it are the ones about a refused peer — the
+		// path every other case authenticates past, and the one whose input this element has
+		// not decided to trust yet.
+		peer func(*testing.T) *x509.Certificate
 	}{
 		{name: "ActivateTaskResponse", req: []byte(activateXML)},
 		{
@@ -358,6 +377,28 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			req: request("GetDestinationDetailsRequest",
 				"\n    <ns1:dId>dddddddd-dddd-4ddd-8ddd-dddddddddddd</ns1:dId>"),
 		},
+
+		// The refusal path this element sends to a peer it will not talk to. It is the one
+		// case where the request's contents have been trusted by nothing, and it was the only
+		// response type never validated — the request type has to reach the renderer from a
+		// message refused before anything else about it was accepted.
+		{
+			name: "ErrorResponse (peer authentication failed)",
+			req:  request("ActivateTaskRequest", ""),
+			peer: func(t *testing.T) *x509.Certificate { return certWithUID(t, "impostor") },
+		},
+		{
+			// The same refusal, to a peer that also supplied header values the schema
+			// restricts. Both travel back in our answer, so both have to be values we are
+			// willing to put our name to — see knownSchemaDefects, where this is baselined
+			// rather than fixed.
+			name: "ErrorResponse (peer authentication failed, malformed headers)",
+			req: []byte(strings.NewReplacer(
+				"v1.6.1", "not-a-version",
+				"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "not-a-uuid",
+			).Replace(string(request("ActivateTaskRequest", "")))),
+			peer: func(t *testing.T) *x509.Certificate { return certWithUID(t, "impostor") },
+		},
 	}
 
 	var failed int
@@ -374,7 +415,11 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			// defect this pins survived into a live deployment.
 			srv.now = func() time.Time { return zeroTailInstant }
 
-			resp, err := srv.Process(c.req, admfPeer(t))
+			peer := admfPeer(t)
+			if c.peer != nil {
+				peer = c.peer(t)
+			}
+			resp, err := srv.Process(c.req, peer)
 			if err != nil {
 				t.Fatalf("Process: %v", err)
 			}
