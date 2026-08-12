@@ -256,6 +256,11 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			Type: types.DeliveryX2, Address: "10.0.60.122:42069",
 		}
 	}
+	withFaultProbe := func(_ *store.Store, srv *Server) {
+		srv.faultProbes = append(srv.faultProbes, func() *X1Error {
+			return &X1Error{ErrorCode: 1000, ErrorDescription: "the mediation function is unreachable"}
+		})
+	}
 	bothHeld := func(st *store.Store, srv *Server) {
 		held(st, srv)
 		withDestination(st, srv)
@@ -308,7 +313,17 @@ func TestRenderedResponsesValidate(t *testing.T) {
 		{name: "GetAllDestinationDetailsResponse, holding nothing", req: request("GetAllDestinationDetailsRequest", "")},
 		{name: "ListAllDetailsResponse, with a task and a destination", setup: bothHeld, req: request("ListAllDetailsRequest", "")},
 		{name: "ListAllDetailsResponse, holding nothing", req: request("ListAllDetailsRequest", "")},
-		{name: "GetNEStatusResponse", req: request("GetNEStatusRequest", "")},
+		{name: "GetNEStatusResponse, healthy", req: request("GetNEStatusRequest", "")},
+		{
+			// A Faults answer has a different shape from an OK one — listOfFaults carries
+			// unresolvedFault children rather than being empty — so both need validating.
+			name: "GetNEStatusResponse, with a condition holding", setup: withFaultProbe,
+			req: request("GetNEStatusRequest", ""),
+		},
+		{
+			name: "GetAllDetailsResponse, with a condition holding", setup: withFaultProbe,
+			req: request("GetAllDetailsRequest", ""),
+		},
 		{
 			name: "GetDestinationDetailsResponse", setup: withDestination,
 			req: request("GetDestinationDetailsRequest",

@@ -410,13 +410,68 @@ func (s *Server) heldDestinations() []ReportedDestination {
 	return out
 }
 
-// unresolvedFaults returns the element's own unresolved faults for neStatusDetails.
+// unresolvedFaults returns the fault conditions that hold at this moment.
 //
-// Empty for now, and deliberately a function rather than a literal: this element pushes
-// faults to the ADMF over ReportNEIssue but does not retain them, so it has nothing truthful
-// to report yet. Reporting OK while a pushed fault stands is the wrong answer — connecting
-// the reporter to this is the GetNEStatus work, and when it lands only this function changes.
-func (s *Server) unresolvedFaults() []X1Error { return nil }
+// Computed per call, never cached. That is the whole design: a status answer assembled from
+// what is observable now cannot report a fault that has cleared, and cannot need an expiry or
+// an explicit clear — the two mechanisms that would otherwise decide between discarding real
+// faults on a timer and reporting an element as permanently broken.
+//
+// The cost is that a fault which is an *event* rather than a state — a copy dropped at the
+// egress, an authentication attempt refused — is reported when it happens and is not
+// re-observable afterwards, so it does not appear here. That is why the push reporting is not
+// redundant.
+func (s *Server) unresolvedFaults() []X1Error {
+	var faults []X1Error
+
+	// The one condition this package can answer without help from a POI.
+	if f := s.tasksWithoutDeliveryFault(); f != nil {
+		faults = append(faults, *f)
+	}
+
+	s.mu.Lock()
+	probes := slices.Clone(s.faultProbes)
+	s.mu.Unlock()
+
+	for _, probe := range probes {
+		if f := probe(); f != nil {
+			faults = append(faults, *f)
+		}
+	}
+
+	return faults
+}
+
+// tasksWithoutDeliveryFault reports a task this element holds that requires product delivery
+// and for which no destination resolves.
+//
+// It is a fault about the element rather than about one task, because the element is producing
+// something it cannot deliver — and it is observable at any moment from the tasking and the
+// destinations, which is what makes it a probe rather than a remembered event.
+//
+// An element configured with RequireResolvableDIDs refuses such a task outright, so this can
+// only hold where that is off: an IRI-POI whose ADMF names destinations it never provisioned.
+func (s *Server) tasksWithoutDeliveryFault() *X1Error {
+	var undeliverable int
+	for _, t := range s.store.Snapshot() {
+		if !t.WantsProduct(types.ProductCC) && !t.WantsProduct(types.ProductIRI) {
+			continue
+		}
+		if len(t.Deliveries) == 0 {
+			undeliverable++
+		}
+	}
+	if undeliverable == 0 {
+		return nil
+	}
+
+	// No target identity, no XID: an NE-level answer says how much is wrong, never whose.
+	return &X1Error{
+		ErrorCode: errCodeGeneric,
+		ErrorDescription: fmt.Sprintf(
+			"%d task(s) require delivery but no destination resolves for them", undeliverable),
+	}
+}
 
 // destinationByDID returns one held destination.
 func (s *Server) destinationByDID(did string) (ReportedDestination, bool) {

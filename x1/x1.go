@@ -110,6 +110,10 @@ type Server struct {
 	// acknowledged. Nil accepts everything, which is right for a POI whose only
 	// question about a task is answered by this package.
 	canApply func(types.InterceptTask) error
+	// faultProbes answer whether a fault condition holds *now*. They are consulted when the
+	// element is asked for its status, never cached, so no answer can go stale — which is the
+	// failure mode every retaining design shares. See WithFaultProbes.
+	faultProbes []FaultProbe
 
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
@@ -159,6 +163,27 @@ func OnDeactivate(fn func(types.InterceptTask)) Option {
 // afterwards for a reason this package owns.
 func CanApply(fn func(types.InterceptTask) error) Option {
 	return func(s *Server) { s.canApply = fn }
+}
+
+// FaultProbe reports whether one fault condition currently holds. It returns nil when the
+// condition does not hold, and the fault to report when it does.
+//
+// A probe is asked at the moment a provisioning function asks for the element's status, so it
+// describes the present rather than the past. Whoever holds the knowledge owns the probe: only
+// the content shipper knows whether its mediation function is reachable, and only the datapath
+// knows whether it is currently losing copies.
+type FaultProbe func() *X1Error
+
+// WithFaultProbes registers conditions the element can observe about itself, for the status a
+// provisioning function can ask for.
+//
+// Registering none is a legitimate configuration and not a silent one: the element then answers
+// that no observable condition holds, which is true. What it does *not* mean is that nothing has
+// ever gone wrong — faults are pushed as they happen over ReportNEIssue, and the ones that are
+// events rather than states cannot be re-observed later. The two mechanisms answer different
+// questions, "what just went wrong" and "what is wrong now", and neither replaces the other.
+func WithFaultProbes(probes ...FaultProbe) Option {
+	return func(s *Server) { s.faultProbes = append(s.faultProbes, probes...) }
 }
 
 // RequireResolvableDIDs makes the server refuse a task that requests content
