@@ -182,8 +182,20 @@ func taskResponseDetails(ind int, t types.InterceptTask) string {
 	}
 	b.WriteString(close(ind+4, "targetIdentifiers"))
 	b.WriteString(el(ind+4, "deliveryType", deliveryTypeOf(t.Products)))
-	// listOfDIDs is mandatory here and is not yet rendered; the destinations a task
-	// references are tracked with the rest of the destination work.
+	// listOfDIDs is mandatory inside taskDetails, and omitting it made every answer
+	// that reports a task invalid. The DIDs are the ones the task carries, not the
+	// endpoints they resolved to: an ADMF comparing this against what it sent is
+	// comparing identifiers, and the addresses behind them are reported separately by
+	// the destination answers.
+	//
+	// The element is emitted even when the task named nothing, because the schema
+	// permits an empty ListOfDids and a task that named no destination is a real state
+	// this element holds — the one the configured default endpoint serves.
+	b.WriteString(open(ind+4, "listOfDIDs"))
+	for _, did := range t.DIDs {
+		b.WriteString(el(ind+6, "dId", escapeXML(did)))
+	}
+	b.WriteString(close(ind+4, "listOfDIDs"))
 	b.WriteString(close(ind+2, "taskDetails"))
 
 	b.WriteString(taskStatus(ind+2, t))
@@ -227,9 +239,10 @@ func destinationResponseDetails(ind int, d ReportedDestination) string {
 
 	b.WriteString(open(ind+2, "destinationDetails"))
 	b.WriteString(el(ind+4, "dId", escapeXML(d.DID)))
-	b.WriteString(el(ind+4, "deliveryType", deliveryTypeName(d.Endpoint.Type)))
+	b.WriteString(el(ind+4, "friendlyName", escapeXML(destinationProvenance(d))))
+	b.WriteString(el(ind+4, "deliveryType", escapeXML(d.DeliveryType)))
 	b.WriteString(open(ind+4, "deliveryAddress"))
-	b.WriteString(deliveryAddress(ind+6, d.Endpoint))
+	b.WriteString(deliveryAddress(ind+6, d.Address))
 	b.WriteString(close(ind+4, "deliveryAddress"))
 	b.WriteString(close(ind+2, "destinationDetails"))
 
@@ -246,14 +259,42 @@ func destinationResponseDetails(ind int, d ReportedDestination) string {
 	return b.String()
 }
 
-// deliveryAddress renders a TS 103 280 IPAddressPort.
+// destinationProvenance is what this element says about where a destination came from,
+// carried in the destination's friendlyName.
+//
+// friendlyName is the only free-text field a reported destination has — "a human-readable
+// name associated with the delivery destination" — and this element has something to say
+// there that no other field can carry: that an entry resolves from configuration rather
+// than from CreateDestination, and, where both declare the same DID, that the provisioned
+// one has superseded the configured one. Precedence resolved silently is the risk the
+// three-source design carries; this is where it stops being silent.
+//
+// The ADMF's own name, where it gave one, leads — it is the field's actual purpose, and
+// this element only appends to it.
+func destinationProvenance(d ReportedDestination) string {
+	var note string
+	switch {
+	case d.Configured:
+		note = "declared in this element's configuration, not provisioned over X1"
+	case d.ShadowsConfigured:
+		note = "provisioned over X1, superseding a configured entry for this DID"
+	default:
+		note = "provisioned over X1"
+	}
+	if d.FriendlyName == "" {
+		return note
+	}
+
+	return d.FriendlyName + " (" + note + ")"
+}
+
+// deliveryAddress renders a TS 103 280 IPAddressPort from a "host:port".
 //
 // Both `address` and `port` are element-only choices, not text: `port` takes a `TCPPort` or
-// a `UDPPort` child. Rendering the number as the element's text — which the destination
-// *request* path still does — produces XML no peer can validate, and means a conformant
-// peer's port parses as zero.
-func deliveryAddress(ind int, e types.DeliveryEndpoint) string {
-	host, port, err := net.SplitHostPort(e.Address)
+// a `UDPPort` child. Rendering the number as the element's text produces XML no peer can
+// validate, and means a conformant peer's port parses as zero.
+func deliveryAddress(ind int, address string) string {
+	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		// Not host:port. Rendering half an address would assert something false about
 		// where product goes, so nothing is rendered and the response fails validation
@@ -364,16 +405,6 @@ func deliveryTypeOf(p []types.ProductType) string {
 	}
 }
 
-// deliveryTypeName names the DeliveryType enumeration value for a destination's own type.
-// A destination serves one interface, so it is never the combined value.
-func deliveryTypeName(t types.DeliveryType) string {
-	if t == types.DeliveryX3 {
-		return deliveryX3Only
-	}
-
-	return deliveryX2Only
-}
-
 // ── XML emission helpers ────────────────────────────────────────────
 // Small and explicit, because the alternative was a template in which the difference between
 // a valid and an invalid response was invisible.
@@ -399,21 +430,51 @@ func elNS(ind int, ns, name, value string) string {
 	return fmt.Sprintf("%s<%s:%s>%s</%s:%s>\n", indent(ind), ns, name, value, ns, name)
 }
 
-// heldDestinations lists the destinations this element holds, ordered by DID so that two
+// heldDestinations lists every destination this element can resolve a DID to — those an
+// ADMF provisioned and those its configuration declares — ordered by DID so that two
 // answers to the same question agree. A map's order does not.
+//
+// Configured entries are reported because they are destinations from the ADMF's point of
+// view: a task naming one is delivered to it exactly as if it had been provisioned, so
+// an answer that omitted them would tell an auditing ADMF that a DID it referenced is
+// unknown here when product is reaching it. Each is marked, so the answer stays literal
+// about what was provisioned as well as complete about what resolves.
 func (s *Server) heldDestinations() []ReportedDestination {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	out := make([]ReportedDestination, 0, len(s.destinations))
-	for did, endpoint := range s.destinations {
-		out = append(out, ReportedDestination{DID: did, Endpoint: endpoint})
+	out := make([]ReportedDestination, 0, len(s.destinations)+len(s.configured))
+	for did, dest := range s.destinations {
+		out = append(out, s.reportedLocked(did, dest))
+	}
+	for did, dest := range s.configured {
+		// One entry per DID, not two: what is reported is what is in force. The
+		// provisioned entry carries the fact that it superseded this one.
+		if _, shadowed := s.destinations[did]; shadowed {
+			continue
+		}
+		out = append(out, s.reportedLocked(did, dest))
 	}
 	slices.SortFunc(out, func(a, b ReportedDestination) int {
 		return strings.Compare(a.DID, b.DID)
 	})
 
 	return out
+}
+
+// reportedLocked turns a held destination into the form the answers render. Caller holds
+// s.mu.
+func (s *Server) reportedLocked(did string, d heldDestination) ReportedDestination {
+	_, alsoConfigured := s.configured[did]
+
+	return ReportedDestination{
+		DID:               did,
+		DeliveryType:      d.DeliveryType,
+		Address:           d.Address,
+		FriendlyName:      d.FriendlyName,
+		Configured:        d.Configured,
+		ShadowsConfigured: !d.Configured && alsoConfigured,
+	}
 }
 
 // unresolvedFaults returns the fault conditions that hold at this moment.
@@ -453,15 +514,17 @@ func (s *Server) unresolvedFaults() []X1Error {
 	return faults
 }
 
-// destinationByDID returns one held destination.
+// destinationByDID returns the one destination a DID resolves to, provisioned or
+// configured. It answers the same question heldDestinations does, for one identifier, so
+// the two cannot disagree about whether this element can deliver to a DID.
 func (s *Server) destinationByDID(did string) (ReportedDestination, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	endpoint, ok := s.destinations[did]
+	dest, ok := s.resolveLocked(did)
 	if !ok {
 		return ReportedDestination{}, false
 	}
 
-	return ReportedDestination{DID: did, Endpoint: endpoint}, true
+	return s.reportedLocked(did, dest), true
 }

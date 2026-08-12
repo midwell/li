@@ -103,40 +103,23 @@ func checkVendoredSchemas(t *testing.T) {
 // Every entry names the change that owns the repair. Emptying this map is the definition
 // of X1 being schema-conformant, and its length is the honest measure of how far off that
 // is.
-var knownSchemaDefects = map[string][]string{
-	// add-li-x1-provisioning-conformance group 2a. Both remaining violations are the same
-	// defect — a reported taskDetails omits its mandatory listOfDIDs — seen in the two
-	// answers that report a task. It became visible on GetAllDetails only once that
-	// response was nested correctly; before, the wrapper was missing and masked it.
-	"GetTaskDetailsResponse": {
-		"}taskDetails': Missing child element(s)",
-	},
-	"GetAllDetailsResponse, with a task held": {
-		"}taskDetails': Missing child element(s)",
-	},
-	"GetAllTaskDetailsResponse, with a task held": {
-		"}taskDetails': Missing child element(s)",
-	},
-	// The destination port, rendered as element text where the schema defines a
-	// TCPPort/UDPPort choice. Two-way: a conformant peer's port also parses as zero.
-	"CreateDestination": {
-		"}port': Character content other than whitespace is not allowed",
-		"}port': Missing child element(s)",
-	},
-	// add-li-x1-provisioning-conformance 2a.4. Every response echoes the request's version
-	// and x1TransactionId, and the schema restricts both — a pattern and a UUID. So a peer
-	// can choose header values that make *our* answer invalid, and the answer it can do that
-	// to most easily is the one refusing it, where nothing about the request has been
-	// trusted yet.
-	//
-	// The consequence is the one this project's own requirement calls out: a refusal a
-	// conformant ADMF discards is a refusal that was never sent, and this is the refusal
-	// that says somebody is trying to task the element as someone they are not.
-	"ErrorResponse (peer authentication failed, malformed headers)": {
-		"}version': [facet 'pattern']",
-		"}x1TransactionId': [facet 'pattern']",
-	},
-}
+//
+// It is currently **empty**, which is the whole point of having kept it: every entry it
+// held was removed by the change that fixed the defect, because leaving one behind fails
+// the test. What it held, and what closed each of them in
+// add-li-x1-provisioning-conformance:
+//
+//   - a reported taskDetails omitting its mandatory listOfDIDs, on all three answers
+//     that report a task (group 2a.2);
+//   - the destination port rendered as element text where the schema defines a
+//     TCPPort/UDPPort choice — two-way, so a conformant peer's port also parsed as zero
+//     (2a.1);
+//   - a refusal echoing a peer's malformed version and x1TransactionId, which let an
+//     unauthenticated peer make its own rejection unreportable (2a.4).
+//
+// An empty map is not a reason to delete this: a violation that is not listed here fails
+// the test, which is what stops the next one arriving unnoticed.
+var knownSchemaDefects = map[string][]string{}
 
 // classify sorts the validator's complaints into those already known for this case and
 // those that are new.
@@ -265,9 +248,34 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			Products: []types.ProductType{types.ProductIRI},
 		})
 	}
+	// A task that names destinations, so the reported listOfDIDs is not empty in every
+	// case: an element that rendered the element but never its contents would otherwise
+	// validate throughout.
+	heldWithDIDs := func(st *store.Store, srv *Server) {
+		held(st, srv)
+		task, _ := st.Get(testXID)
+		task.DIDs = []string{testDID}
+		st.Activate(task)
+	}
 	withDestination := func(_ *store.Store, srv *Server) {
-		srv.destinations[testDID] = types.DeliveryEndpoint{
-			Type: types.DeliveryX2, Address: "10.0.60.122:42069",
+		srv.destinations[testDID] = heldDestination{
+			DeliveryType: deliveryX2Only, Address: "10.0.60.122:42069",
+		}
+	}
+	// A destination the element's configuration declares, and one serving both
+	// interfaces. Both are new rendering paths — the first carries provenance in its
+	// friendlyName, the second reports the combined deliveryType — and the schema has an
+	// opinion about each.
+	withConfiguredDestination := func(_ *store.Store, srv *Server) {
+		srv.configured["e0000000-0000-4000-8000-00000000000e"] = heldDestination{
+			Address: "10.0.60.200:42069", DeliveryType: deliveryX2Only, Configured: true,
+		}
+	}
+	withShadowedDestination := func(st *store.Store, srv *Server) {
+		withConfiguredDestination(st, srv)
+		srv.destinations["e0000000-0000-4000-8000-00000000000e"] = heldDestination{
+			Address: "10.0.60.122:42069", DeliveryType: deliveryX2andX3,
+			FriendlyName: "agency A",
 		}
 	}
 	allowRemoveAll := func(_ *store.Store, srv *Server) { srv.removeAllDestinationsEnabled = true }
@@ -318,6 +326,13 @@ func TestRenderedResponsesValidate(t *testing.T) {
       </ns1:deliveryAddress>
     </ns1:destinationDetails>`)},
 		// The refusal path: every error this element sends takes it.
+		//
+		// This case is older than the behaviour it describes. Deactivating an XID the element
+		// does not hold was acknowledged rather than refused, so for a long time the case named
+		// "ErrorResponse (no such task)" was validating a DeactivateTaskResponse — the name and
+		// the comment above recorded an intent the code did not have. TS 103 221-1
+		// table 6.2.3-2 settles it: "it is an error if the XID is not already present at the
+		// NE", and it now is.
 		{
 			name: "ErrorResponse (no such task)",
 			req:  request("DeactivateTaskRequest", "\n    <ns1:xId>cccccccc-cccc-4ccc-8ccc-cccccccccccc</ns1:xId>"),
@@ -350,10 +365,18 @@ func TestRenderedResponsesValidate(t *testing.T) {
 		// The interrogation set, each in both states: holding something, and holding
 		// nothing. The empty case is the one a restarted element is in, and the moment an
 		// ADMF most needs a usable answer rather than an error.
-		{name: "GetAllTaskDetailsResponse, with a task held", setup: held, req: request("GetAllTaskDetailsRequest", "")},
+		{name: "GetAllTaskDetailsResponse, with a task held", setup: heldWithDIDs, req: request("GetAllTaskDetailsRequest", "")},
 		{name: "GetAllTaskDetailsResponse, holding nothing", req: request("GetAllTaskDetailsRequest", "")},
 		{name: "GetAllDestinationDetailsResponse, with a destination", setup: withDestination, req: request("GetAllDestinationDetailsRequest", "")},
 		{name: "GetAllDestinationDetailsResponse, holding nothing", req: request("GetAllDestinationDetailsRequest", "")},
+		{
+			name:  "GetAllDestinationDetailsResponse, a destination declared in configuration",
+			setup: withConfiguredDestination, req: request("GetAllDestinationDetailsRequest", ""),
+		},
+		{
+			name:  "GetAllDestinationDetailsResponse, a provisioned entry superseding a configured one",
+			setup: withShadowedDestination, req: request("GetAllDestinationDetailsRequest", ""),
+		},
 		{name: "ListAllDetailsResponse, with a task and a destination", setup: bothHeld, req: request("ListAllDetailsRequest", "")},
 		{name: "ListAllDetailsResponse, holding nothing", req: request("ListAllDetailsRequest", "")},
 		{name: "GetNEStatusResponse, healthy", req: request("GetNEStatusRequest", "")},
@@ -454,10 +477,15 @@ func TestOriginatedRequestsValidate(t *testing.T) {
 	requireXmllint(t)
 	checkVendoredSchemas(t)
 
+	// One element across the whole exchange, not one per request. The sequence below is a
+	// sequence — provision a destination, task against it, then withdraw *that* task — and a
+	// fresh store per request made the last step a deactivation of something that had never
+	// existed. It passed anyway while an unheld deactivation was acknowledged; once that
+	// became the 2020 the specification requires, the test said so.
+	srv := NewServer(store.New(), "upf-1", WithADMF("smf-1"))
+	srv.now = func() time.Time { return zeroTailInstant }
+
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		st := store.New()
-		srv := NewServer(st, "upf-1", WithADMF("smf-1"))
-		srv.now = func() time.Time { return zeroTailInstant }
 		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 		resp, err := srv.Process(body, certWithUID(t, "smf-1"))
 		if err != nil {

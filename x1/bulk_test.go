@@ -141,8 +141,8 @@ func TestRemoveAllDestinationsRefusesWhileReferenced(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "neID", WithRemoveAllDestinations())
 	srv.now = func() time.Time { return zeroTailInstant }
-	srv.destinations[testDID] = types.DeliveryEndpoint{
-		Type: types.DeliveryX2, Address: "10.0.60.122:42069",
+	srv.destinations[testDID] = heldDestination{
+		DeliveryType: deliveryX2Only, Address: "10.0.60.122:42069",
 	}
 
 	// A task naming that destination.

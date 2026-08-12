@@ -178,7 +178,9 @@ func TestCreateDestinationWireForm(t *testing.T) {
 			`<ns1:deliveryType>X3Only</ns1:deliveryType>`,
 			`<ns1:ipAddressAndPort>`,
 			`<c:IPv4Address>192.0.2.1</c:IPv4Address>`,
-			`<c:port>42069</c:port>`,
+			// The schema's Port is a CHOICE of child elements, not a number in the
+			// element's text. X2/X3 are carried over TCP, so the arm is TCPPort.
+			`<c:TCPPort>42069</c:TCPPort>`,
 		} {
 			if !strings.Contains(*body, want) {
 				t.Errorf("request body missing %s\ngot:\n%s", want, *body)

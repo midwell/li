@@ -55,6 +55,43 @@ type DestinationDetails struct {
 	FriendlyName string          `xml:"friendlyName,omitempty"`
 	DeliveryType string          `xml:"deliveryType"`
 	Address      DeliveryAddress `xml:"deliveryAddress"`
+	// Extensions is the destination's own extension placeholder. Bound for the same
+	// reason ListOfServiceTypes is: an extension exists to change the meaning of the
+	// message carrying it, and encoding/xml discards what a struct does not declare.
+	Extensions []MessageExtension `xml:"destinationDetailsExtensions,omitempty"`
+}
+
+// MessageExtension is the TS 103 221-1 Extension placeholder as it appears on a task
+// or a destination: an Owner naming the specification that defines the content, then
+// that content as elements from another namespace.
+//
+// Content is captured rather than modelled. Nothing here acts on an extension; the
+// point of binding it is to be able to *refuse* one, and a refusal needs the owner and
+// the names of what was sent, not their meaning.
+type MessageExtension struct {
+	Owner string `xml:"Owner"`
+	// IdentifierAssociation is the one task extension this element acts on. TS 33.128
+	// table 6.2.2.1-1 makes it conditional on the AMF IRI-POI's ActivateTask and gives
+	// it real force: absent, the identifier-association records "shall not be
+	// generated". Refusing every extension would therefore refuse a conformant 3GPP
+	// ADMF, which is why the test is on the owner and content rather than on presence.
+	IdentifierAssociation *IdentifierAssociationExtension `xml:"urn:3GPP:ns:li:3GPPX1Extensions:r18:v6 IdentifierAssociationExtensions,omitempty"`
+	// Content is every other element the extension carries, kept for its name alone:
+	// nothing acts on it, and a refusal needs to say what was sent, not what it meant.
+	Content []ExtensionItem `xml:",any"`
+}
+
+// IdentifierAssociationExtension carries the record scoping of TS 33.128
+// clause 6.2.2.2.1. EventsGenerated is a closed enumeration — "IdentifierAssociation"
+// or "All" — and a value outside it is refused rather than defaulted: guessing would
+// either withhold records a warrant authorises or produce records it does not.
+type IdentifierAssociationExtension struct {
+	EventsGenerated string `xml:"urn:3GPP:ns:li:3GPPX1Extensions:r18:v6 IdentifierAssociationEventsGenerated"`
+}
+
+// ExtensionItem is one element inside an extension, kept for its name alone.
+type ExtensionItem struct {
+	XMLName xml.Name
 }
 
 // DeliveryAddress is a CHOICE of address forms. Only ipAddressAndPort is
@@ -69,7 +106,34 @@ type DeliveryAddress struct {
 // elementFormDefault="qualified", hence the qualified child names.
 type IPAddressPort struct {
 	Address IPAddress `xml:"http://uri.etsi.org/03280/common/2017/07 address"`
-	Port    uint16    `xml:"http://uri.etsi.org/03280/common/2017/07 port"`
+	Port    Port      `xml:"http://uri.etsi.org/03280/common/2017/07 port"`
+}
+
+// Port is the TS 103 280 Port CHOICE: a TCPPort or a UDPPort *child element*, never a
+// number in the element's own text.
+//
+// It was bound as a bare uint16 until a schema validator was pointed at this path, and
+// the mistake was two-way — we rendered a destination no peer could validate, and a
+// conformant peer's port parsed as zero, so the element would have stored a destination
+// pointing nowhere and delivered nothing to it. It went unnoticed because the only peer
+// this code has ever spoken to is another copy of itself, sending the same wrong shape.
+type Port struct {
+	TCPPort *uint16 `xml:"http://uri.etsi.org/03280/common/2017/07 TCPPort,omitempty"`
+	UDPPort *uint16 `xml:"http://uri.etsi.org/03280/common/2017/07 UDPPort,omitempty"`
+}
+
+// Value returns the port number whichever arm carries it, or 0 when neither does.
+// The transport is not distinguished: X2 and X3 are carried over TCP (TS 103 221-2),
+// so a UDPPort names the same endpoint this element would dial anyway.
+func (p Port) Value() uint16 {
+	switch {
+	case p.TCPPort != nil:
+		return *p.TCPPort
+	case p.UDPPort != nil:
+		return *p.UDPPort
+	default:
+		return 0
+	}
 }
 
 // IPAddress is a CHOICE of IPv4 and IPv6 literal.
@@ -89,14 +153,59 @@ type TaskDetails struct {
 	TargetIdentifiers []TargetIdentifier `xml:"targetIdentifiers>targetIdentifier"`
 	DeliveryType      string             `xml:"deliveryType"` // X2Only | X3Only | X2andX3
 	ListOfDIDs        []string           `xml:"listOfDIDs>dId"`
-	CorrelationID     string             `xml:"correlationID,omitempty"` // xs:nonNegativeInteger
-	ProductID         string             `xml:"productID,omitempty"`     // UUIDv4; overrides XID in X2/X3 headers
+	// DSIDs are destination *set* identifiers, the other arm of listOfDIDs. A set is a
+	// Generic Object (annex E: the ADMF creates a DestinationSetDetails object, then
+	// names its object id here), and this element implements no Generic Objects — so a
+	// dSId can never name anything it holds. Bound in order to refuse a task whose
+	// destinations are named only this way; see the refusal in taskFromDetails.
+	DSIDs         []string `xml:"listOfDIDs>dSId,omitempty"`
+	CorrelationID string   `xml:"correlationID,omitempty"` // xs:nonNegativeInteger
+	ProductID     string   `xml:"productID,omitempty"`     // UUIDv4; overrides XID in X2/X3 headers
 	// ListOfServiceTypes narrows a task to particular CSP service types. Bound so
 	// that it can be *refused*: encoding/xml drops elements a struct does not
 	// declare, so leaving it out meant an instruction to intercept less was
 	// silently discarded and everything delivered instead. Element names per
 	// TS_103_221_01.xsd (listOfServiceTypes containing serviceType).
 	ListOfServiceTypes []string `xml:"listOfServiceTypes>serviceType,omitempty"`
+	// ListOfMediationDetails is accepted and disregarded, which is what TS 103 221-1
+	// asks of a POI. The field is "for use by an NE that is performing mediation (i.e.
+	// a mediation and delivery function). This shall be included between the ADMF and
+	// the MDF." The AMF, SMF and UPF host POIs, not an MDF, so the details are not
+	// addressed to them — and refusing them would refuse a conformant task.
+	//
+	// Bound all the same, so the disregard is a decision recorded here rather than an
+	// element encoding/xml happened to drop.
+	ListOfMediationDetails []MediationDetails `xml:"listOfMediationDetails>mediationDetails,omitempty"`
+	// ImplicitDeactivationAllowed is likewise accepted and disregarded: "Indication
+	// that a Task may implicitly deactivate itself once the NE has determined that it
+	// has completed." This element never concludes that a task has completed, so it
+	// never self-deactivates and the permission is unused either way. An ADMF setting
+	// it will not receive the ReportTaskIssue the field implies — a missing feature,
+	// not a divergence in what is intercepted.
+	//
+	// A pointer so that "absent" and "present and false" stay distinguishable, which
+	// the drift audit needs even though the behaviour does not.
+	ImplicitDeactivationAllowed *bool `xml:"implicitDeactivationAllowed,omitempty"`
+	// TaskDetailsExtensions is refused unless recognised. An extension exists in order
+	// to change the meaning of the message that carries it — the LI_T3 detection
+	// criteria arrive through exactly such a placeholder — so ignoring an unknown one
+	// is the opposite of safe.
+	TaskDetailsExtensions []MessageExtension `xml:"taskDetailsExtensions,omitempty"`
+	// ListOfTrafficPolicyReferences is refused. It is an "Ordered list  of
+	// TrafficPolicyReferences to be applied to the LITaskObject", defined in
+	// TS 103 120 clause 8.2.13, which this project does not implement. A policy that
+	// is meant to shape what a task collects, silently unapplied, is the
+	// listOfServiceTypes defect a second time.
+	ListOfTrafficPolicyReferences []string `xml:"listOfTrafficPolicyReferences>trafficPolicyReference,omitempty"`
+}
+
+// MediationDetails is one entry of listOfMediationDetails. Only enough of its
+// xs:sequence is bound to show that the element was seen and disregarded on purpose:
+// nothing here reads these values, because the structure is addressed to a mediation
+// function and this element is not one.
+type MediationDetails struct {
+	LIID         string `xml:"LIID"`
+	DeliveryType string `xml:"deliveryType"`
 }
 
 // TargetIdentifier is a CHOICE of target-identifier kinds. Only the subset the
@@ -248,11 +357,24 @@ func (m X1ResponseMessage) ReportedTasks() []TaskResponseDetails {
 	return m.TaskResponses
 }
 
-// ReportedDestination is one destination as an element reports it: the identifier the ADMF
-// provisioned it under, and where it points.
+// ReportedDestination is one destination as an element reports it: the identifier it is
+// held under, where it points, and how this element came to know it.
 type ReportedDestination struct {
-	DID      string
-	Endpoint types.DeliveryEndpoint
+	DID string
+	// DeliveryType is the X1 value the destination was declared with — X2Only, X3Only
+	// or X2andX3. It is kept rather than derived from an endpoint type, because one
+	// destination serving both interfaces is one record and two endpoints.
+	DeliveryType string
+	Address      string // "host:port"
+	FriendlyName string // the ADMF's own name for it, where one was given
+	// Configured marks an entry this element's configuration declares rather than one
+	// provisioned with CreateDestination.
+	Configured bool
+	// ShadowsConfigured marks a provisioned entry that supersedes a configured one for
+	// the same DID. Provisioned wins, which is the right precedence and the wrong kind
+	// of silence: an operator whose configured entry is not the one in force has to be
+	// able to see that from what the element reports.
+	ShadowsConfigured bool
 }
 
 // TaskResponseDetails is one task as reported by an element (TS 103 221-1

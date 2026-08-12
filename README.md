@@ -105,7 +105,14 @@ more expensive than one read here.
 | | The whole interrogation set clause 6.4.1 makes mandatory: `GetTaskDetails`, `GetAllDetails`, `GetAllTaskDetails`, `GetDestinationDetails`, `GetAllDestinationDetails`, `GetNEStatus`, `ListAllDetails`, `GetAllGenericObjectDetails` | How an ADMF audits what an element actually holds — and how it reconciles after one restarts. Holding nothing is a successful empty answer, not an error. Every response is validated against the published XSD |
 | | `DeactivateAllTasks`, **enabled by default** | The specification's own default. One authenticated message stops every interception on the element — see *[Bulk deactivation is enabled by default](#bulk-deactivation-is-enabled-by-default)* |
 | | `RemoveAllDestinations`, **disabled by default** | Answered with the specification's error when disabled (8020); when enabled, refused while any destination is referenced by a task (8010) |
-| | `CreateDestination` | DID → endpoint; re-creating a DID is refused (clause 6.3.1.1) |
+| | `CreateDestination` | DID → endpoint; the `dId` is validated as the UUID the schema defines, and re-creating one is refused with 2030 (clause 6.3.1.1) |
+| | Identifiers validated where they enter | `dId`, `xId` and `productID` are all `etsi103280:UUID` in the schema; a value outside that format is refused with 1010 rather than stored and acted on |
+| | `DeactivateTask` refuses what it cannot honour | Table 6.2.3-2: "it is an error if the XID is not already present at the NE" — 2020, where an unheld deactivation used to be acknowledged. See *[A deactivation is not always a success](#a-deactivation-is-not-always-a-success)* |
+| **Delivery destinations** | **A task's product goes to the destinations the task named** | `listOfDIDs`, for X2 as for X3. TS 33.128 marks it mandatory in every ActivateTask table it defines — see *[Where a task's product goes](#where-a-tasks-product-goes)* for the three sources and their precedence |
+| | Destinations **provisioned over X1** with `CreateDestination` | Source 1, and the one that wins |
+| | Destinations **declared in configuration** as a DID→endpoint mapping | Source 2. For endpoints an operator and an ADMF agreed out of band; resolves exactly as a provisioned one does |
+| | A **configured default endpoint** (`mdf2`) | Source 3, for a task that names no destination this element can resolve |
+| | An `X2andX3` destination serves both interfaces | One destination, two endpoints |
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
 | | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
@@ -141,17 +148,150 @@ more expensive than one read here.
 
 | Area | Feature | Why, or status |
 |---|---|---|
-| **Delivery destinations** | **An ADMF cannot set an IRI-POI's X2 destination over X1** | The AMF and SMF deliver to the `mdf2` in their own configuration. `CreateDestination` is accepted and a task's `listOfDIDs` is parsed, but unknown DIDs are skipped and the IRI-POIs ignore them. Only the **CC-POI's X3** destination is provisioned over X1, and by the SMF as triggering function rather than by the ADMF |
+| **Delivery destinations** | Destination **sets** (`dSId`) | **Refused**. A set is a `DestinationSetDetails` Generic Object (annex E), and this element implements none — so a `dSId` can never name anything it holds, while carrying failover and duplication semantics an acknowledgement would silently promise. Tracked as `add-li-destination-sets` |
 | | `ModifyDestination`, `RemoveDestination` | Not implemented. Both are optional in TS 103 221-1, unlike the interrogation set above |
+| | Delivery to a URI, an E.164 number or an email address | **Refused** with 6020. `deliveryAddress` must be an IP address and port |
 | **Generic Objects** | The whole capability, so `CreateObject`, `ModifyObject`, `GetObject`, `DeleteObject`, `ListObjectsOfType`, `DeleteAllObjects` | **Refused**, not acknowledged. These are conditional — "`DeleteAllObjects` shall be supported *if* the implementation supports Generic Objects" — and an acknowledgement would tell an ADMF its object had been stored. The mandatory *query*, `GetAllGenericObjectDetails`, is answered with its object list **omitted**, which is how the standard says a Generic-Object-less element answers; an empty list would claim they are implemented and none is held |
 | **Targets** | The IPv6 form of one LI_T3 detection criterion, **UE IP Address** | *Refused*, not ignored — and an interception-scope question rather than an LI one: SD-Core has no IPv6 PDU sessions to intercept. See the breakdown below |
-| | Service-type scoping of a task (`listOfServiceTypes`) | Not applied, so a task carrying it is **refused** rather than acknowledged — accepting it would deliver every service for the target when a narrower set was authorised |
+| | Service-type scoping of a task (`listOfServiceTypes`) | Not applied, so a task carrying it is **refused** (3050) rather than acknowledged — accepting it would deliver every service for the target when a narrower set was authorised |
+| **Task fields** | Traffic policies (`listOfTrafficPolicyReferences`) | **Refused**. An instruction about the task, defined in TS 103 120, which this project does not implement. Tracked as `add-li-traffic-policies` |
+| | Any `taskDetailsExtensions` or `destinationDetailsExtensions` other than the one below | **Refused**. An extension exists in order to change the meaning of the message carrying it, so an unknown one cannot be ignored. This includes `TaskDetailsExtensions/HeaderReporting`, which TS 33.128 tables 6.2.3-0A and 6.2.3-9 mark C and M respectively — packet header information reporting is not implemented, so a task asking for it is refused rather than acknowledged and ignored |
+| | Mediation details (`listOfMediationDetails`) | **Accepted and disregarded**, deliberately — see *[Fields accepted and disregarded](#fields-accepted-and-disregarded)* |
+| | `implicitDeactivationAllowed` | **Accepted and disregarded**, likewise |
 | **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
 | **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook. What the ADMF is told, and what it asks next, is in *[What happens after a restart](#what-happens-after-a-restart-and-what-the-admf-does-about-it)* |
 | **Scope** | HI1/HI2/HI3 and delivery to the LEMF | The mediation function's role, not a POI's |
 | | 4G/LTE interception (MME, S-GW) | 5G only |
 | | IMS/voice and SMS content | |
 | | Location detail beyond the mandatory minimum | Records carry the minimal `Location` the schema requires; richer detail is deferred |
+
+#### Where a task's product goes
+
+A task names its delivery endpoints in `listOfDIDs`, and the product of that task goes to
+those endpoints. 3GPP TS 33.128 marks the field **M** in every ActivateTask table it
+defines — the phrase "configured using the CreateDestination message" occurs 48 times in
+v18.16.0, once per table that names delivery endpoints — so this is not optional for a 5G
+POI, and an element that substituted its own configuration would be diverging from the
+warrant.
+
+**Until this was fixed, the AMF and SMF IRI-POIs did exactly that.** A task's DIDs were
+parsed, resolved where known, and then ignored; every xIRI went to the `mdf2` address in
+the element's own configuration. With one agency configured that is invisible. With two
+warrants provisioned to two agencies' MDF2s, both agencies' product arrived at whichever
+address configuration happened to name — which is a disclosure to an agency holding no
+warrant for it. The CC-POI's X3 path was always correct; only the IRI path was not.
+
+An element resolves a DID from three sources, in this order:
+
+| | Source | When it applies |
+|---|---|---|
+| 1 | **Provisioned over X1** with `CreateDestination` | Always wins where it resolves. What TS 33.128 mandates |
+| 2 | **Declared in configuration**, as a DID→endpoint mapping | For destinations agreed out of band. Resolves exactly as a provisioned one does, and the task is *not* refused for naming an unprovisioned DID |
+| 3 | **The configured default endpoint** (`mdf2`) | Only for a task that names no destination this element can resolve for that product type |
+
+Configuration is a supported way of supplying a destination, not a degraded one. Nothing
+in either specification requires that a DID arrived over X1 rather than having been
+agreed; what TS 33.128 requires is that the task names its destinations and the element
+delivers to what it named. Source 3 exists because removing it would turn a conformance
+fix into an outage for every deployment whose ADMF names DIDs these elements were never
+given.
+
+What is deliberately **not** offered is a switch making configuration override the task's
+destinations. That would reinstate the gap as a supported option, and an operator who set
+it would be non-conformant with no signal that they were.
+
+Where sources 1 and 2 declare the same DID, the provisioned one is used — and the element
+says so. `GetDestinationDetails`, `GetAllDestinationDetails` and `GetAllDetails` report
+configured entries alongside provisioned ones, each marked in its `friendlyName`:
+
+```
+provisioned over X1
+declared in this element's configuration, not provisioned over X1
+provisioned over X1, superseding a configured entry for this DID
+```
+
+An ADMF's own `friendlyName`, where it gave one, leads and the note is appended in
+parentheses. It is the only free-text field a reported destination has, and precedence
+resolved invisibly is the one thing a three-source design must not do.
+
+**If your ADMF provisions destinations and your product moves**, that is this change:
+before it, everything arrived at `mdf2`. Configuring a DID→endpoint mapping (source 2)
+that matches what the ADMF believes it provisioned reproduces the old behaviour for a DID
+that never arrived over X1; nothing reproduces the old behaviour for a DID that did,
+because that was the defect.
+
+**The SMF and the UPF must be upgraded together.** The X1 destination address carries its
+port as the `TCPPort`/`UDPPort` child element the TS 103 280 schema defines, where it used
+to be a number in the element's text — a defect that went unnoticed because the only peer
+this code has ever spoken to is another copy of itself, sending the same wrong shape. The
+two forms do not interoperate in either direction: whichever side is older reads the port
+as `0` and refuses the destination. That fails **safe and loudly** — the CC Triggering
+Function's `CreateDestination` is refused, the trigger is never installed, and the LIPF
+receives a `ReportTaskIssue` with a terminating fault rather than an interception quietly
+producing nothing — but it does mean the SMF and UPF images are a matched pair for this
+release, with no rolling-upgrade path between them.
+
+#### A deactivation is not always a success
+
+`DeactivateTask` for an XID this element does not hold is refused with **2020**, and one
+carrying an `xId` that is not a UUID with **1010**. TS 103 221-1 table 6.2.3-2 requires the
+first outright — "it is an error if the XID is not already present at the NE" — the mirror
+of the `CreateDestination` rule answered with 2030.
+
+**This changes what a deployed element answers.** It used to acknowledge every deactivation
+unconditionally. An ADMF that re-sends a deactivation for tasking this element no longer
+holds — after a keepalive purge, or after a restart, since tasking is deliberately not
+persisted — now receives 2020 where it received an acknowledgement before.
+
+That is the point rather than a side effect. An acknowledgement told the ADMF a warrant had
+been withdrawn whether or not anything was withdrawn, so a mistyped XID left the
+interception running and reported success; interception outliving its authority is the one
+direction this plane must never fail in. 2020 is also the only way the ADMF can learn the
+element was not holding what it thought it was withdrawing, which is exactly what it needs
+to know after a restart.
+
+An ADMF that treats "already gone" as success can map 2020 onto that itself. It cannot
+recover the information the acknowledgement threw away.
+
+#### Fields accepted and disregarded
+
+Two `TaskDetails` fields are accepted and then ignored. That is a different claim from
+"we ignore this field", and the difference is why it is written down: the specification
+addresses each of them to something this element is not.
+
+**`listOfMediationDetails`** — TS 103 221-1 defines it as
+
+> Set of details for use by an NE that is performing mediation (i.e. a mediation and
+> delivery function). This shall be included between the ADMF and the MDF.
+
+The AMF, SMF and UPF host POIs, not an MDF, so the details are not addressed to them.
+Disregarding them is conformant; refusing them would refuse a legal task. If this project
+ever implements an MDF2, every field inside the structure — including the `StartTime` and
+`EndTime` of the authorisation — becomes mandatory work.
+
+**`implicitDeactivationAllowed`** —
+
+> Indication that a Task may implicitly deactivate itself once the NE has determined that
+> it has completed.
+
+These elements never conclude that a task has completed, so they never self-deactivate and
+the permission is unused either way. An ADMF that sets it will not receive the
+`ReportTaskIssue` the field implies: a missing feature, not a divergence in what is
+intercepted. It has nothing to do with the keepalive purge, which stops interception
+because contact with the authorising function was lost.
+
+**The one extension that is acted on** is `TaskDetailsExtensions/IdentifierAssociationExtensions`
+with owner `3GPP`, which TS 33.128 table 6.2.2.1-1 makes conditional on the AMF IRI-POI's
+task. It decides which records that task produces (clause 6.2.2.2.1):
+
+| `IdentifierAssociationEventsGenerated` | Records produced |
+|---|---|
+| *(extension absent)* | Everything **except** `AMFIdentifierAssociation` and `AMFIdentifierDeassociation`, which "shall not be generated" |
+| `IdentifierAssociation` | **Only** `AMFIdentifierAssociation`, `AMFIdentifierDeassociation` and `AMFLocationUpdate` |
+| `All` | Every AMF record type |
+
+Before this, the identifier-association pair was produced for every task, including ones
+that had not asked for it. An ADMF that wants those records must now ask.
 
 #### LI_T3 detection criteria
 
@@ -438,7 +578,8 @@ The blocks above are what LI reads on disk; deployment tooling sets them for you
 | AMF/SMF (`configuration.li`) | UPF (`li`) | Meaning | Required |
 |---|---|---|---|
 | `x1Listen` | — | X1 listener bind address (ADMF → NF) | AMF/SMF: yes |
-| `mdf2` | — | xIRI (X2) delivery destination, `host:port` | AMF/SMF: yes |
+| `mdf2` | — | xIRI (X2) delivery **default**, `host:port`. Used only for a task that names no destination this element can resolve — see *[Where a task's product goes](#where-a-tasks-product-goes)* | AMF/SMF: yes |
+| `destinations` | — | Pre-shared DID→endpoint mappings, a list of `{did, deliveryType, address}`. `did` must be a UUID, `deliveryType` one of `X2Only`/`X3Only`/`X2andX3`, `address` a `host:port`. An entry that is not all three is dropped rather than half-applied | AMF/SMF: optional |
 | `mdf3` | — | xCC (X3) delivery destination the SMF provisions at each UPF it triggers | SMF: with `upfTriggers` |
 | `upfTriggers` | — | Per-UPF triggering endpoints (`nodeId`, `x1Url`, `neId`) | SMF: for CC |
 | — | `x1_listen` | Bind address of the triggering interface (SMF → UPF) | UPF: yes |
@@ -583,3 +724,27 @@ task over its X1 client.
 - ETSI TS 103 221-2 — X2/X3 (xIRI/xCC delivery framing)
 - 3GPP TS 33.127 — LI architecture; 3GPP TS 33.128 — stage-3 procedures / xIRI records
 - ETSI TS 104 000 — X0 (credential pre-provisioning)
+
+The published X1 schemas are vendored under `x1/testdata/schemas/`, pinned by digest, with
+their source URLs and versions beside them. Every X1 message this element sends is
+validated against them in test, and `x1/testdata/schemas/SOURCES.md` records the exact
+statements the provisioning decisions rest on, so a reviewer can check one against the
+other without re-downloading anything.
+
+### One knowing departure, put here rather than left to be discovered
+
+TS 103 221-1 says of `CorrelationID`:
+
+> Intended for use in triggering scenarios, and **shall be ignored by non-mediation
+> function NEs**.
+
+The triggered CC-POI in the UPF is not a mediation function, and it does not ignore it: it
+stamps the value on every X3 PDU it delivers. That is deliberate. TS 33.128 table 6.2.3-6
+makes `CorrelationID` mandatory on the LI_T3 trigger and defines it as the value that lets
+an MDF join content to the signalling the IRI-POI reported for the same session, and where
+33.128 specialises 221-1 for 5G we have taken 33.128 to govern.
+
+It is recorded as a **question rather than a settled position**: two specifications, one
+`shall`, and a reading that could be wrong. If the right answer is that a POI must ignore
+the field and obtain correlation another way, we would rather hear it than keep a silent
+contradiction. See `x1/testdata/schemas/SOURCES.md` for both quotations in full.

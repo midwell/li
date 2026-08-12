@@ -182,6 +182,12 @@ var deactivateTemplate = template.Must(template.New("x1deact").Funcs(template.Fu
 // follows its xs:sequence (dId, friendlyName?, deliveryType, deliveryAddress),
 // and the address itself is a TS 103 280 IPAddressPort, whose namespace is
 // likewise elementFormDefault="qualified".
+//
+// `port` is a CHOICE of a TCPPort or a UDPPort *child element*, not a number in the
+// element's text. It was rendered as text until a validator was pointed at this path:
+// the request validated against nothing, because the only peer it has ever been sent to
+// is our own X1 server, which parsed the same wrong shape back. X2 and X3 are carried
+// over TCP (TS 103 221-2), so the arm is TCPPort.
 var destinationTemplate = template.Must(template.New("x1dest").Funcs(template.FuncMap{
 	"esc": escapeXML,
 }).Parse(`<?xml version="1.0" encoding="UTF-8"?>
@@ -203,7 +209,9 @@ var destinationTemplate = template.Must(template.New("x1dest").Funcs(template.Fu
           <c:address>
             <c:{{.AddressElement}}>{{esc .Address}}</c:{{.AddressElement}}>
           </c:address>
-          <c:port>{{.Port}}</c:port>
+          <c:port>
+            <c:TCPPort>{{.Port}}</c:TCPPort>
+          </c:port>
         </ns1:ipAddressAndPort>
       </ns1:deliveryAddress>
     </ns1:destinationDetails>

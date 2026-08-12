@@ -155,6 +155,13 @@ func TestKeepaliveResetsWatchdog(t *testing.T) {
 
 // activateXML is the ETSI TS 103 221-1 ActivateTaskRequest from the sipgate
 // simulator's sim-to-ne examples — an independent implementation's real output.
+//
+// Its dId is *not* theirs. The example says `pre-shared-did`, which is not the UUID the
+// schema types a DId as, so it is replaced here with one. An independent implementation's
+// example is authority for element names and structure — which is what it is used for —
+// and not a conformance oracle; keeping their literal value made this element's own test
+// material an unreliable guide to what a conformant ADMF sends, and it is what let a
+// malformed identifier through for months.
 const activateXML = `<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:ActivateTaskRequest">
@@ -172,7 +179,7 @@ const activateXML = `<?xml version="1.0" encoding="UTF-8"?>
       </ns1:targetIdentifiers>
       <ns1:deliveryType>X2andX3</ns1:deliveryType>
       <ns1:listOfDIDs>
-        <ns1:dId>pre-shared-did</ns1:dId>
+        <ns1:dId>7d1c2f60-8a4e-4a1e-9f3b-2c5d6e7f8091</ns1:dId>
       </ns1:listOfDIDs>
     </ns1:taskDetails>
   </ns1:x1RequestMessage>
@@ -647,5 +654,8 @@ func TestActivateWithServiceTypeScopingIsRefused(t *testing.T) {
 	// Refusals travel in the response, not as a Go error, so the ADMF sees a
 	// well-formed ErrorResponse it can act on. assertRejected also checks nothing
 	// was tasked: a refusal that half-applied would be worse than either outcome.
-	assertRejected(t, resp, st, errCodeUnsupportedRequest)
+	// 3050 is the registry's own "Unsupported ServiceType". It stood in as the generic
+	// 1080 until TS 103 221-1 table 6.7-3 was to hand, with a note in the code to
+	// substitute the specific value once confirmed rather than invent one.
+	assertRejected(t, resp, st, errCodeBadServiceType)
 }

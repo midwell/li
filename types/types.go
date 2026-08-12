@@ -191,6 +191,50 @@ type InterceptTask struct {
 	// means unset. Supplied by the Triggering Function, never derived locally —
 	// deriving it independently on each side is how the two streams drift apart.
 	CorrelationID uint64
+	// RecordScope selects which xIRI record types this task's IRI-POI produces. It
+	// comes from the 3GPP IdentifierAssociationExtensions the ADMF may put in the
+	// task's TaskDetailsExtensions; the zero value is the scope of a task carrying
+	// none. See RecordScope.
+	RecordScope RecordScope
+}
+
+// RecordScope is the per-task scoping TS 33.128 clause 6.2.2.2.1 puts on the AMF
+// IRI-POI's records: "The IRI-POI in the AMF shall only generate xIRI containing
+// AMFIdentifierAssociation and AMFIdentifierDeassociation records when the
+// IdentifierAssocationExtensions parameter has been received over LI_X1".
+//
+// It is a property of the task rather than of the element, because two warrants on one
+// AMF may ask for different record sets.
+type RecordScope string
+
+const (
+	// RecordScopeStandard is the scope of a task carrying no such extension: every
+	// record type except the identifier-association pair, which per table 6.2.2.1-1
+	// "shall not be generated" unless the extension asks for it.
+	RecordScopeStandard RecordScope = ""
+	// RecordScopeIdentifierAssociation is EventsGenerated "IdentifierAssociation":
+	// "AMFIdentifierAssociation, AMFIdentifierDeassociation and AMFLocationUpdate
+	// records shall be generated. No other record types shall be generated for that
+	// target." It is the one scope that produces *less* than the default.
+	RecordScopeIdentifierAssociation RecordScope = "IdentifierAssociation"
+	// RecordScopeAll is EventsGenerated "All": "All AMF record types shall be
+	// generated."
+	RecordScopeAll RecordScope = "All"
+)
+
+// WantsIdentifierAssociation reports whether this task's IRI-POI is to produce
+// AMFIdentifierAssociation and AMFIdentifierDeassociation records. Only a task that
+// asked for them by extension gets them.
+func (t InterceptTask) WantsIdentifierAssociation() bool {
+	return t.RecordScope != RecordScopeStandard
+}
+
+// WantsGeneralRecords reports whether this task's IRI-POI is to produce the record
+// types outside the identifier-association pair and AMFLocationUpdate — registration,
+// deregistration, unsuccessful procedures, start of interception. A task scoped to
+// IdentifierAssociation is the one case that wants none of them.
+func (t InterceptTask) WantsGeneralRecords() bool {
+	return t.RecordScope != RecordScopeIdentifierAssociation
 }
 
 // TargetsAny reports whether any of the task's identifiers is among ids — the
@@ -212,6 +256,29 @@ func (t InterceptTask) TargetsAny(ids []TargetIdentifier) bool {
 // WantsProduct reports whether the task requires the given product type.
 func (t InterceptTask) WantsProduct(p ProductType) bool {
 	return slices.Contains(t.Products, p)
+}
+
+// DeliveryAddresses returns the addresses this task's product of type dt goes to: the
+// destinations the task named and the element could resolve, in the order the task named
+// them.
+//
+// Duplicates are removed. Two DIDs may name one endpoint — an X2andX3 destination
+// referenced alongside an X2Only one at the same address, say — and an MDF receiving the
+// same record twice under one warrant has no way to tell a duplicate from a repeat.
+//
+// An empty result is a task this element cannot deliver for from its own tasking alone.
+// What a POI does then is the POI's decision: an IRI-POI may fall back to a configured
+// endpoint, while a triggered CC-POI refuses the task instead.
+func (t InterceptTask) DeliveryAddresses(dt DeliveryType) []string {
+	var out []string
+	for _, d := range t.Deliveries {
+		if d.Type != dt || d.Address == "" || slices.Contains(out, d.Address) {
+			continue
+		}
+		out = append(out, d.Address)
+	}
+
+	return out
 }
 
 // DeliveryXID returns the XID to put in the X2/X3 PDU header for this task: the

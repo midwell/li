@@ -86,7 +86,7 @@ func TestInterrogationAnswersDescribeTheSameState(t *testing.T) {
 		{"cccccccc-cccc-4ccc-8ccc-cccccccccccc", "10.0.60.123:42069"},
 	}
 	for _, d := range dests {
-		srv.destinations[d.did] = types.DeliveryEndpoint{Type: types.DeliveryX2, Address: d.addr}
+		srv.destinations[d.did] = heldDestination{DeliveryType: deliveryX2Only, Address: d.addr}
 	}
 
 	answer := func(msgType, extra string) string {

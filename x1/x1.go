@@ -7,9 +7,12 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -134,11 +137,51 @@ type Server struct {
 	// requireDIDs refuses a CC task whose destinations are unknown, rather than
 	// accepting it and delivering nothing.
 	requireDIDs bool
-	// destinations maps a provisioned DID to the endpoint it names
-	// (CreateDestination). A task carries DIDs rather than addresses, so this is
-	// how an NE learns where to deliver product — configuration is not a
-	// substitute, since one NE may serve several agencies' destinations.
-	destinations map[string]types.DeliveryEndpoint
+	// destinations maps a DID provisioned with CreateDestination to the destination it
+	// names. A task carries DIDs rather than addresses, so this is how an NE learns
+	// where to deliver product.
+	destinations map[string]heldDestination
+	// configured holds DID→destination entries this element's own configuration
+	// declares. They resolve exactly as provisioned ones do, and a provisioned entry
+	// for the same DID takes precedence — see resolveLocked. Neither specification
+	// requires that a task's destination identifier arrived over X1 rather than having
+	// been agreed out of band, so this is a supported arrangement and not a fallback.
+	configured map[string]heldDestination
+}
+
+// heldDestination is a delivery destination this element can resolve a DID to.
+//
+// The X1 delivery type is kept as the ADMF stated it rather than reduced to a single
+// product type. Reducing it is what stopped an "X2andX3" destination from ever yielding
+// an X2 endpoint: one destination serving both interfaces is one record here and two
+// endpoints at the point of delivery.
+type heldDestination struct {
+	Address      string // "host:port", the form the X2/X3 senders dial
+	DeliveryType string // X2Only | X3Only | X2andX3
+	FriendlyName string // the ADMF's own name for it, where one was given
+	// Configured marks an entry declared in this element's configuration rather than
+	// provisioned over X1.
+	Configured bool
+}
+
+// endpoints expands a destination into the delivery endpoints it serves.
+func (d heldDestination) endpoints() []types.DeliveryEndpoint {
+	switch d.DeliveryType {
+	case deliveryX2Only:
+		return []types.DeliveryEndpoint{{Type: types.DeliveryX2, Address: d.Address}}
+	case deliveryX3Only:
+		return []types.DeliveryEndpoint{{Type: types.DeliveryX3, Address: d.Address}}
+	case deliveryX2andX3:
+		return []types.DeliveryEndpoint{
+			{Type: types.DeliveryX2, Address: d.Address},
+			{Type: types.DeliveryX3, Address: d.Address},
+		}
+	default:
+		// Unreachable: a destination is only stored once deliveryProducts has accepted
+		// its type. Returning nothing rather than guessing keeps an unknown type from
+		// becoming a delivery to the wrong interface.
+		return nil
+	}
 }
 
 // Option customises a Server.
@@ -255,13 +298,78 @@ func WithADMF(admfID string) Option {
 	return func(s *Server) { s.admfID = admfID }
 }
 
+// ConfiguredDestination is a DID→endpoint mapping declared in a network function's own
+// configuration, for destinations an ADMF and an operator agreed out of band.
+//
+// DID must be the UUID the schema defines, DeliveryType one of X2Only, X3Only and
+// X2andX3, and Address a "host:port" — the same three things CreateDestination carries,
+// because the entry has to resolve identically to a provisioned one.
+type ConfiguredDestination struct {
+	DID          string
+	DeliveryType string
+	Address      string
+}
+
+// Valid reports whether this entry can be resolved, or why it cannot.
+//
+// Exported because a POI has somewhere to report a rejected entry and this package does
+// not: an unusable mapping means a task naming that DID silently resolves to the
+// configured default instead, which is the class of silence this whole change is about.
+// The option below drops such an entry; the network function that supplied it tells the
+// ADMF over X1.
+func (d ConfiguredDestination) Valid() error {
+	if err := validIdentifier("did", d.DID); err != nil {
+		return err
+	}
+	if _, err := deliveryProducts(d.DeliveryType); err != nil {
+		return err
+	}
+	if _, _, err := net.SplitHostPort(d.Address); err != nil {
+		return fmt.Errorf("address is not host:port")
+	}
+
+	return nil
+}
+
+// WithConfiguredDestinations declares destinations this element can resolve without
+// their having been provisioned over X1.
+//
+// TS 33.128 requires that a task *name* its delivery endpoints and that the element
+// deliver to what it named; neither it nor TS 103 221-1 requires that the element
+// learned the mapping over X1 rather than by agreement. So an ADMF referencing
+// pre-shared destinations is conformant, and refusing it would be wrong.
+//
+// A destination provisioned over X1 under the same DID takes precedence, and the
+// element says so in what it reports about its destinations — a configured entry
+// silently superseded is the one outcome this must not have.
+//
+// A malformed entry is dropped rather than stored: it is operator configuration, not a
+// peer's message, so there is nobody to refuse, and storing it would resolve a task's
+// destination to an address nothing can dial. Dropping it is not the same as ignoring it —
+// see ConfiguredDestination.Valid, which the caller uses to tell the ADMF.
+func WithConfiguredDestinations(dests ...ConfiguredDestination) Option {
+	return func(s *Server) {
+		for _, d := range dests {
+			if d.Valid() != nil {
+				continue
+			}
+			s.configured[d.DID] = heldDestination{
+				Address:      d.Address,
+				DeliveryType: d.DeliveryType,
+				Configured:   true,
+			}
+		}
+	}
+}
+
 // NewServer returns an X1 Server backed by s, identifying itself as neID.
 func NewServer(s *store.Store, neID string, opts ...Option) *Server {
 	srv := &Server{
 		store:        s,
 		neID:         neID,
 		now:          func() time.Time { return time.Now().UTC() },
-		destinations: make(map[string]types.DeliveryEndpoint),
+		destinations: make(map[string]heldDestination),
+		configured:   make(map[string]heldDestination),
 	}
 	for _, opt := range opts {
 		opt(srv)
@@ -353,8 +461,8 @@ func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) 
 			AdmfIdentifier:   m.AdmfIdentifier,
 			NeIdentifier:     s.neID,
 			MessageTimestamp: x1Timestamp(s.now()),
-			Version:          m.Version,
-			X1TransactionID:  m.X1TransactionID,
+			Version:          echoVersion(m.Version),
+			X1TransactionID:  echoTransactionID(m.X1TransactionID),
 			ErrorInformation: &X1Error{ErrorCode: code, ErrorDescription: desc},
 			// The schema makes requestMessageType mandatory on an ErrorResponse. A refusal
 			// that does not validate is a refusal a peer discards, so the type travels even
@@ -462,12 +570,17 @@ func (s *Server) destinationsInUse() int {
 	return n
 }
 
-// removeAllDestinations empties the destination store. Only reachable when the operation is
-// enabled and nothing references a destination.
+// removeAllDestinations empties the provisioned destination store. Only reachable when
+// the operation is enabled and nothing references a destination.
+//
+// Configured entries are untouched. They are the operator's, not the ADMF's: the
+// specification's bulk removal is over "all Destinations on the NE" in the sense of
+// those an ADMF created, and an X1 message that could delete an element's own
+// configuration would be a different and much larger power.
 func (s *Server) removeAllDestinations() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.destinations = make(map[string]types.DeliveryEndpoint)
+	s.destinations = make(map[string]heldDestination)
 }
 
 func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
@@ -475,8 +588,8 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		AdmfIdentifier:   m.AdmfIdentifier,
 		NeIdentifier:     s.neID,
 		MessageTimestamp: x1Timestamp(s.now()),
-		Version:          m.Version,
-		X1TransactionID:  m.X1TransactionID,
+		Version:          echoVersion(m.Version),
+		X1TransactionID:  echoTransactionID(m.X1TransactionID),
 	}
 
 	var err error
@@ -500,24 +613,37 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		if isModify && m.TaskDetails != nil {
 			prevTask, hadPrev = s.store.Get(types.XID(m.TaskDetails.XID))
 		}
+		// Two questions answered before the switch, because each one picks a case, and
+		// answered here rather than inside taskFromDetails because the code for a task
+		// refusal differs between an activation and a modification.
+		//
+		// They are separate questions and stay separate: a value that violates the format
+		// its schema defines is malformed, which is a general message error, while a field
+		// this element cannot honour is a well-formed instruction it must refuse. The
+		// registry orders them the same way, and so does the switch.
+		var malformed, unhonourable error
+		if m.TaskDetails != nil {
+			malformed = malformedTaskIdentifiers(*m.TaskDetails)
+			unhonourable = unhonourableTaskFields(*m.TaskDetails)
+		}
 		switch {
 		case isModify && m.TaskDetails == nil:
 			err = fmt.Errorf("missing taskDetails")
-		case m.TaskDetails != nil && len(m.TaskDetails.ListOfServiceTypes) > 0:
-			// This element applies no service-type scoping, so honouring the task as
-			// sent would intercept every service for the target when a narrower set
-			// was authorised — more product than the warrant allows, and silently.
-			// TS 33.128 prescribes the remedy for exactly this: an IRI-POI receiving a
-			// ServiceType it does not support "shall reject the task with an
-			// appropriate error". Refusing lets the LIPF see the mismatch and narrow
-			// the warrant by other means; accepting hides it.
-			//
-			// The code is the "unsupported request" one rather than a guess at a more
-			// specific entry: the TS 103 221-1 error registry is in that document's
-			// text, not its schema, so a better-fitting value should be substituted
-			// once confirmed rather than invented here.
-			err = fmt.Errorf("service-type scoping is not supported")
-			code = errCodeUnsupportedRequest
+		case malformed != nil:
+			// Before the "no such task" check below, deliberately. A ModifyTask naming a
+			// malformed xId reached that check first and was refused with 2020, "XID does
+			// not exist on NE" — true, but an accident of ordering, and it points the ADMF
+			// at activating a task that would fail for the same reason. 1010 names the
+			// actual fault, and "implementers shall use the most specific error code
+			// available".
+			err = malformed
+			code = errorCode(err)
+		case unhonourable != nil:
+			err = unhonourable
+			code = errorCode(err)
+			if code == 0 {
+				code = taskFailureCode(isModify)
+			}
 		case isModify && !hadPrev:
 			// Applying this would silently create the task, leaving the ADMF believing
 			// it had adjusted an interception that never existed here — the same class
@@ -528,6 +654,10 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		default:
 			var task types.InterceptTask
 			task, err = s.activate(m)
+			// A refusal from the activate path may name its own code — a malformed
+			// identifier is a schema error, not a generic failure — so it travels
+			// rather than being flattened to 1000 below.
+			code = errorCode(err)
 			if err == nil {
 				retargeted := isModify && hadPrev && !slices.Equal(task.Targets, prevTask.Targets)
 				if s.onActivate != nil && (!isModify || retargeted) {
@@ -543,16 +673,9 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		}
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)
 	case "DeactivateTaskRequest":
-		if m.XID == "" {
-			err = fmt.Errorf("missing xId")
-		} else {
-			// Capture the task before removal so a POI can undo state it applied
-			// for the target (e.g. clear mid-session CC on the SMF).
-			task, existed := s.store.Get(types.XID(m.XID))
-			s.store.Deactivate(types.XID(m.XID))
-			if existed && s.onDeactivate != nil {
-				s.onDeactivate(task)
-			}
+		code, err = s.deactivate(m.XID)
+		if err != nil && code == 0 {
+			code = errorCode(err)
 		}
 		rm.Type = "DeactivateTaskResponse"
 	case "DeactivateAllTasksRequest":
@@ -661,7 +784,10 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		err = fmt.Errorf("this NE does not support Generic Objects")
 		code = errCodeUnsupportedRequest
 	case "CreateDestinationRequest":
-		err = s.createDestination(m.DestinationDetails)
+		code, err = s.createDestination(m.DestinationDetails)
+		if err != nil && code == 0 {
+			code = errorCode(err)
+		}
 		rm.Type = "CreateDestinationResponse"
 	case "KeepaliveRequest":
 		// Liveness from the ADMF (TS 103 221-1). Process already recorded the
@@ -687,68 +813,141 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	return rm
 }
 
+// deactivate removes one task, or reports why it cannot.
+//
+// TS 103 221-1 table 6.2.3-2 is explicit about the last case: "it is an error if the XID is
+// not already present at the NE" — the mirror of the CreateDestination rule this element
+// already answers with 2030, and the reason 2020 exists.
+//
+// It used to acknowledge unconditionally, which is the worst answer available. An ADMF
+// withdrawing a warrant with a mistyped XID was told the withdrawal had completed while the
+// interception went on running, and interception outliving its authority is the one
+// direction this plane must never fail in. A malformed identifier was accepted on the same
+// path for the same reason.
+//
+// The consequence of fixing it is worth stating, because it changes what a deployed element
+// answers: an ADMF that re-sends a deactivation for tasking this element no longer holds —
+// after a keepalive purge or a restart, say — now receives 2020 where it received an
+// acknowledgement before. That is the point. It is the only way the ADMF can learn the
+// element was not holding the warrant it thought it was withdrawing.
+func (s *Server) deactivate(xid string) (int, error) {
+	if xid == "" {
+		return 0, fmt.Errorf("missing xId")
+	}
+	if err := validIdentifier("xId", xid); err != nil {
+		return 0, err
+	}
+
+	// Read before removal so a POI can undo state it applied for the target (e.g. clear
+	// mid-session CC on the SMF), and so "was it held" is answered from the same read.
+	task, existed := s.store.Get(types.XID(xid))
+	if !existed {
+		return errCodeNoSuchTask, fmt.Errorf("no such task")
+	}
+	s.store.Deactivate(types.XID(xid))
+	if s.onDeactivate != nil {
+		s.onDeactivate(task)
+	}
+
+	return 0, nil
+}
+
 // createDestination records a delivery destination against its DID. Re-creating
-// an existing DID is an error per TS 103 221-1 clause 6.3.1.1, so a
-// misconfiguration cannot silently redirect an agency's product elsewhere.
-func (s *Server) createDestination(d *DestinationDetails) error {
+// an existing DID is an error per TS 103 221-1 clause 6.3.1.1 ("it is an error if the
+// DID is already present at the NE"), so a misconfiguration cannot silently redirect an
+// agency's product elsewhere.
+//
+// It returns the TS 103 221-1 error code alongside the reason, since the registry names
+// two of these refusals exactly and "implementers shall use the most specific error code
+// available". A zero code leaves the caller to pick the generic one.
+func (s *Server) createDestination(d *DestinationDetails) (int, error) {
 	if d == nil {
-		return fmt.Errorf("missing destinationDetails")
+		return 0, fmt.Errorf("missing destinationDetails")
 	}
 	if d.DID == "" {
-		return fmt.Errorf("missing dId")
+		return 0, fmt.Errorf("missing dId")
+	}
+	if err := validIdentifier("dId", d.DID); err != nil {
+		// The schema types a DId as a TS 103 280 UUID, so a value outside that format
+		// is a schema error rather than a destination-creation failure — 1010 names
+		// what is actually wrong where 6000 would name only where it happened.
+		//
+		// Refusing it matters beyond tidiness: an element that stores a malformed
+		// identifier interoperates with a provisioning function no conformant one would
+		// produce, and its own test material stops being a guide to what a real ADMF
+		// sends. Ours said `pre-shared-did` for months.
+		return 0, err
 	}
 	if _, err := deliveryProducts(d.DeliveryType); err != nil {
-		return err
+		return 0, err
 	}
-	endpoint, err := deliveryEndpoint(*d)
+	if err := unhonourableExtensions(d.Extensions, "destination"); err != nil {
+		// No destination extension is recognised, so every one reaches this. The rule
+		// is the task's: an extension exists to change the meaning of the message that
+		// carries it, and on a destination that means changing where product goes.
+		return 0, err
+	}
+	dest, err := destinationFrom(*d)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.destinations[d.DID]; exists {
-		return fmt.Errorf("destination already present")
+		// The wording is matched on by a peer that has to tell "already there" from
+		// "something went wrong" — as an ADMF re-provisioning after a restart does —
+		// so it stays as it is now that the code says the same thing.
+		return errCodeDIDExists, fmt.Errorf("destination already present")
 	}
-	s.destinations[d.DID] = endpoint
-	return nil
+	s.destinations[d.DID] = dest
+	return 0, nil
 }
 
-// deliveryEndpoint maps provisioned destination details onto the endpoint the
-// X2/X3 senders dial.
-func deliveryEndpoint(d DestinationDetails) (types.DeliveryEndpoint, error) {
+// destinationFrom maps provisioned destination details onto the destination this element
+// holds: where the X2/X3 senders dial, and what it may be dialled for.
+func destinationFrom(d DestinationDetails) (heldDestination, error) {
 	if d.Address.IPAddressAndPort == nil {
-		return types.DeliveryEndpoint{}, fmt.Errorf("unsupported deliveryAddress")
+		// A URI, E.164 number or email address. 6020 is the registry's own entry for
+		// it; the generic code said only that the destination could not be created.
+		return heldDestination{}, codedError{errCodeBadAddressType, fmt.Errorf("unsupported deliveryAddress")}
 	}
 	ap := d.Address.IPAddressAndPort
 	host := ap.Address.IPv4
 	if host == "" {
 		// An IPv6 literal needs brackets before it can be joined to a port.
 		if ap.Address.IPv6 == "" {
-			return types.DeliveryEndpoint{}, fmt.Errorf("deliveryAddress carries no IP address")
+			return heldDestination{}, fmt.Errorf("deliveryAddress carries no IP address")
 		}
 		host = "[" + ap.Address.IPv6 + "]"
 	}
-	if ap.Port == 0 {
-		return types.DeliveryEndpoint{}, fmt.Errorf("deliveryAddress carries no port")
+	port := ap.Port.Value()
+	if port == 0 {
+		return heldDestination{}, fmt.Errorf("deliveryAddress carries no port")
 	}
-	// X3Only destinations deliver content, X2Only signalling; X2andX3 is recorded
-	// as X3 here only when the task that references it wants CC, so keep the
-	// delivery type the provisioner stated.
-	dt := types.DeliveryX3
-	if d.DeliveryType == deliveryX2Only {
-		dt = types.DeliveryX2
-	}
-	return types.DeliveryEndpoint{
-		Type:    dt,
-		Address: host + ":" + strconv.FormatUint(uint64(ap.Port), 10),
+
+	return heldDestination{
+		Address:      host + ":" + strconv.FormatUint(uint64(port), 10),
+		DeliveryType: d.DeliveryType,
+		FriendlyName: d.FriendlyName,
 	}, nil
 }
 
+// resolveLocked returns the destination a DID names, preferring one provisioned over X1
+// to one declared in configuration. Caller holds s.mu.
+func (s *Server) resolveLocked(did string) (heldDestination, bool) {
+	if d, ok := s.destinations[did]; ok {
+		return d, true
+	}
+	d, ok := s.configured[did]
+
+	return d, ok
+}
+
 // resolveDIDs turns the DIDs a task references into delivery endpoints, skipping
-// any that were never provisioned.
+// any this element cannot resolve.
 //
-// Skipping rather than rejecting is deliberate. A task naming an unprovisioned DID
+// Skipping rather than rejecting is deliberate. A task naming an unresolvable DID
 // is arguably malformed, but an ADMF is entitled to task an IRI-POI whose MDF2
 // address comes from configuration — which is how this implementation has always
 // worked, and what the sipgate simulator does — so failing the task here would
@@ -757,6 +956,11 @@ func deliveryEndpoint(d DestinationDetails) (types.DeliveryEndpoint, error) {
 // instead: a POI that has no destination for the product it was asked to produce
 // must refuse to produce it, which is where an unresolvable destination becomes
 // visible (as a reported fault) rather than silent.
+//
+// What is *not* skipped is a DID that resolves. Delivering to this element's own
+// configured endpoint in preference to one the task named is the gap this change
+// closes: two warrants provisioned to two agencies both arrived at whichever address
+// configuration happened to name.
 func (s *Server) resolveDIDs(dids []string) []types.DeliveryEndpoint {
 	if len(dids) == 0 {
 		return nil
@@ -766,8 +970,8 @@ func (s *Server) resolveDIDs(dids []string) []types.DeliveryEndpoint {
 	defer s.mu.Unlock()
 	var out []types.DeliveryEndpoint
 	for _, did := range dids {
-		if endpoint, ok := s.destinations[did]; ok {
-			out = append(out, endpoint)
+		if dest, ok := s.resolveLocked(did); ok {
+			out = append(out, dest.endpoints()...)
 		}
 	}
 	return out
@@ -846,6 +1050,7 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 		ProductID:     types.XID(td.ProductID),
 		CorrelationID: correlation,
 		Deliveries:    deliveries,
+		RecordScope:   recordScope(td),
 	}, nil
 }
 
@@ -1079,6 +1284,276 @@ func mapUPFLIT3Identifier(id UPFLIT3Identifier) (types.TargetIdentifier, error) 
 	}
 
 	return types.TargetIdentifier{}, fmt.Errorf("unsupported detection criterion")
+}
+
+// malformedTaskIdentifiers returns a refusal when a task's own identifiers do not conform
+// to the format the schema defines for them, or nil when they do.
+//
+// The task's `xId` and the `productID` that replaces it in delivered PDU headers are both
+// `etsi103280:UUID`. A malformed one is not cosmetic: `types.XID.Bytes()` maps an
+// unparseable value to sixteen zero bytes, an MDF discards product it cannot attribute to
+// a warrant, and nothing reports either — so the interception runs and every record is
+// delivered under a label the mediation function throws away.
+//
+// An *absent* xId is left to taskFromDetails, which calls it missing. "Missing" and "not a
+// UUID" are different things to be told, and the mandatory-field check already said the
+// first one clearly.
+func malformedTaskIdentifiers(td TaskDetails) error {
+	if td.XID != "" {
+		if err := validIdentifier("xId", td.XID); err != nil {
+			return err
+		}
+	}
+	if td.ProductID != "" {
+		if err := validIdentifier("productID", td.ProductID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// unhonourableTaskFields returns a refusal for the first field of td this element can
+// neither act on nor safely disregard, or nil when there is none.
+//
+// The rule it applies, and the reason there is a rule rather than a list: a field the
+// element discards silently produces an interception that differs from the one
+// authorised, in a way nobody outside the element can discover. The provisioning
+// function is acknowledged and has no channel through which the divergence could be
+// reported. So the default is refusal, and a field is disregarded only where the
+// specification addresses it to a function this element is not, or where disregarding
+// it cannot change what is intercepted or where the product goes.
+//
+// What is deliberately *not* here: listOfMediationDetails and
+// implicitDeactivationAllowed, both of which pass. See their declarations for the
+// sentences that put them on the other side of the rule.
+func unhonourableTaskFields(td TaskDetails) error {
+	if len(td.ListOfServiceTypes) > 0 {
+		// This element applies no service-type scoping, so honouring the task as sent
+		// would intercept every service for the target when a narrower set was
+		// authorised — more product than the warrant allows, and silently. TS 33.128
+		// prescribes the remedy: an IRI-POI receiving a ServiceType it does not support
+		// "shall reject the task with an appropriate error".
+		//
+		// The code was the generic "unsupported request" while the TS 103 221-1 error
+		// registry — which is in that document's text, not its schema — had not been
+		// read, with a note to substitute a better value once confirmed rather than
+		// invent one. Table 6.7-3 has an entry for exactly this.
+		return refuse(errCodeBadServiceType, "service-type scoping is not supported")
+	}
+	if len(td.ListOfTrafficPolicyReferences) > 0 {
+		// "Ordered list  of TrafficPolicyReferences to be applied to the LITaskObject",
+		// defined in TS 103 120 clause 8.2.13. It is an instruction about the task, and
+		// this project implements no TS 103 120 traffic policies — so an accepted task
+		// would run without the policy that was meant to shape it.
+		return fmt.Errorf("listOfTrafficPolicyReferences is not supported")
+	}
+	if len(td.DSIDs) > 0 {
+		// A dSId names a destination *set*, which annex E defines as a Generic Object:
+		// the ADMF creates a DestinationSetDetails object and then references its
+		// object id here. This element implements no Generic Objects — it refuses the
+		// object CRUD outright — so a dSId can never name anything it holds.
+		//
+		// Refused whenever one is present, not only when the task names nothing else.
+		// A task naming a dId *and* a dSId has still expressed an intent this element
+		// would discard, and sets carry real semantics to discard: "Redundant" with a
+		// preference order and failover, or "Duplicate", where "the NE will send copies
+		// of intercepted traffic to all DIDs within the Destination Set".
+		return fmt.Errorf("destination sets (dSId) are not supported")
+	}
+	if err := unhonourableExtensions(td.TaskDetailsExtensions, "task"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// unhonourableExtensions applies the same rule to an extension placeholder, on a task or
+// on a destination.
+//
+// The instinct with an unknown extension is to ignore it. On this interface that is
+// backwards: an extension exists in order to change the meaning of the message carrying
+// it — the LI_T3 detection criteria arrive through exactly such a placeholder — so the
+// test is on the owner and the content, not on presence.
+func unhonourableExtensions(exts []MessageExtension, on string) error {
+	for _, ext := range exts {
+		if ext.Owner != ExtensionOwner3GPP {
+			return fmt.Errorf("%s extension owned by %q is not supported", on, ext.Owner)
+		}
+		if ext.IdentifierAssociation == nil || len(ext.Content) > 0 {
+			return fmt.Errorf("3GPP %s extension %s is not supported", on, extensionContentNames(ext))
+		}
+		// Only the AMF IRI-POI is given this extension, and only 33.128 table 6.2.2.1-1
+		// defines it, but it is accepted at every element this package serves: an SMF
+		// or UPF that refused it would refuse a task an ADMF may legitimately send to
+		// several elements at once, and an element that produces no
+		// identifier-association records loses nothing by being told which to produce.
+		switch ext.IdentifierAssociation.EventsGenerated {
+		case string(types.RecordScopeIdentifierAssociation), string(types.RecordScopeAll):
+		default:
+			// A closed enumeration. Defaulting would either withhold records the
+			// warrant authorises or produce records it does not, and the element could
+			// not tell which it had done.
+			return fmt.Errorf("IdentifierAssociationEventsGenerated %q is not one of the enumerated values",
+				ext.IdentifierAssociation.EventsGenerated)
+		}
+	}
+
+	return nil
+}
+
+// extensionContentNames lists the element names an extension carried, so a refusal says
+// what was sent. Empty content is named as such rather than as nothing, since an
+// extension with an Owner and no content is its own kind of malformed.
+func extensionContentNames(ext MessageExtension) string {
+	if ext.IdentifierAssociation != nil {
+		// A recognised element alongside unmodelled ones: name them all, since it is
+		// the combination that is not supported.
+		names := []string{"IdentifierAssociationExtensions"}
+		for _, item := range ext.Content {
+			names = append(names, item.XMLName.Local)
+		}
+
+		return strings.Join(names, ", ")
+	}
+	if len(ext.Content) == 0 {
+		return "(no content)"
+	}
+
+	names := make([]string, 0, len(ext.Content))
+	for _, item := range ext.Content {
+		names = append(names, item.XMLName.Local)
+	}
+
+	return strings.Join(names, ", ")
+}
+
+// recordScope reads the per-task record scoping out of a task's extensions. A task
+// carrying none is RecordScopeStandard, which is what TS 33.128 clause 6.2.2.2.1 means
+// by the identifier-association records not being generated.
+//
+// It runs after unhonourableTaskFields has passed, so an extension present here is one
+// with a 3GPP owner, recognised content and an enumerated value.
+func recordScope(td TaskDetails) types.RecordScope {
+	for _, ext := range td.TaskDetailsExtensions {
+		if ext.IdentifierAssociation != nil {
+			return types.RecordScope(ext.IdentifierAssociation.EventsGenerated)
+		}
+	}
+
+	return types.RecordScopeStandard
+}
+
+// taskFailureCode is the registry's "generic ActivateTask/ModifyTask failure", whose
+// suggested content is the reason the task cannot be applied. More specific than 1000,
+// which says only that something went wrong.
+func taskFailureCode(isModify bool) int {
+	if isModify {
+		return errCodeModifyFailed
+	}
+
+	return errCodeActivateFailed
+}
+
+// codedError pairs a refusal with the TS 103 221-1 error code that names it, so a code
+// chosen where the reason is known reaches the response instead of being flattened to
+// the generic one on the way out. Table 6.7-3 ends "Implementers shall use the most
+// specific error code available", and an ADMF acts on the code before it reads the text.
+type codedError struct {
+	code int
+	err  error
+}
+
+func (e codedError) Error() string { return e.err.Error() }
+
+// errorCode returns the TS 103 221-1 code an error carries, or 0 when it carries none.
+func errorCode(err error) int {
+	var c codedError
+	if errors.As(err, &c) {
+		return c.code
+	}
+
+	return 0
+}
+
+// refuse builds a refusal carrying a specific code.
+func refuse(code int, format string, args ...any) error {
+	return codedError{code: code, err: fmt.Errorf(format, args...)}
+}
+
+// supportedVersion is the X1 interface version this element speaks, and the value it
+// substitutes when a peer's is not one the schema admits.
+const supportedVersion = "v1.6.1"
+
+// versionPattern is the schema's Version restriction, `v1\.\d+\.\d+`.
+var versionPattern = regexp.MustCompile(`^v1\.\d+\.\d+$`)
+
+// echoVersion and echoTransactionID keep a peer from choosing header values that make
+// *our own* answer invalid.
+//
+// Every response echoes the request's version and x1TransactionId, and the schema
+// restricts both — a pattern and a UUID. So a malformed request produced a malformed
+// reply, and the reply easiest to spoil is the one whose request has been trusted by
+// nothing: the refusal telling a peer it may not task this element. A conformant ADMF
+// validating replies discards an invalid one, which would make the most
+// security-relevant message this interface sends unreportable, by sending a bad version
+// string.
+//
+// The two fields are not the same trade. Substituting the version costs nothing: it is
+// a statement about which interface *we* speak, and a peer that sent something outside
+// the pattern has told us nothing to preserve.
+func echoVersion(v string) string {
+	if versionPattern.MatchString(v) {
+		return v
+	}
+
+	return supportedVersion
+}
+
+// echoTransactionID substitutes a fresh UUID for a transaction identifier outside the
+// schema's format.
+//
+// This one does cost something — an ADMF matches a response to its request by this value
+// — so it is worth being explicit about who pays. Only a peer that sent a
+// non-conformant identifier is affected, and it has no conformant correlation to lose;
+// a conformant ADMF's value is echoed untouched. Set against that, echoing the malformed
+// value invalidates the whole response, which loses the correlation *and* everything
+// else the message says. A fresh value is chosen rather than a fixed one so that two
+// refusals to the same peer stay distinguishable.
+func echoTransactionID(id string) string {
+	if uuidPattern.MatchString(id) {
+		return id
+	}
+
+	return newUUID()
+}
+
+// uuidPattern is the TS 103 280 UUID: the format the schema restricts an XId, a DId and
+// an x1TransactionId to. Lowercase hexadecimal only, and — as published — it does not
+// pin the version or variant nibbles, so neither does this.
+var uuidPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+
+// validIdentifier reports whether an identifier conforms to the UUID format the schema
+// defines for it. field names the element, so an ADMF can tell which of a message's
+// identifiers it got wrong.
+//
+// Three of them are `etsi103280:UUID`: a destination's `dId`, a task's `xId`, and the
+// `productID` that replaces the XID in delivered PDU headers. Only the first was checked
+// at first, which left the sharpest case open: `types.XID.Bytes()` maps an unparseable
+// XID to sixteen zero bytes, an MDF discards product it cannot attribute to a warrant,
+// and nothing reports either — so a task with a malformed `xId` was accepted,
+// interception ran, and every record was delivered under a label the mediation function
+// throws away. Refusing at the door is the only place that failure is visible.
+func validIdentifier(field, value string) error {
+	if !uuidPattern.MatchString(value) {
+		// The value is the peer's, and this text travels back to it in the refusal, so
+		// it is not echoed: an LI provisioning channel is the last place to start
+		// reflecting attacker-chosen strings. The ADMF knows what it sent.
+		return refuse(errCodeSchemaError,
+			"%s is not a UUID as the schema requires", field)
+	}
+
+	return nil
 }
 
 func deliveryProducts(dt string) ([]types.ProductType, error) {

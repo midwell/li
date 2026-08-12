@@ -111,8 +111,12 @@ func (s *Store) Get(xid types.XID) (types.InterceptTask, bool) {
 }
 
 // cloneTask copies t's slice fields so a caller cannot mutate the store's backing
-// arrays (Targets/Products/Deliveries) outside the lock — a data race and cross-warrant
-// corruption. The value fields are already copied by the return-by-value.
+// arrays (Targets/Products/Deliveries/DIDs) outside the lock — a data race and
+// cross-warrant corruption. The value fields are already copied by the return-by-value.
+//
+// Every slice field, and DIDs was missed when it was added: no caller mutated it, so
+// nothing broke, but "copies t's slice fields" has to mean all of them or it means
+// nothing the next time one arrives.
 func cloneTask(t types.InterceptTask) types.InterceptTask {
 	if t.Products != nil {
 		t.Products = append([]types.ProductType(nil), t.Products...)
@@ -122,6 +126,9 @@ func cloneTask(t types.InterceptTask) types.InterceptTask {
 	}
 	if t.Targets != nil {
 		t.Targets = append([]types.TargetIdentifier(nil), t.Targets...)
+	}
+	if t.DIDs != nil {
+		t.DIDs = append([]string(nil), t.DIDs...)
 	}
 	return t
 }
