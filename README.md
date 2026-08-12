@@ -731,6 +731,43 @@ validated against them in test, and `x1/testdata/schemas/SOURCES.md` records the
 statements the provisioning decisions rest on, so a reviewer can check one against the
 other without re-downloading anything.
 
+### X1 timestamps are rendered to a fixed six digits, and that is not a formatting choice
+
+Every X1 message carries a `messageTimestamp` typed as TS 103 280's
+`QualifiedMicrosecondDateTime`, whose pattern demands **exactly** six fractional digits:
+
+```
+[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}(Z|[+-][0-9]{2}:[0-9]{2})
+```
+
+Not "up to six". So this package renders them through one helper with the layout
+`2006-01-02T15:04:05.000000Z07:00` — zeros, which pad and keep trailing zeros — rather than
+`time.RFC3339Nano`, whose nines emit whatever the clock offers and strip trailing zeros.
+
+Every one of these sites used `RFC3339Nano` until 2026-08-12: the responses this element
+answers with, the LI_T3 triggers a CC-TF sends, and the fault reports by which an element
+tells a provisioning function something is wrong. **Every X1 message they emitted on a Linux
+deployment was malformed**, and a validating peer is entitled to discard all of them.
+
+That is worth stating plainly because the fix reads as a style change and is not one. Linux
+gives Go nanosecond resolution, so `RFC3339Nano` rendered *nine* digits about 90% of the
+time, eight about 9%, seven about 0.9% — and six only when the nanosecond value happened to
+land on an exact microsecond, one time in a thousand. Measured against a deployment's own
+traffic: of 306 fault reports captured from pre-fix elements **none** validated, against 153
+captured from the same elements after, of which all did — alongside 160 responses, also all
+valid. On a microsecond-resolution clock — a developer workstation — the
+same code fails only the ~10% of instants whose value ends in a zero, which is why it
+survived review and manual testing for as long as it did.
+
+The failure was the worst available shape. It was silent, because nothing validated our own
+output until the X1 schemas were vendored. It hit the **fault reports**, so the messages
+that say something is wrong were themselves the ones thrown away. And it hit the
+**triggers**, so a strict UPF would refuse interception with nothing to point at.
+
+`x1/schema_validation_test.go` pins it with a clock whose fractional part ends in zeros, and
+asserts the boundary values directly, so a return to a stripping format fails every case
+rather than one run in ten.
+
 ### One knowing departure, put here rather than left to be discovered
 
 TS 103 221-1 says of `CorrelationID`:
