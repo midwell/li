@@ -103,7 +103,7 @@ func checkVendoredSchemas(t *testing.T) {
 // of X1 being schema-conformant, and its length is the honest measure of how far off that
 // is.
 var knownSchemaDefects = map[string][]string{
-	// add-x1-provisioning-conformance group 2a. Both remaining violations are the same
+	// add-li-x1-provisioning-conformance group 2a. Both remaining violations are the same
 	// defect — a reported taskDetails omits its mandatory listOfDIDs — seen in the two
 	// answers that report a task. It became visible on GetAllDetails only once that
 	// response was nested correctly; before, the wrapper was missing and masked it.
