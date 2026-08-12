@@ -296,7 +296,7 @@ func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
 	}{
 		AdmfID:     r.admfID,
 		NeID:       r.neID,
-		Timestamp:  r.now().Format(time.RFC3339Nano),
+		Timestamp:  x1Timestamp(r.now()),
 		TxID:       newUUID(),
 		XID:        xid,
 		ReportType: reportType,
@@ -343,7 +343,7 @@ func (r *Reporter) ReportNEIssue(issueType, description string) error {
 	}{
 		AdmfID:      r.admfID,
 		NeID:        r.neID,
-		Timestamp:   r.now().Format(time.RFC3339Nano),
+		Timestamp:   x1Timestamp(r.now()),
 		TxID:        newUUID(),
 		Kind:        encoding.kind,
 		IssueCode:   encoding.code,

@@ -107,7 +107,7 @@ func (r *Requester) header(msgType string) header {
 	return header{
 		OurID:     r.ourID,
 		NeID:      r.neID,
-		Timestamp: r.now().Format(time.RFC3339Nano),
+		Timestamp: x1Timestamp(r.now()),
 		TxID:      newUUID(),
 		Type:      msgType,
 	}

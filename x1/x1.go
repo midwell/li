@@ -95,6 +95,24 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
   </ns1:x1ResponseMessage>{{end}}
 </ns1:X1Response>`))
 
+// x1TimestampLayout renders the ETSI TS 103 280 QualifiedMicrosecondDateTime that every
+// X1 message carries. Its pattern demands *exactly* six fractional digits:
+//
+//	[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}(Z|[+-][0-9]{2}:[0-9]{2})
+//
+// The zeros in this layout are what keeps trailing zeros; Go's nines — as in
+// time.RFC3339Nano, which every one of these call sites used to use — strip them. That made
+// roughly one message in ten carry five digits or fewer and fail a peer's validation, in
+// every direction: responses, the triggers a CC-TF sends, and the fault reports by which
+// this element says something is wrong.
+//
+// The defect and the fix differ by one character, which is why there is one of these rather
+// than five, and why a test pins it with a clock whose fraction ends in zeros.
+const x1TimestampLayout = "2006-01-02T15:04:05.000000Z07:00"
+
+// x1Timestamp renders t for an X1 message.
+func x1Timestamp(t time.Time) string { return t.Format(x1TimestampLayout) }
+
 // marshalResponse renders an X1Response to its wire form.
 func marshalResponse(resp *X1Response) ([]byte, error) {
 	var b bytes.Buffer
@@ -306,7 +324,7 @@ func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) 
 			Type:             errorResponse,
 			AdmfIdentifier:   m.AdmfIdentifier,
 			NeIdentifier:     s.neID,
-			MessageTimestamp: s.now().Format(time.RFC3339Nano),
+			MessageTimestamp: x1Timestamp(s.now()),
 			Version:          m.Version,
 			X1TransactionID:  m.X1TransactionID,
 			ErrorInformation: &X1Error{ErrorCode: code, ErrorDescription: desc},
@@ -370,7 +388,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	rm := X1ResponseMessage{
 		AdmfIdentifier:   m.AdmfIdentifier,
 		NeIdentifier:     s.neID,
-		MessageTimestamp: s.now().Format(time.RFC3339Nano),
+		MessageTimestamp: x1Timestamp(s.now()),
 		Version:          m.Version,
 		X1TransactionID:  m.X1TransactionID,
 	}
