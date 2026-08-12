@@ -26,6 +26,12 @@ const (
 	errCodeDeactAllOff  = 5010 // DeactivateAllTasks not enabled
 	errCodeRemoveAllOff = 8020 // RemoveAllDestinations not enabled
 	errCodeDeactAllFail = 5000 // Generic DeactivateAllTasks failure
+	// 8010 is the specific refusal for the guard the specification puts on bulk removal,
+	// and it carries information a generic 1000 does not: the table's own suggested
+	// content is "details of which Destinations are in use, and (if possible) by which
+	// Tasks", so an ADMF reading it knows to deactivate tasking before retrying rather
+	// than to investigate a failure.
+	errCodeDestinationsInUse = 8010 // Destinations in use
 )
 
 // roleADMF is the role a peer tasking this network element presents in its

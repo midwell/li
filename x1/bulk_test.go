@@ -160,6 +160,12 @@ func TestRemoveAllDestinationsRefusesWhileReferenced(t *testing.T) {
 	if resp.Messages[0].ErrorInformation == nil {
 		t.Fatal("removal was permitted while a task still referenced a destination")
 	}
+	// 8010, "Destinations in use", not the generic 1000. The distinction is the same one the
+	// disabled-operation codes make: this refusal tells an ADMF to deactivate its tasking and
+	// retry, and a generic code tells it only that something went wrong.
+	if code := resp.Messages[0].ErrorInformation.ErrorCode; code != errCodeDestinationsInUse {
+		t.Errorf("code = %d, want %d", code, errCodeDestinationsInUse)
+	}
 	if _, held := srv.destinationByDID(testDID); !held {
 		t.Error("the destination was removed despite the refusal")
 	}
