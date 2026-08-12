@@ -256,6 +256,7 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			Type: types.DeliveryX2, Address: "10.0.60.122:42069",
 		}
 	}
+	allowRemoveAll := func(_ *store.Store, srv *Server) { srv.removeAllDestinationsEnabled = true }
 	withFaultProbe := func(_ *store.Store, srv *Server) {
 		srv.faultProbes = append(srv.faultProbes, func() *X1Error {
 			return &X1Error{ErrorCode: 1000, ErrorDescription: "the mediation function is unreachable"}
@@ -302,7 +303,16 @@ func TestRenderedResponsesValidate(t *testing.T) {
 			name: "ErrorResponse (no such task)",
 			req:  request("DeactivateTaskRequest", "\n    <ns1:xId>cccccccc-cccc-4ccc-8ccc-cccccccccccc</ns1:xId>"),
 		},
-		{name: "ErrorResponse (unsupported request)", req: request("RemoveAllDestinationsRequest", "")},
+		{name: "DeactivateAllTasksResponse", setup: held, req: request("DeactivateAllTasksRequest", "")},
+		{
+			// RemoveAllDestinations is refused by default, so this is also the ErrorResponse
+			// path for a bulk operation that is present but switched off — a different case
+			// from an unsupported request type.
+			name: "ErrorResponse (bulk operation not enabled)",
+			req:  request("RemoveAllDestinationsRequest", ""),
+		},
+		{name: "RemoveAllDestinationsResponse", setup: allowRemoveAll, req: request("RemoveAllDestinationsRequest", "")},
+		{name: "ErrorResponse (unsupported request)", req: request("CreateObjectRequest", "")},
 
 		// The interrogation set, each in both states: holding something, and holding
 		// nothing. The empty case is the one a restarted element is in, and the moment an

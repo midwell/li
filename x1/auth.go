@@ -18,6 +18,14 @@ const (
 	// 2020 per table 6.7-3. It is emphatically not 1020, which is "Unsupported
 	// version" — a wrong code is as unhelpful to an ADMF as an invented one.
 	errCodeNoSuchTask = 2020 // XID does not exist on NE
+	// Destination and bulk-operation codes, from the same table. A generic 1000 in place of
+	// one of these is not a small matter: an ADMF distinguishes "the DID I named is not
+	// there" from "something went wrong" by the code, and only the first tells it what to do.
+	errCodeDIDExists    = 2030 // DID already exists on the NE
+	errCodeNoSuchDID    = 2040 // DID does not exist on the NE
+	errCodeDeactAllOff  = 5010 // DeactivateAllTasks not enabled
+	errCodeRemoveAllOff = 8020 // RemoveAllDestinations not enabled
+	errCodeDeactAllFail = 5000 // Generic DeactivateAllTasks failure
 )
 
 // roleADMF is the role a peer tasking this network element presents in its

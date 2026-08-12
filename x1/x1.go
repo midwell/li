@@ -114,6 +114,20 @@ type Server struct {
 	// element is asked for its status, never cached, so no answer can go stale — which is the
 	// failure mode every retaining design shares. See WithFaultProbes.
 	faultProbes []FaultProbe
+	// deactivateAllDisabled and removeAllDestinationsEnabled carry the two bulk operations'
+	// *different* defaults, which is the specification's asymmetry rather than ours.
+	//
+	// DeactivateAllTasks is enabled unless disabled: "By default (if there has been no
+	// agreement in advance) then DeactivateAllTasks is enabled." It fails safe — interception
+	// stops, which is the direction this whole capability fails in anyway.
+	//
+	// RemoveAllDestinations is disabled unless enabled: the specification states no default
+	// beyond prior agreement, and it is not symmetric with the other. Removing every
+	// destination strands an element that still has to deliver, and the specification's own
+	// guard — refuse while any destination is referenced by a task — shows it was thought of
+	// as dangerous.
+	deactivateAllDisabled        bool
+	removeAllDestinationsEnabled bool
 
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
@@ -184,6 +198,26 @@ type FaultProbe func() *X1Error
 // questions, "what just went wrong" and "what is wrong now", and neither replaces the other.
 func WithFaultProbes(probes ...FaultProbe) Option {
 	return func(s *Server) { s.faultProbes = append(s.faultProbes, probes...) }
+}
+
+// WithoutDeactivateAllTasks refuses bulk deactivation, which TS 103 221-1 otherwise requires
+// an element to perform by default.
+//
+// Named for the non-default so that the default is visible by its absence: an element with no
+// option set will stop every interception on one authenticated message, because the
+// specification says it must.
+func WithoutDeactivateAllTasks() Option {
+	return func(s *Server) { s.deactivateAllDisabled = true }
+}
+
+// WithRemoveAllDestinations permits bulk destination removal, which is refused by default.
+//
+// The asymmetry with the option above is the specification's: bulk deactivation defaults to
+// enabled and this does not. Deactivating everything stops interception, which is the safe
+// direction; removing every destination leaves an element still tasked and with nowhere to
+// deliver.
+func WithRemoveAllDestinations() Option {
+	return func(s *Server) { s.removeAllDestinationsEnabled = true }
 }
 
 // RequireResolvableDIDs makes the server refuse a task that requests content
@@ -374,6 +408,20 @@ func (s *Server) purgeIfLapsed(timeout time.Duration) {
 	if idle <= timeout {
 		return
 	}
+	s.purgeAllTasking()
+}
+
+// purgeAllTasking removes every task and runs the per-task teardown over what was there.
+//
+// The order matters, and is why this is one function rather than two callers each doing it: the
+// store is cleared *first*, so a POI re-deriving against the task set during its own teardown
+// sees an empty one. Clearing the store alone is not a purge — a CC-POI's duplication would keep
+// running with its product going nowhere attributable — and running the hooks first would have
+// each of them re-derive against tasks still present.
+//
+// Both the keepalive fail-safe and DeactivateAllTasks arrive here, which is what stops a bulk
+// deactivation becoming a second, subtly different implementation of the same thing.
+func (s *Server) purgeAllTasking() {
 	tasks := s.store.Snapshot()
 	s.store.DeactivateAll()
 	if s.onDeactivate != nil {
@@ -381,6 +429,45 @@ func (s *Server) purgeIfLapsed(timeout time.Duration) {
 			s.onDeactivate(t)
 		}
 	}
+}
+
+// deactivateAll performs the bulk deactivation TS 103 221-1 requires every implementation to
+// support: "If enabled, the DeactivateAllTasks command shall perform a 'DeactivateTask' command
+// for all Tasks on the NE."
+func (s *Server) deactivateAll() { s.purgeAllTasking() }
+
+// destinationsInUse counts the destinations some task still references.
+//
+// The specification refuses a bulk removal while any is referenced, and the reason is worth
+// holding on to: a task whose destination has gone is a task producing product with nowhere to
+// send it — the failure RequireResolvableDIDs exists to prevent, reached by removing the
+// destination rather than by never providing it.
+func (s *Server) destinationsInUse() int {
+	referenced := make(map[string]struct{})
+	for _, t := range s.store.Snapshot() {
+		for _, did := range t.DIDs {
+			referenced[did] = struct{}{}
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int
+	for did := range s.destinations {
+		if _, ok := referenced[did]; ok {
+			n++
+		}
+	}
+
+	return n
+}
+
+// removeAllDestinations empties the destination store. Only reachable when the operation is
+// enabled and nothing references a destination.
+func (s *Server) removeAllDestinations() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.destinations = make(map[string]types.DeliveryEndpoint)
 }
 
 func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
@@ -468,6 +555,33 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			}
 		}
 		rm.Type = "DeactivateTaskResponse"
+	case "DeactivateAllTasksRequest":
+		if s.deactivateAllDisabled {
+			// The specification's own text, verbatim, because an ADMF may match on it.
+			err = fmt.Errorf("DeactivateAllTasks message is not enabled")
+			code = errCodeDeactAllOff
+		} else {
+			s.deactivateAll()
+		}
+		rm.Type = "DeactivateAllTasksResponse"
+	case "RemoveAllDestinationsRequest":
+		if !s.removeAllDestinationsEnabled {
+			// Verbatim again — and note the specification says "request" here where it says
+			// "message" above. That asymmetry is its own, and is preserved rather than
+			// tidied, because tidying it would break a peer matching the published string.
+			err = fmt.Errorf("RemoveAllDestinations request is not enabled")
+			code = errCodeRemoveAllOff
+		} else if n := s.destinationsInUse(); n > 0 {
+			// "Since a RemoveDestination request can only be issued against destinations that
+			// are not in use, an NE shall respond with an error if the ADMF sends a
+			// RemoveAllDestinations request while any of the Destinations are referenced by
+			// Tasks."
+			err = fmt.Errorf("%d destination(s) are referenced by tasks", n)
+			code = errCodeGeneric
+		} else {
+			s.removeAllDestinations()
+		}
+		rm.Type = "RemoveAllDestinationsResponse"
 	case "GetAllTaskDetailsRequest":
 		// One of the interrogation set TS 103 221-1 clause 6.4.1 requires every
 		// implementation to support. It projects the same task state GetAllDetails does,
@@ -497,6 +611,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			// A destination the element does not hold is an error, not an empty answer: an
 			// empty success would tell the ADMF the destination exists and is blank.
 			err = fmt.Errorf("no such destination")
+			code = errCodeNoSuchDID
 		}
 		rm.Type = "GetDestinationDetailsResponse"
 	case "GetTaskDetailsRequest", "GetAllDetailsRequest":
@@ -702,6 +817,7 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 	return types.InterceptTask{
 		XID:           types.XID(td.XID),
 		Targets:       targets,
+		DIDs:          td.ListOfDIDs,
 		Products:      products,
 		ProductID:     types.XID(td.ProductID),
 		CorrelationID: correlation,

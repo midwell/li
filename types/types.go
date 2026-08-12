@@ -168,7 +168,13 @@ type InterceptTask struct {
 	// A triggering function needing traffic that matches a *combination* of
 	// properties cannot express it here; it must send a single criterion that
 	// already carries the combination.
-	Targets    []TargetIdentifier
+	Targets []TargetIdentifier
+	// DIDs are the destination identifiers the task named, kept as given. They were
+	// previously resolved to endpoints and then discarded, which lost two things the
+	// interface needs: the identifiers a reported task has to carry back, and the ability to
+	// answer whether a destination is still referenced — the guard the specification puts on
+	// removing destinations in bulk.
+	DIDs       []string
 	Products   []ProductType      // IRI and/or CC
 	Deliveries []DeliveryEndpoint // X2 and/or X3 destinations
 	State      TaskState
