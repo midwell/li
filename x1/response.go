@@ -191,17 +191,22 @@ func taskResponseDetails(ind int, t types.InterceptTask) string {
 // What the schema asks for is `provisioningStatus`: whether the element has *provisioned*
 // the task, not whether it is switched on. A task this element holds has been applied, so it
 // is `complete`. The optional counters are omitted rather than guessed.
-func taskStatus(ind int, t types.InterceptTask) string {
-	status := "complete"
-	if t.State != types.TaskActive {
-		// Held but not applied. `failed` overstates it and `awaitingProvisioning` is the
-		// closer of the two remaining enumerated values.
-		status = "awaitingProvisioning"
-	}
-
+func taskStatus(ind int, _ types.InterceptTask) string {
+	// Always `complete`, and the alternatives are unreachable rather than unhandled.
+	//
+	// A task in the store has been applied: activation refuses anything this element cannot
+	// carry out *before* storing it, so `failed` cannot describe something held. And a
+	// deactivated task is gone rather than retained, which the specification requires
+	// outright — "to stop a Task 'temporarily', ADMFs shall deactivate the Task and then
+	// activate a new Task" — so there is no dormant task for `awaitingProvisioning` to
+	// describe either.
+	//
+	// An earlier version of this function branched on the task's state to pick
+	// `awaitingProvisioning`. That branch could never be taken, and encoded a retained-
+	// inactive state the specification says does not exist.
 	var b strings.Builder
 	b.WriteString(open(ind, "taskStatus"))
-	b.WriteString(el(ind+2, "provisioningStatus", status))
+	b.WriteString(el(ind+2, "provisioningStatus", "complete"))
 	b.WriteString(listOfFaults(ind+2, nil))
 	b.WriteString(close(ind, "taskStatus"))
 

@@ -60,7 +60,7 @@ var responseTemplate = template.Must(template.New("x1resp").Funcs(template.FuncM
     <ns1:messageTimestamp>{{esc .MessageTimestamp}}</ns1:messageTimestamp>
     <ns1:version>{{esc .Version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .X1TransactionID}}</ns1:x1TransactionId>
-{{responseBody .}}
+{{responseBody . -}}
   </ns1:x1ResponseMessage>{{end}}
 </ns1:X1Response>`))
 
