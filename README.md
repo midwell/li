@@ -121,8 +121,7 @@ more expensive than one read here.
 | | Several criteria on one task, matched as alternatives | Traffic matching any of them is intercepted, and ships **once** however many matched |
 | | Criteria replaced by `ModifyTask`, mid-interception | Table 6.2.3-8. The task is not torn down: superseded traffic stops, newly selected traffic starts, attribution is unchanged |
 | | A criterion this element cannot evaluate is refused **before** the task is acknowledged | Accepting one would leave the requesting function believing an interception is running that can never produce anything — undiscoverable from outside |
-| **IRI (X2)** | AMF: registration, deregistration, location update, identifier (de)association, unsuccessful procedure, start of interception with a registered UE | 11 record types in total |
-| | SMF: PDU session establishment, modification, release, start of interception with an established session | |
+| **IRI (X2)** | Every xIRI record TS 33.128 defines for the AMF and SMF is accounted for — produced, or out of scope with the reason | 16 of the 25 produced; see *Which xIRI records this produces* below. A count is not a coverage claim: "11 record types" was true of an implementation missing six mandated ones |
 | | TS 33.128 ASN.1 (BER) encoding | Verified against the published module, not against our own codec |
 | | Activation mid-session, on already-established sessions | |
 | | Delivery asynchronous, off the signalling path | A slow MDF cannot delay a target's signalling |
@@ -569,6 +568,60 @@ a timer nobody can justify, or none at all, which leaves an element faulty forev
 bad second — and either way the field stops being read. The full classification, every
 condition and which mechanism carries it, is in `x1/report.go` beside the constants, which is
 where somebody adding one will be looking.
+
+## Which xIRI records this produces
+
+Every record type TS 33.128 defines for an AMF or SMF IRI-POI is listed here — produced,
+or out of scope with the reason. The set is the `AMF*` and `SMF*` alternatives of
+`XIRIEvent` in `TS33128Payloads.asn`: **14 for the AMF, 11 for the SMF**. Sixteen are
+produced.
+
+This is a list rather than a count because a count reads as coverage. The previous
+"11 record types in total" was accurate and still misleading — it was true of an
+implementation that emitted none of the six records the specification mandates for
+procedures these functions perform.
+
+### AMF (11 of 14)
+
+| Record | Status |
+|---|---|
+| `AMFRegistration` | Produced |
+| `AMFDeregistration` | Produced |
+| `AMFLocationUpdate` | Produced — on a mobility registration update. Note the `Location` subtree is still the minimal `currentLocation` form; cell and TAI detail is deferred |
+| `AMFStartOfInterceptionWithRegisteredUE` | Produced |
+| `AMFUnsuccessfulProcedure` | Produced — on a registration reject |
+| `AMFIdentifierAssociation` | Produced |
+| `AMFIdentifierDeassociation` | Produced |
+| `AMFUEServiceAccept` | Produced. TS 33.128 also names a SERVICE ACCEPT answering a CONTROL PLANE SERVICE REQUEST; this AMF does not implement that message, so only the plain event occurs |
+| `AMFUEPolicyTransfer` | Produced — the policy container is copied, never parsed |
+| `AMFRANHandoverCommand` | Produced |
+| `AMFRANHandoverRequest` | Produced. Despite the name, clause 6.2.2.2.9.3 triggers it on the AMF *receiving* the HANDOVER REQUEST ACKNOWLEDGE |
+| `AMFRANTraceReport` | **Out of scope — the AMF is never a trace collection NE.** It does handle CELL TRAFFIC TRACE, one of the record's four trigger events, so this is not "trace is ignored". What cannot be populated is the mandatory `aMFTraceData`: the TS 32.423 XML an AMF sends to a trace collection entity when it *is* that entity. This AMF originates no trace session and delivers no trace data, so there is no value for the field, and a record with an empty one would encode cleanly and assert something false. In scope the day trace activation is wired up |
+| `AMFUEConfigurationUpdate` | **Out of scope — the specification contradicts itself.** `gUTI [2]` is typed `GUTI`, which in the module is the EPS shape (`mMEGroupID`, `mMECode`, `mTMSI`), while the field's own prose calls it the "Current 5G-GUTI". The two differ in member count and member type, so no record satisfies both readings. Checked upstream rather than assumed: unchanged in Forge `main` for r18, and still `gUTI [2] GUTI` in **r19 version7**, whose changelog runs to V19.7.0 with no entry touching `GUTI` or `FiveGGUTI` — while r19's own `AMFRegistration` continues to use `FiveGGUTI`. Populating the EPS shape would mean deriving an MME identity this AMF does not have; emitting a `FiveGGUTI` would fail conformance against the published module. Revisit if a later release changes the type |
+| `AMFPositioningInfoTransfer` | **Out of scope — this AMF has no LMF.** All four trigger events in clause 6.2.2.2.8 are exchanges with an LMF (`N1N2MessageTransfer` from it, `N2InfoNotify` and `N1MessageNotify` to it), under the overarching condition that a message is "exchanged between the LMF and NG-RAN via the AMF". This AMF decodes an uplink NRPPa PDU, stores the routing id and drops it — there is no LMF integration, so no exchange. The mandatory `lcsCorrelationId` confirms it independently: it is the TS 29.572 correlation id from those same LMF messages, not the NGAP routing id. In scope the day an LMF is deployed. `li/iri` defines the record already |
+
+### SMF (5 of 11)
+
+| Record | Status |
+|---|---|
+| `SMFPDUSessionEstablishment` | Produced |
+| `SMFPDUSessionModification` | Produced |
+| `SMFPDUSessionRelease` | Produced |
+| `SMFStartOfInterceptionWithEstablishedPDUSession` | Produced |
+| `SMFUnsuccessfulProcedure` | Produced — on all nineteen paths that refuse a procedure: sixteen establishment rejects and three release rejects. Modification reject, modification-command reject and 5GSM STATUS are the specification's other triggers and do not occur in this SMF |
+| `SMFMAPDUSessionEstablishment` | **Out of scope — no multi-access sessions.** The SMF implements no ATSSS, so the procedure cannot occur |
+| `SMFMAPDUSessionModification` | Out of scope, as above |
+| `SMFMAPDUSessionRelease` | Out of scope, as above |
+| `SMFStartOfInterceptionWithEstablishedMAPDUSession` | Out of scope, as above |
+| `SMFMAUnsuccessfulProcedure` | Out of scope, as above |
+| `SMFPDUtoMAPDUSessionModification` | Out of scope, as above |
+
+### Functions this project does not host
+
+TS 33.128 clause 7 defines IRI-POIs for the UDM, SMSF, MDF and others. No equivalent
+audit has been done for those, because SD-Core hosts none of them. Anyone adding one of
+those network functions should start by listing its clause-7 records the way this section
+lists the AMF's and SMF's — the omission above is deliberate, not surveyed and empty.
 
 ## Enabling LI
 
