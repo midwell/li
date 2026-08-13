@@ -594,8 +594,8 @@ procedures these functions perform.
 | `AMFIdentifierDeassociation` | Produced |
 | `AMFUEServiceAccept` | Produced. TS 33.128 also names a SERVICE ACCEPT answering a CONTROL PLANE SERVICE REQUEST; this AMF does not implement that message, so only the plain event occurs |
 | `AMFUEPolicyTransfer` | Produced — the policy container is copied, never parsed |
-| `AMFRANHandoverCommand` | Produced |
-| `AMFRANHandoverRequest` | Produced. Despite the name, clause 6.2.2.2.9.3 triggers it on the AMF *receiving* the HANDOVER REQUEST ACKNOWLEDGE |
+| `AMFRANHandoverCommand` | Produced — **not exercised end to end**, see *What has not been observed on a live network* below |
+| `AMFRANHandoverRequest` | Produced — **not exercised end to end**, as above. Despite the name, clause 6.2.2.2.9.3 triggers it on the AMF *receiving* the HANDOVER REQUEST ACKNOWLEDGE |
 | `AMFRANTraceReport` | **Out of scope — the AMF is never a trace collection NE.** It does handle CELL TRAFFIC TRACE, one of the record's four trigger events, so this is not "trace is ignored". What cannot be populated is the mandatory `aMFTraceData`: the TS 32.423 XML an AMF sends to a trace collection entity when it *is* that entity. This AMF originates no trace session and delivers no trace data, so there is no value for the field, and a record with an empty one would encode cleanly and assert something false. In scope the day trace activation is wired up |
 | `AMFUEConfigurationUpdate` | **Out of scope — the specification contradicts itself.** `gUTI [2]` is typed `GUTI`, which in the module is the EPS shape (`mMEGroupID`, `mMECode`, `mTMSI`), while the field's own prose calls it the "Current 5G-GUTI". The two differ in member count and member type, so no record satisfies both readings. Checked upstream rather than assumed: unchanged in Forge `main` for r18, and still `gUTI [2] GUTI` in **r19 version7**, whose changelog runs to V19.7.0 with no entry touching `GUTI` or `FiveGGUTI` — while r19's own `AMFRegistration` continues to use `FiveGGUTI`. Populating the EPS shape would mean deriving an MME identity this AMF does not have; emitting a `FiveGGUTI` would fail conformance against the published module. Revisit if a later release changes the type |
 | `AMFPositioningInfoTransfer` | **Out of scope — this AMF has no LMF.** All four trigger events in clause 6.2.2.2.8 are exchanges with an LMF (`N1N2MessageTransfer` from it, `N2InfoNotify` and `N1MessageNotify` to it), under the overarching condition that a message is "exchanged between the LMF and NG-RAN via the AMF". This AMF decodes an uplink NRPPa PDU, stores the routing id and drops it — there is no LMF integration, so no exchange. The mandatory `lcsCorrelationId` confirms it independently: it is the TS 29.572 correlation id from those same LMF messages, not the NGAP routing id. In scope the day an LMF is deployed. `li/iri` defines the record already |
@@ -615,6 +615,36 @@ procedures these functions perform.
 | `SMFStartOfInterceptionWithEstablishedMAPDUSession` | Out of scope, as above |
 | `SMFMAUnsuccessfulProcedure` | Out of scope, as above |
 | `SMFPDUtoMAPDUSessionModification` | Out of scope, as above |
+
+### What has not been observed on a live network
+
+**The two handover records have never been produced by a real handover.**
+
+Everything else in the tables above is exercised end to end by the e2e suite against a
+live cluster: a record is generated, delivered over X2, and decoded at the receiving end
+against the published ASN.1 module. `AMFRANHandoverCommand` and `AMFRANHandoverRequest`
+are not, because an N2 handover needs two RAN nodes and the development lab has one.
+
+What *is* established for them:
+
+- both encode and decode against `TS33128Payloads.asn` with every mandatory member
+  populated, using the same module-conformance check the other records pass;
+- unit tests cover each cause group, the carried source-to-target container, an
+  incomplete handover emitting nothing rather than a partial record, and silence for an
+  untasked subscriber;
+- the carried state is released on every handover outcome — success, failure, cancel, and
+  the preparation-failure exits — so it cannot outlive its handover or be reused by a
+  later one;
+- the whole e2e suite passes against an AMF carrying these hooks, so they do not disturb
+  the paths the lab can exercise.
+
+What is not: nobody has watched a handover complete with the hook present. These are also
+the only two hooks this POI has in NGAP handling, which runs for every UE on every
+handover, so they carry more risk than the rest.
+
+**If you deploy with two or more RAN nodes, exercise a handover for a tasked target and
+confirm both records arrive before relying on them.** Report anything that does not
+match the tables above.
 
 ### Functions this project does not host
 
@@ -899,6 +929,10 @@ independent ETSI TS 103 221 implementation, useful as an interop reference).
 Point the NFs' `mdf2`/`mdf3`/`admfUrl` at the simulator's endpoints (`mdf3` on the SMF,
 which passes it to each UPF) and provision a
 task over its X1 client.
+
+One gap in that coverage is worth knowing before you rely on it: the two RAN handover
+records are not exercised, because a handover needs two RAN nodes. See
+*[What has not been observed on a live network](#what-has-not-been-observed-on-a-live-network)*.
 
 ## Standards
 
