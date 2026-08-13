@@ -41,6 +41,7 @@ func goldenSamples() map[string]any {
 	loc := Location{LocationInfo: LocationInfo{CurrentLocation: true}}
 	fteid := FTEID{TEID: 0x01020304, IPv4Address: []byte{10, 20, 30, 40}}
 	snssai := SNSSAI{SliceServiceType: 1, SliceDifferentiator: []byte{0x00, 0x00, 0x7B}}
+	ids := Identifiers(IMSI("262019876543210"), IMEISV("3534250000000151"), MSISDN("4915123456789"))
 
 	return map[string]any{
 		"AMFRegistration": AMFRegistration{
@@ -141,6 +142,56 @@ func goldenSamples() map[string]any {
 			RequestType:    SMRequestExisting,
 			AccessType:     AccessThreeGPP,
 		},
+		"SMFUnsuccessfulProcedure": SMFUnsuccessfulProcedure{
+			FailedProcedureType: SMFFailedPDUSessionEstablishment,
+			FailureCause:        FiveGSMCause(26),
+			Initiator:           InitiatorNetwork,
+			SUPI:                IMSI("262019876543210"),
+			PEI:                 IMEISV("3534250000000151"),
+			GPSI:                MSISDN("4915123456789"),
+			PDUSessionID:        5,
+			DNN:                 DNN("internet"),
+			RequestType:         SMRequestInitial,
+			AccessType:          AccessThreeGPP,
+		},
+		"AMFUEServiceAccept": AMFUEServiceAccept{
+			UserIdentifiers:        ids,
+			ServiceMessageIdentity: ServiceAcceptIdentity{0x4E},
+			ServiceType:            []byte{0x01},
+		},
+		"AMFUEPolicyTransfer": AMFUEPolicyTransfer{
+			SUPI:     IMSI("262019876543210"),
+			PEI:      IMEISV("3534250000000151"),
+			GPSI:     MSISDN("4915123456789"),
+			GUTI:     guti,
+			UEPolicy: UEPolicy{0x01, 0x02, 0x03},
+		},
+		"AMFPositioningInfoTransfer": AMFPositioningInfoTransfer{
+			SUPI:             IMSI("262019876543210"),
+			PEI:              IMEISV("3534250000000151"),
+			GPSI:             MSISDN("4915123456789"),
+			GUTI:             guti,
+			NRPPaMessage:     []byte{0xAA, 0xBB},
+			LPPMessage:       []byte{0xCC},
+			LCSCorrelationID: LCSCorrelationID("corr-1"),
+		},
+		"AMFRANHandoverCommand": AMFRANHandoverCommand{
+			UserIdentifiers:         ids,
+			AMFUENGAPID:             7,
+			RANUENGAPID:             9,
+			HandoverType:            HandoverIntra5GS,
+			TargetToSourceContainer: RANTargetToSourceContainer{0xDE, 0xAD},
+		},
+		"AMFRANHandoverRequest": AMFRANHandoverRequest{
+			UserIdentifiers:               ids,
+			AMFUENGAPID:                   7,
+			RANUENGAPID:                   9,
+			HandoverType:                  HandoverIntra5GS,
+			HandoverCause:                 CauseRadioNetwork(17),
+			PDUSessionResourceInformation: PDUSessionResourceInformation{PDUSessionID: 5},
+			TargetToSourceContainer:       RANTargetToSourceContainer{0xDE, 0xAD},
+			SourceToTargetContainer:       RANSourceToTargetContainer{0xBE, 0xEF},
+		},
 	}
 }
 
@@ -158,6 +209,12 @@ var expectedUnchanged = map[string]bool{
 	"SMFPDUSessionEstablishment":             true,
 	"SMFPDUSessionModification":              true,
 	"SMFPDUSessionRelease":                   true,
+	"SMFUnsuccessfulProcedure":               true,
+	"AMFUEServiceAccept":                     true,
+	"AMFUEPolicyTransfer":                    true,
+	"AMFPositioningInfoTransfer":             true,
+	"AMFRANHandoverCommand":                  true,
+	"AMFRANHandoverRequest":                  true,
 }
 
 func encodeGolden(t *testing.T, event any) string {
@@ -266,7 +323,7 @@ func TestGoldenEncodings(t *testing.T) {
 // It is a count rather than a walk of the registry because asn1.Context keeps its
 // choice entries unexported, and widening that API to let a test introspect it
 // would be a change to the vendored codec for no runtime benefit.
-const registeredRecordCount = 11
+const registeredRecordCount = 17
 
 // TestGoldenCoversEveryRecord checks the golden set against the registry in both
 // directions it can: every sample must actually be a registered xiriEvent
