@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Forsway Scandinavia AB
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Vendored X1 schemas
 
 These are the published ETSI schemas the X1 implementation is validated against. They are

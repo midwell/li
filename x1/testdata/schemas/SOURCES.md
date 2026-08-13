@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Forsway Scandinavia AB
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # The statements the X1 provisioning decisions rest on
 
 This file exists so that a reviewer can check every decision in
