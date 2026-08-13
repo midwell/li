@@ -21,7 +21,7 @@ type fieldOptions struct {
 	defaultValue *int
 	choice       *string
 
-	// LOCAL PATCH (omec/li) 7/7: elemChoice carries a CHOICE that applies to the
+	// LOCAL PATCH (omec/li) 7/8: elemChoice carries a CHOICE that applies to the
 	// *elements* of a SEQUENCE OF / SET OF rather than to the field itself. It is
 	// never written in a struct tag — splitElementChoice derives it from `choice`
 	// when the field's declared type is a non-byte slice or array. See the
@@ -34,7 +34,7 @@ type fieldOptions struct {
 // slice type (which has no registered alternative and previously failed with
 // "invalid Go type '[]interface {}' for choice ...").
 //
-// LOCAL PATCH (omec/li) 7/7.
+// LOCAL PATCH (omec/li) 7/8.
 //
 // declared must be the field's *declared* type, read before any interface unwrap.
 // That is what separates the two readings of a choice option on one field:
@@ -69,7 +69,7 @@ func splitElementChoice(declared reflect.Type, opts *fieldOptions) *fieldOptions
 // SET OF whose elements are a CHOICE. Only the choice travels: the field's tag,
 // optionality and explicitness belong to the sequence, not to its members.
 //
-// LOCAL PATCH (omec/li) 7/7.
+// LOCAL PATCH (omec/li) 7/8.
 func elementOptions(opts *fieldOptions) *fieldOptions {
 	return &fieldOptions{choice: opts.elemChoice}
 }

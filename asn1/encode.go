@@ -38,7 +38,7 @@ func (ctx *Context) EncodeWithOptions(obj interface{}, options string) (data []b
 
 // Main encode function
 func (ctx *Context) encode(value reflect.Value, opts *fieldOptions) (*rawValue, error) {
-	// LOCAL PATCH (omec/li) 7/7: a `choice` on a SEQUENCE OF / SET OF field applies
+	// LOCAL PATCH (omec/li) 7/8: a `choice` on a SEQUENCE OF / SET OF field applies
 	// to its elements. Split it before the interface unwrap below, which is the only
 	// point where the field's declared type is still visible.
 	if value.IsValid() {
@@ -149,7 +149,7 @@ func (ctx *Context) encodeValue(value reflect.Value, opts *fieldOptions) (raw *r
 				raw.Tag = tagSequence
 				raw.Constructed = true
 				encoder = ctx.encodeSlice
-				// LOCAL PATCH (omec/li) 7/7: SEQUENCE OF CHOICE — each element is
+				// LOCAL PATCH (omec/li) 7/8: SEQUENCE OF CHOICE — each element is
 				// encoded with the CHOICE the field declared.
 				if opts.elemChoice != nil {
 					elemOpts := elementOptions(opts)
@@ -321,7 +321,7 @@ func (ctx *Context) encodeSlice(value reflect.Value) ([]byte, error) {
 // encodeSliceWithOptions encodes a slice or array as a sequence of values, applying
 // elemOpts to each element.
 //
-// LOCAL PATCH (omec/li) 7/7: upstream's encodeSlice recursed into its elements with
+// LOCAL PATCH (omec/li) 7/8: upstream's encodeSlice recursed into its elements with
 // an empty options string, so a SEQUENCE OF CHOICE could not be expressed — the
 // CHOICE never reached the elements, and was instead resolved against the slice
 // type itself, which has no registered alternative.

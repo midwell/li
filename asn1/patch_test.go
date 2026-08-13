@@ -31,13 +31,13 @@ func seqOfChoiceContext(t *testing.T) *Context {
 }
 
 // seqOfChoice is the shape the patch exists for: a SEQUENCE OF whose members are
-// a CHOICE. Before LOCAL PATCH 7/7 the encoder rejected this with
+// a CHOICE. Before LOCAL PATCH 7/8 the encoder rejected this with
 // "invalid Go type '[]interface {}' for choice 'elem'".
 type seqOfChoice struct {
 	Items []any `asn1:"tag:1,choice:elem"`
 }
 
-// TestSequenceOfChoiceRoundTrip covers LOCAL PATCH 7/7: every alternative survives
+// TestSequenceOfChoiceRoundTrip covers LOCAL PATCH 7/8: every alternative survives
 // a round trip through a SEQUENCE OF, with its concrete Go type restored.
 func TestSequenceOfChoiceRoundTrip(t *testing.T) {
 	ctx := seqOfChoiceContext(t)
@@ -106,7 +106,7 @@ func TestSequenceOfChoiceSingleElement(t *testing.T) {
 	}
 }
 
-// TestSequenceOfChoiceRejectsUnknownAlternative covers LOCAL PATCH 7/7's decode
+// TestSequenceOfChoiceRejectsUnknownAlternative covers LOCAL PATCH 7/8's decode
 // rule: an element whose tag matches no registered alternative must fail the
 // decode. Skipping it would return a shorter list that the caller cannot
 // distinguish from a genuinely shorter one — for an identifier or endpoint list
@@ -187,7 +187,7 @@ func TestDecodeRejectsOversizedElement(t *testing.T) {
 }
 
 // setOfChoice answers design open-question D-open: does SET OF CHOICE work as a
-// side effect of LOCAL PATCH 7/7? The slice codecs are shared between SEQUENCE OF
+// side effect of LOCAL PATCH 7/8? The slice codecs are shared between SEQUENCE OF
 // and SET OF — the `set` option only rewrites the outer universal tag — so it
 // should. TS 33.128 uses SEQUENCE OF throughout and nothing in li/iri exercises
 // SET OF, which is exactly why it is worth a test rather than an assumption.

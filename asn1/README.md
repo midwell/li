@@ -70,7 +70,16 @@ been archived.
    assertion. Both now test the kind first and use `||`, and
    `octetstring_test.go` covers each shape on both the encode and decode paths.
 
-7. `encode.go`/`decode.go`/`options.go` (marked `LOCAL PATCH (omec/li) 7/7`):
+6. Housekeeping, no behaviour change: `io/ioutil` replaced with `io` (deprecated
+   since Go 1.19), a comparison to a bool constant simplified, the discarded
+   error from the recursive `applyOptions` call in `encode.go` checked, naked
+   returns made explicit, and the test files' unchecked `AddChoice` errors
+   handled. This directory is no longer excluded from the linters: it is code
+   this project owns, so it meets the same standard as the rest, and keeping an
+   exception meant CI's separate staticcheck job disagreed with a local
+   `golangci-lint` run — which is how patch 5 stayed hidden.
+
+7. `encode.go`/`decode.go`/`options.go` (marked `LOCAL PATCH (omec/li) 7/8`):
    **`SEQUENCE OF CHOICE`**. Upstream's `encodeSlice`, `decodeSlice` and
    `decodeArray` each recurse into their elements with an empty options string, so a
    `choice` declared on the field never reaches the elements — and `applyOptions`
@@ -99,12 +108,3 @@ been archived.
    round-trips. Found while adding patch 7, since a CHOICE of address types is
    exactly this shape. `octetstring_test.go` covers both paths for named slices and
    named arrays.
-
-9. Housekeeping, no behaviour change: `io/ioutil` replaced with `io` (deprecated
-   since Go 1.19), a comparison to a bool constant simplified, the discarded
-   error from the recursive `applyOptions` call in `encode.go` checked, naked
-   returns made explicit, and the test files' unchecked `AddChoice` errors
-   handled. This directory is no longer excluded from the linters: it is code
-   this project owns, so it meets the same standard as the rest, and keeping an
-   exception meant CI's separate staticcheck job disagreed with a local
-   `golangci-lint` run — which is how patch 5 stayed hidden.

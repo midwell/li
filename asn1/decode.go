@@ -170,7 +170,7 @@ func (ctx *Context) decode(reader io.Reader, value reflect.Value, opts *fieldOpt
 		return parseError("indefinite length form is not supported by DER mode")
 	}
 
-	// LOCAL PATCH (omec/li) 7/7: see splitElementChoice — a `choice` declared on a
+	// LOCAL PATCH (omec/li) 7/8: see splitElementChoice — a `choice` declared on a
 	// SEQUENCE OF / SET OF applies to its elements, not to the sequence.
 	opts = splitElementChoice(value.Type(), opts)
 
@@ -318,7 +318,7 @@ func (ctx *Context) getUniversalTagByKind(objType reflect.Type, opts *fieldOptio
 		} else {
 			elem.tag = tagSequence
 			elem.decoder = ctx.decodeArray
-			// LOCAL PATCH (omec/li) 7/7: SEQUENCE OF CHOICE.
+			// LOCAL PATCH (omec/li) 7/8: SEQUENCE OF CHOICE.
 			if opts.elemChoice != nil {
 				elemOpts := elementOptions(opts)
 				elem.decoder = func(data []byte, value reflect.Value) error {
@@ -334,7 +334,7 @@ func (ctx *Context) getUniversalTagByKind(objType reflect.Type, opts *fieldOptio
 		} else {
 			elem.tag = tagSequence
 			elem.decoder = ctx.decodeSlice
-			// LOCAL PATCH (omec/li) 7/7: SEQUENCE OF CHOICE.
+			// LOCAL PATCH (omec/li) 7/8: SEQUENCE OF CHOICE.
 			if opts.elemChoice != nil {
 				elemOpts := elementOptions(opts)
 				elem.decoder = func(data []byte, value reflect.Value) error {
@@ -356,7 +356,7 @@ func (ctx *Context) getExpectedFieldElements(value reflect.Value) ([]expectedFie
 			if err != nil {
 				return nil, err
 			}
-			// LOCAL PATCH (omec/li) 7/7: a `choice` on a SEQUENCE OF / SET OF field
+			// LOCAL PATCH (omec/li) 7/8: a `choice` on a SEQUENCE OF / SET OF field
 			// belongs to its elements. Without this the branch below expands the
 			// CHOICE alternatives as candidate tags for the *field*, when the field
 			// carries the sequence's own tag and the alternatives appear inside it.
@@ -534,7 +534,7 @@ func (ctx *Context) decodeSlice(data []byte, value reflect.Value) error {
 // decodeSliceWithOptions decodes a SET(OF)/SEQUENCE(OF) as a slice, decoding each
 // element with elemOpts.
 //
-// LOCAL PATCH (omec/li) 7/7: the counterpart to encodeSliceWithOptions. When
+// LOCAL PATCH (omec/li) 7/8: the counterpart to encodeSliceWithOptions. When
 // elemOpts carries a `choice`, each element is discriminated by its own tag through
 // the existing getChoiceByTag path, so a SEQUENCE OF CHOICE round-trips. An element
 // whose tag matches no registered alternative is an error, deliberately: silently
@@ -558,7 +558,7 @@ func (ctx *Context) decodeSliceWithOptions(data []byte, value reflect.Value, ele
 // decodeElement decodes one element of a SEQUENCE OF / SET OF into value using the
 // given options, and returns the remaining bytes.
 //
-// LOCAL PATCH (omec/li) 7/7. Upstream's slice and array decoders called
+// LOCAL PATCH (omec/li) 7/8. Upstream's slice and array decoders called
 // DecodeWithOptions with an empty options string, which both re-parsed an empty tag
 // on every element and made it impossible to pass the element's CHOICE down.
 func (ctx *Context) decodeElement(data []byte, value reflect.Value, elemOpts *fieldOptions) ([]byte, error) {
@@ -580,7 +580,7 @@ func (ctx *Context) decodeArray(data []byte, value reflect.Value) error {
 // decodeArrayWithOptions decodes a SET(OF)/SEQUENCE(OF) as a fixed-size array,
 // decoding each element with elemOpts.
 //
-// LOCAL PATCH (omec/li) 7/7: see decodeSliceWithOptions.
+// LOCAL PATCH (omec/li) 7/8: see decodeSliceWithOptions.
 func (ctx *Context) decodeArrayWithOptions(data []byte, value reflect.Value, elemOpts *fieldOptions) error {
 	var err error
 	for i := 0; i < value.Len(); i++ {
