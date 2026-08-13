@@ -205,3 +205,28 @@ func TestNEFaultCarriesNoIdentity(t *testing.T) {
 		t.Error("the fault carries no error code, which the schema makes mandatory in an unresolvedFault")
 	}
 }
+
+// TestAnElementHoldingNoTaskingIsNotFaulty guards the next plausible probe, which is
+// "taskingAbsent" — a condition this package *can* observe at any moment, unlike the one it
+// withdrew, and which still must not appear here.
+//
+// Most elements hold no tasking most of the time. Reporting it would make "Faults" the normal
+// answer and the field worthless, and an ADMF could no longer tell an element that is losing
+// traffic from one that is simply not tasked. What holding nothing means is meant for the
+// push at startup, where it says something else entirely: this element has *lost* the tasking
+// it held, which is a transition rather than a state.
+func TestAnElementHoldingNoTaskingIsNotFaulty(t *testing.T) {
+	srv := NewServer(store.New(), "neID")
+	srv.now = func() time.Time { return zeroTailInstant }
+
+	got := statusOf(t, srv)
+	if !strings.Contains(got, "<ns1:neStatus>OK</ns1:neStatus>") {
+		t.Errorf("an element holding no tasking reported itself faulty; that is the normal "+
+			"state of most elements, and reporting it makes the answer worthless\ngot:\n%s", got)
+	}
+	if strings.Contains(got, NEIssueTaskingAbsent) {
+		t.Errorf("the status answer carries %s; it is pushed once at startup, where it means "+
+			"tasking was lost, and is not a condition of the element now\ngot:\n%s",
+			NEIssueTaskingAbsent, got)
+	}
+}

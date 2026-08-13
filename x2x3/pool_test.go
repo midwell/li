@@ -19,17 +19,44 @@ func (s *stubReachable) Unreachable() bool { return s.down }
 // pool answers in numbers and there is nothing here for a fault description to leak.
 func TestPoolUnreachableCountsWhatIsWrongAndNotWhose(t *testing.T) {
 	p := NewPool(nil, nil, nil)
+	both := []string{"10.0.60.122:42069", "10.0.60.123:42069"}
 
-	if unreachable, inUse := p.Unreachable(); unreachable != 0 || inUse != 0 {
+	if unreachable, inUse := p.UnreachableAmong(both); unreachable != 0 || inUse != 0 {
 		t.Errorf("a pool that has delivered nothing reports %d of %d unreachable, want 0 of 0; "+
-			"an element with no destinations in use has nothing to be wrong", unreachable, inUse)
+			"a destination nothing has been sent to has not been found unreachable", unreachable, inUse)
 	}
 
-	p.senders["10.0.60.122:42069"] = &stubReachable{}
-	p.senders["10.0.60.123:42069"] = &stubReachable{down: true}
+	p.senders[both[0]] = &stubReachable{}
+	p.senders[both[1]] = &stubReachable{down: true}
 
-	if unreachable, inUse := p.Unreachable(); unreachable != 1 || inUse != 2 {
-		t.Errorf("Unreachable() = %d of %d, want 1 of 2", unreachable, inUse)
+	if unreachable, inUse := p.UnreachableAmong(both); unreachable != 1 || inUse != 2 {
+		t.Errorf("UnreachableAmong() = %d of %d, want 1 of 2", unreachable, inUse)
+	}
+
+	// Two warrants to one agency are one place product goes.
+	if unreachable, inUse := p.UnreachableAmong([]string{both[1], both[1]}); unreachable != 1 || inUse != 1 {
+		t.Errorf("a destination named twice counted %d of %d, want 1 of 1", unreachable, inUse)
+	}
+}
+
+// TestADestinationNoLongerInUseIsNotCounted is the probe-stuck-on failure the argument exists
+// to prevent.
+//
+// A pool never forgets a client. A destination whose last delivery failed and whose warrant
+// was then withdrawn can never be delivered to again, so nothing would ever clear it: the
+// element would report itself faulty for the life of the process, including while holding no
+// tasking at all. Asking only about destinations still in use is what settles it.
+func TestADestinationNoLongerInUseIsNotCounted(t *testing.T) {
+	p := NewPool(nil, nil, nil)
+	p.senders["10.0.60.122:42069"] = &stubReachable{down: true}
+
+	if unreachable, _ := p.UnreachableAmong([]string{"10.0.60.122:42069"}); unreachable != 1 {
+		t.Fatalf("a failing destination in use counted %d, want 1", unreachable)
+	}
+
+	if unreachable, inUse := p.UnreachableAmong(nil); unreachable != 0 || inUse != 0 {
+		t.Errorf("with no tasking naming it, the failing destination still counts %d of %d, "+
+			"want 0 of 0", unreachable, inUse)
 	}
 }
 
@@ -43,7 +70,7 @@ func TestASenderThatCannotAnswerIsTakenAsReachable(t *testing.T) {
 	p := NewPool(nil, nil, nil)
 	p.senders["10.0.60.122:42069"] = &recordingSender{}
 
-	if unreachable, inUse := p.Unreachable(); unreachable != 0 || inUse != 1 {
+	if unreachable, inUse := p.UnreachableAmong([]string{"10.0.60.122:42069"}); unreachable != 0 || inUse != 1 {
 		t.Errorf("Unreachable() = %d of %d, want 0 of 1", unreachable, inUse)
 	}
 }

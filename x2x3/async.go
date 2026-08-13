@@ -135,6 +135,18 @@ func (a *AsyncSender) Send(pdu *PDU) error {
 // Unreachable reports whether the sender behind the queue currently cannot reach its
 // destination.
 //
+// Note what this deliberately does not answer: whether the queue is full *right now*, which
+// is the state behind x3DeliveryLost — the mediation function is reachable but slower than
+// the offered rate, so copies are being dropped as this is asked. It is a state, it is
+// observable here without I/O, and a probe for it would be legitimate. It is left out
+// because a full queue at one instant is not yet a fault an ADMF can act on: the queue is
+// sized to absorb bursts, so it fills and drains under normal load, and a probe sampling it
+// would report "faulty" for the bursts the buffer exists to swallow. Distinguishing a burst
+// from sustained overload needs a window, and a window is exactly what this design refuses.
+// The drops themselves are reported as they happen. If it is ever added, the condition to
+// answer is "the queue has been full since the last time anything drained", not "the queue
+// is full".
+//
 // The answer belongs to the wrapped sender: Send here only enqueues, and enqueueing can
 // establish nothing about a destination. A sender that cannot answer — a test double — is
 // taken as reachable, because inventing a fault is the failure that gets an element's
