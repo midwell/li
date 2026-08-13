@@ -70,7 +70,37 @@ been archived.
    assertion. Both now test the kind first and use `||`, and
    `octetstring_test.go` covers each shape on both the encode and decode paths.
 
-6. Housekeeping, no behaviour change: `io/ioutil` replaced with `io` (deprecated
+7. `encode.go`/`decode.go`/`options.go` (marked `LOCAL PATCH (omec/li) 7/7`):
+   **`SEQUENCE OF CHOICE`**. Upstream's `encodeSlice`, `decodeSlice` and
+   `decodeArray` each recurse into their elements with an empty options string, so a
+   `choice` declared on the field never reaches the elements — and `applyOptions`
+   then tries to resolve it against the *slice* type, which has no registered
+   alternative (`invalid Go type '[]interface {}' for choice '…'`). The patch adds an
+   internal `elemChoice` option and a `splitElementChoice` helper that moves a
+   `choice` down to the elements when the field's **declared** type is a non-byte
+   slice or array, and threads element options through the slice/array codecs on both
+   paths. The declared type is what disambiguates the two readings: `Field []any` with
+   a `choice` is a `SEQUENCE OF CHOICE`, while `Field any` holding a slice is a plain
+   CHOICE that happens to have a slice-typed alternative. A byte slice or array is
+   left alone — it is an `OCTET STRING`. An element whose tag matches no registered
+   alternative fails the decode rather than being skipped, because a silently
+   shortened list is indistinguishable from a genuinely short one. TS 33.128 needs
+   this for `UEEndpointAddress` and for the `UserIdentifiers` subtree.
+
+8. `types.go` (`encodeOctetString`, `decodeOctetString`, marked
+   `LOCAL PATCH (omec/li) 8/8`): the guards fixed in patch 5 accept any array or
+   slice whose element kind is `uint8`, which includes **named** types such as
+   `type IPv4Address []byte` — how TS 33.128 CHOICE alternatives are modelled. The
+   bodies did not: encode asserted the value to `[]byte`, decode assigned a plain
+   `[]byte` back and the array path asserted the destination to `[]byte`. All three
+   panicked on a shape the guard admitted (`interface conversion: interface {} is
+   asn1.namedBytes, not []uint8`). They now read and write through `reflect`
+   (`Value.Bytes`, `reflect.Copy`, `Convert`), so a named byte slice or array
+   round-trips. Found while adding patch 7, since a CHOICE of address types is
+   exactly this shape. `octetstring_test.go` covers both paths for named slices and
+   named arrays.
+
+9. Housekeeping, no behaviour change: `io/ioutil` replaced with `io` (deprecated
    since Go 1.19), a comparison to a bool constant simplified, the discarded
    error from the recursive `applyOptions` call in `encode.go` checked, naked
    returns made explicit, and the test files' unchecked `AddChoice` errors

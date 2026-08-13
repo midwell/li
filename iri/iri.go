@@ -17,6 +17,8 @@
 package iri
 
 import (
+	"fmt"
+	"net"
 	"reflect"
 
 	"github.com/omec-project/li/asn1"
@@ -205,8 +207,9 @@ type AMFStartOfInterceptionWithRegisteredUE struct {
 
 // SMFPDUSessionEstablishment is a slice of the same-named TS 33.128 record.
 // Mandatory: pDUSessionID, gTPTunnelID, pDUSessionType, dNN, requestType.
-// Deferred optionals (deeper subtrees): uEEndpoint [9] (SEQUENCE OF the
-// UEEndpointAddress CHOICE), location [11], and the long tail.
+// uEEndpoint [9] is OPTIONAL here and carries the address assigned to the UE —
+// distinct from gTPTunnelID, which is the serving UPF's tunnel endpoint.
+// Deferred optionals (deeper subtrees): location [11] and the long tail.
 type SMFPDUSessionEstablishment struct {
 	SUPI           any                `asn1:"tag:1,explicit,choice:supi,optional"`
 	PEI            any                `asn1:"tag:3,explicit,choice:pei,optional"`
@@ -215,6 +218,7 @@ type SMFPDUSessionEstablishment struct {
 	GTPTunnelID    FTEID              `asn1:"tag:6"`
 	PDUSessionType PDUSessionType     `asn1:"tag:7"`
 	SNSSAI         SNSSAI             `asn1:"tag:8,optional"`
+	UEEndpoint     []any              `asn1:"tag:9,choice:ueEndpointAddress,optional"`
 	DNN            DNN                `asn1:"tag:12"`
 	RequestType    FiveGSMRequestType `asn1:"tag:15"`
 	AccessType     AccessType         `asn1:"tag:16,optional"`
@@ -297,31 +301,70 @@ type AMFIdentifierDeassociation struct {
 	GUTI FiveGGUTI `asn1:"tag:5"`
 }
 
-// UEEndpointAddress models TS 33.128's ueEndpoint element, which is a CHOICE.
-// The bundled codec cannot encode a SEQUENCE OF CHOICE (verified), so
-// SMFStartOfInterceptionWithEstablishedPDUSession currently emits uEEndpoint as
-// an empty SEQUENCE (present, zero entries — schema-valid). Populating it needs
-// SEQUENCE-OF-CHOICE codec support, deferred as it is for the establishment record.
-type UEEndpointAddress struct{}
+// UEEndpointAddress alternatives. TS 33.128:
+//
+//	UEEndpointAddress ::= CHOICE {
+//	    iPv4Address     [1] IPv4Address,      -- OCTET STRING (SIZE(4))
+//	    iPv6Address     [2] IPv6Address,      -- OCTET STRING (SIZE(16))
+//	    ethernetAddress [3] MACAddress        -- OCTET STRING (SIZE(6))
+//	}
+//
+// Distinct Go types, like the IMSI/NAI target-identifier leaves, so the CHOICE
+// codec can tell the alternatives apart by reflect.Type. They are named byte
+// slices, which the codec handles as of local patch 8 — the guards admitted the
+// shape before that but the bodies panicked on it.
+//
+// A ueEndpoint field is a SEQUENCE OF this CHOICE, so it is declared as []any and
+// tagged with the choice; see local patch 7 for why the declared type is what
+// makes that mean "per element".
+type (
+	IPv4Address []byte // SIZE(4)
+	IPv6Address []byte // SIZE(16)
+	MACAddress  []byte // SIZE(6)
+)
+
+// UEEndpoint builds the ueEndpoint list for a single UE address, discriminating
+// v4 from v6 the way the rest of the project does — To4 first, because a
+// 4-in-6-mapped address answers To16 as well and would otherwise be reported as
+// IPv6. Returns nil for an absent or unusable address, so a caller that has no
+// address emits no list rather than an empty one: an empty ueEndpoint is a
+// positive claim that the session has no endpoint address, which is never true
+// of an established session.
+func UEEndpoint(ip net.IP) []any {
+	if ip == nil {
+		return nil
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return []any{IPv4Address(append([]byte(nil), v4...))}
+	}
+	if v16 := ip.To16(); v16 != nil {
+		return []any{IPv6Address(append([]byte(nil), v16...))}
+	}
+	return nil
+}
 
 // SMFStartOfInterceptionWithEstablishedPDUSession is a slice of the same-named
 // TS 33.128 record (XIRIEvent [9]), generated when interception is activated for
 // a UE that already has an active PDU session. Mandatory: pDUSessionID,
-// gTPTunnelID, pDUSessionType, uEEndpoint, dNN, requestType (uEEndpoint emitted
-// empty — see UEEndpointAddress). Deep optionals (location, the EPS-combo tail,
-// serving network, etc.) are deferred, as for SMFPDUSessionEstablishment.
+// gTPTunnelID, pDUSessionType, uEEndpoint, dNN, requestType. Deep optionals
+// (location, the EPS-combo tail, serving network, etc.) are deferred, as for
+// SMFPDUSessionEstablishment.
+//
+// uEEndpoint is mandatory here and must not be emitted as an empty SEQUENCE: an
+// empty list asserts that an established session has no endpoint address. Build
+// it with UEEndpoint.
 type SMFStartOfInterceptionWithEstablishedPDUSession struct {
-	SUPI           any                 `asn1:"tag:1,explicit,choice:supi,optional"`
-	PEI            any                 `asn1:"tag:3,explicit,choice:pei,optional"`
-	GPSI           any                 `asn1:"tag:4,explicit,choice:gpsi,optional"`
-	PDUSessionID   PDUSessionID        `asn1:"tag:5"`
-	GTPTunnelID    FTEID               `asn1:"tag:6"`
-	PDUSessionType PDUSessionType      `asn1:"tag:7"`
-	SNSSAI         SNSSAI              `asn1:"tag:8,optional"`
-	UEEndpoint     []UEEndpointAddress `asn1:"tag:9"` // mandatory SEQUENCE OF; emitted empty
-	DNN            DNN                 `asn1:"tag:12"`
-	RequestType    FiveGSMRequestType  `asn1:"tag:15"`
-	AccessType     AccessType          `asn1:"tag:16,optional"`
+	SUPI           any                `asn1:"tag:1,explicit,choice:supi,optional"`
+	PEI            any                `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI           any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	PDUSessionID   PDUSessionID       `asn1:"tag:5"`
+	GTPTunnelID    FTEID              `asn1:"tag:6"`
+	PDUSessionType PDUSessionType     `asn1:"tag:7"`
+	SNSSAI         SNSSAI             `asn1:"tag:8,optional"`
+	UEEndpoint     []any              `asn1:"tag:9,choice:ueEndpointAddress"`
+	DNN            DNN                `asn1:"tag:12"`
+	RequestType    FiveGSMRequestType `asn1:"tag:15"`
+	AccessType     AccessType         `asn1:"tag:16,optional"`
 }
 
 // XIRIPayload ::= SEQUENCE { xIRIPayloadOID [1] RELATIVE-OID, event [2] XIRIEvent }.
@@ -352,6 +395,12 @@ func NewContext() *asn1.Context {
 		{Type: reflect.TypeOf(NAI("")), Options: "tag:2"},
 	})
 	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
+	_ = ctx.AddChoice("ueEndpointAddress", []asn1.Choice{
+		{Type: reflect.TypeOf(IPv4Address(nil)), Options: "tag:1"},
+		{Type: reflect.TypeOf(IPv6Address(nil)), Options: "tag:2"},
+		{Type: reflect.TypeOf(MACAddress(nil)), Options: "tag:3"},
+	})
+	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
 	_ = ctx.AddChoice("amfFailureCause", []asn1.Choice{
 		{Type: reflect.TypeOf(FiveGMMCause(0)), Options: "tag:1"},
 		{Type: reflect.TypeOf(FiveGSMCause(0)), Options: "tag:2"},
@@ -379,5 +428,25 @@ func NewContext() *asn1.Context {
 // returns its DER encoding, suitable as the payload of an X2 PDU with payload
 // format 3GPP-33.128.
 func EncodeXIRI(ctx *asn1.Context, event any) ([]byte, error) {
+	if err := validateEvent(event); err != nil {
+		return nil, err
+	}
 	return ctx.Encode(XIRIPayload{OID: xIRIPayloadOID, Event: event})
+}
+
+// validateEvent refuses records whose encoding would be schema-valid but false.
+//
+// The codec cannot catch these: an empty SEQUENCE OF encodes cleanly, and
+// ueEndpoint carries no SIZE constraint, so nothing downstream rejects it. What
+// it asserts, though, is that an established PDU session has no endpoint
+// address, which is never true — and an agency cannot tell that claim apart from
+// one we actually meant. Refusing here rather than in each caller keeps the rule
+// on the single path both the SMF's record builders take.
+func validateEvent(event any) error {
+	if soi, ok := event.(SMFStartOfInterceptionWithEstablishedPDUSession); ok && len(soi.UEEndpoint) == 0 {
+		return fmt.Errorf(
+			"iri: SMFStartOfInterceptionWithEstablishedPDUSession has an empty uEEndpoint; " +
+				"the field is mandatory and an empty list asserts the session has no endpoint address")
+	}
+	return nil
 }

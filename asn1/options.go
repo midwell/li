@@ -5,6 +5,7 @@
 package asn1
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -19,6 +20,58 @@ type fieldOptions struct {
 	tag          *int
 	defaultValue *int
 	choice       *string
+
+	// LOCAL PATCH (omec/li) 7/7: elemChoice carries a CHOICE that applies to the
+	// *elements* of a SEQUENCE OF / SET OF rather than to the field itself. It is
+	// never written in a struct tag — splitElementChoice derives it from `choice`
+	// when the field's declared type is a non-byte slice or array. See the
+	// SEQUENCE OF CHOICE entry in README.md.
+	elemChoice *string
+}
+
+// splitElementChoice moves a `choice` written on a SEQUENCE OF / SET OF field down
+// to its elements, so the CHOICE is resolved per element instead of against the
+// slice type (which has no registered alternative and previously failed with
+// "invalid Go type '[]interface {}' for choice ...").
+//
+// LOCAL PATCH (omec/li) 7/7.
+//
+// declared must be the field's *declared* type, read before any interface unwrap.
+// That is what separates the two readings of a choice option on one field:
+//
+//   - a field declared []any, tagged choice:c — the CHOICE applies to each
+//     element, which is SEQUENCE OF CHOICE.
+//   - a field declared any, tagged choice:c, holding a slice value — the CHOICE
+//     applies to the whole value, and one registered alternative simply happens
+//     to be a slice type.
+//
+// A byte slice or byte array is left alone: it is an OCTET STRING, not a
+// SEQUENCE OF, and may itself be a CHOICE alternative (e.g. an IPv4Address).
+func splitElementChoice(declared reflect.Type, opts *fieldOptions) *fieldOptions {
+	if opts.choice == nil || declared == nil {
+		return opts
+	}
+	switch declared.Kind() {
+	case reflect.Slice, reflect.Array:
+		if declared.Elem().Kind() == reflect.Uint8 {
+			return opts
+		}
+	default:
+		return opts
+	}
+	derived := *opts
+	derived.elemChoice = opts.choice
+	derived.choice = nil
+	return &derived
+}
+
+// elementOptions returns the options to apply to each element of a SEQUENCE OF /
+// SET OF whose elements are a CHOICE. Only the choice travels: the field's tag,
+// optionality and explicitness belong to the sequence, not to its members.
+//
+// LOCAL PATCH (omec/li) 7/7.
+func elementOptions(opts *fieldOptions) *fieldOptions {
+	return &fieldOptions{choice: opts.elemChoice}
 }
 
 // validate returns an error if any option is invalid.

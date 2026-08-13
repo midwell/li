@@ -170,6 +170,10 @@ func (ctx *Context) decode(reader io.Reader, value reflect.Value, opts *fieldOpt
 		return parseError("indefinite length form is not supported by DER mode")
 	}
 
+	// LOCAL PATCH (omec/li) 7/7: see splitElementChoice — a `choice` declared on a
+	// SEQUENCE OF / SET OF applies to its elements, not to the sequence.
+	opts = splitElementChoice(value.Type(), opts)
+
 	elem, err := ctx.getExpectedElement(raw, value.Type(), opts)
 	if err != nil {
 		return err
@@ -314,6 +318,13 @@ func (ctx *Context) getUniversalTagByKind(objType reflect.Type, opts *fieldOptio
 		} else {
 			elem.tag = tagSequence
 			elem.decoder = ctx.decodeArray
+			// LOCAL PATCH (omec/li) 7/7: SEQUENCE OF CHOICE.
+			if opts.elemChoice != nil {
+				elemOpts := elementOptions(opts)
+				elem.decoder = func(data []byte, value reflect.Value) error {
+					return ctx.decodeArrayWithOptions(data, value, elemOpts)
+				}
+			}
 		}
 
 	case reflect.Slice:
@@ -323,6 +334,13 @@ func (ctx *Context) getUniversalTagByKind(objType reflect.Type, opts *fieldOptio
 		} else {
 			elem.tag = tagSequence
 			elem.decoder = ctx.decodeSlice
+			// LOCAL PATCH (omec/li) 7/7: SEQUENCE OF CHOICE.
+			if opts.elemChoice != nil {
+				elemOpts := elementOptions(opts)
+				elem.decoder = func(data []byte, value reflect.Value) error {
+					return ctx.decodeSliceWithOptions(data, value, elemOpts)
+				}
+			}
 		}
 	}
 	return elem
@@ -338,6 +356,11 @@ func (ctx *Context) getExpectedFieldElements(value reflect.Value) ([]expectedFie
 			if err != nil {
 				return nil, err
 			}
+			// LOCAL PATCH (omec/li) 7/7: a `choice` on a SEQUENCE OF / SET OF field
+			// belongs to its elements. Without this the branch below expands the
+			// CHOICE alternatives as candidate tags for the *field*, when the field
+			// carries the sequence's own tag and the alternatives appear inside it.
+			opts = splitElementChoice(field.Type(), opts)
 			// Expand choices
 			raw := &rawValue{}
 			if opts.choice == nil {
@@ -505,11 +528,24 @@ func (ctx *Context) decodeStructAsSet(data []byte, value reflect.Value) error {
 
 // decodeSlice decodes a SET(OF) as a slice
 func (ctx *Context) decodeSlice(data []byte, value reflect.Value) error {
+	return ctx.decodeSliceWithOptions(data, value, &fieldOptions{})
+}
+
+// decodeSliceWithOptions decodes a SET(OF)/SEQUENCE(OF) as a slice, decoding each
+// element with elemOpts.
+//
+// LOCAL PATCH (omec/li) 7/7: the counterpart to encodeSliceWithOptions. When
+// elemOpts carries a `choice`, each element is discriminated by its own tag through
+// the existing getChoiceByTag path, so a SEQUENCE OF CHOICE round-trips. An element
+// whose tag matches no registered alternative is an error, deliberately: silently
+// dropping it would yield a shorter list that a caller cannot tell from a genuinely
+// shorter one.
+func (ctx *Context) decodeSliceWithOptions(data []byte, value reflect.Value, elemOpts *fieldOptions) error {
 	slice := reflect.New(value.Type()).Elem()
 	var err error
 	for len(data) > 0 {
 		elem := reflect.New(value.Type().Elem()).Elem()
-		data, err = ctx.DecodeWithOptions(data, elem.Addr().Interface(), "")
+		data, err = ctx.decodeElement(data, elem, elemOpts)
 		if err != nil {
 			return err
 		}
@@ -519,15 +555,40 @@ func (ctx *Context) decodeSlice(data []byte, value reflect.Value) error {
 	return nil
 }
 
+// decodeElement decodes one element of a SEQUENCE OF / SET OF into value using the
+// given options, and returns the remaining bytes.
+//
+// LOCAL PATCH (omec/li) 7/7. Upstream's slice and array decoders called
+// DecodeWithOptions with an empty options string, which both re-parsed an empty tag
+// on every element and made it impossible to pass the element's CHOICE down.
+func (ctx *Context) decodeElement(data []byte, value reflect.Value, elemOpts *fieldOptions) ([]byte, error) {
+	if !value.CanSet() {
+		return nil, syntaxError("go type '%s' is read-only", value.Type())
+	}
+	reader := bytes.NewBuffer(data)
+	if err := ctx.decode(reader, value, elemOpts); err != nil {
+		return nil, err
+	}
+	return reader.Bytes(), nil
+}
+
 // decodeArray decodes a SET(OF) as an array
 func (ctx *Context) decodeArray(data []byte, value reflect.Value) error {
+	return ctx.decodeArrayWithOptions(data, value, &fieldOptions{})
+}
+
+// decodeArrayWithOptions decodes a SET(OF)/SEQUENCE(OF) as a fixed-size array,
+// decoding each element with elemOpts.
+//
+// LOCAL PATCH (omec/li) 7/7: see decodeSliceWithOptions.
+func (ctx *Context) decodeArrayWithOptions(data []byte, value reflect.Value, elemOpts *fieldOptions) error {
 	var err error
 	for i := 0; i < value.Len(); i++ {
 		if len(data) == 0 {
 			return parseError("missing elements")
 		}
 		elem := reflect.New(value.Type().Elem()).Elem()
-		data, err = ctx.DecodeWithOptions(data, elem.Addr().Interface(), "")
+		data, err = ctx.decodeElement(data, elem, elemOpts)
 		if err != nil {
 			return err
 		}

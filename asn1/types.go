@@ -189,12 +189,19 @@ func (ctx *Context) encodeOctetString(value reflect.Value) ([]byte, error) {
 		// short circuit is what keeps a plain int from crashing the encoder.
 		return nil, wrongType("array or slice of bytes", value)
 	}
+	// LOCAL PATCH (omec/li) 8/8: read the bytes through reflect rather than
+	// asserting to []byte/byte. The guards above (patch 5) accept any array or
+	// slice whose element kind is uint8, which includes *named* types such as
+	// `type IPv4Address []byte` — the shape TS 33.128 CHOICE alternatives use. The
+	// assertions this replaces panicked on exactly those types
+	// ("interface conversion: interface {} is asn1.choiceBytes, not []uint8"),
+	// so the guard admitted a type the body could not handle.
 	if kind == reflect.Slice {
-		return value.Interface().([]byte), nil
+		return value.Bytes(), nil
 	}
 	data := make([]byte, value.Len())
 	for i := 0; i < value.Len(); i++ {
-		data[i] = value.Index(i).Interface().(byte)
+		data[i] = byte(value.Index(i).Uint())
 	}
 	return data, nil
 }
@@ -208,19 +215,23 @@ func (ctx *Context) decodeOctetString(data []byte, value reflect.Value) error {
 		// tested before Type().Elem().
 		return wrongType("array or slice of bytes", value)
 	}
-	if value.Kind() == reflect.Array {
+	// LOCAL PATCH (omec/li) 8/8: the counterpart to encodeOctetString. Copy through
+	// reflect and convert to the destination's own type, so a named byte slice or
+	// array decodes into itself. Previously the array path asserted the destination
+	// to []byte and the slice path assigned a plain []byte into it, both of which
+	// fail for a named type the guard above admits.
+	if kind == reflect.Array {
 		// Check array length
 		if len(data) != value.Len() {
 			t := fmt.Sprintf("[%d]uint8", value.Len())
 			return wrongType(t, value)
 		}
-		// Get reference to the array as a slice
-		dest := value.Slice(0, value.Len()).Interface().([]byte)
-		// Copy data
-		copy(dest, data)
+		reflect.Copy(value, reflect.ValueOf(data))
 	} else {
-		// Set value with a copy of the array data
-		value.Set(reflect.ValueOf(append([]byte{}, data...)))
+		// Set value with a copy of the data, typed as the destination slice.
+		buf := make([]byte, len(data))
+		copy(buf, data)
+		value.Set(reflect.ValueOf(buf).Convert(value.Type()))
 	}
 	return nil
 }

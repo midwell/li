@@ -4,6 +4,7 @@
 package asn1
 
 import (
+	"bytes"
 	"reflect"
 	"testing"
 )
@@ -74,4 +75,81 @@ func TestOctetStringAcceptsBytes(t *testing.T) {
 	if len(into) != 3 {
 		t.Errorf("decoded %d bytes, want 3", len(into))
 	}
+}
+
+// LOCAL PATCH 8/8: the guards above accept any array or slice whose element kind
+// is uint8, which includes *named* types — `type IPv4Address []byte` is how
+// TS 33.128 models the alternatives of the UEEndpointAddress CHOICE. The bodies
+// did not: encodeOctetString asserted the value to []byte and decodeOctetString
+// assigned a plain []byte back, so a shape the guard admitted panicked with
+// "interface conversion: interface {} is asn1.namedBytes, not []uint8".
+//
+// A guard that accepts what the body cannot handle is worse than a strict one:
+// it turns a type error into a crash, and the crash surfaces at encode time, on
+// the delivery path.
+type (
+	namedBytes  []byte
+	namedArray  [4]byte
+	namedBytes2 []uint8
+)
+
+func TestOctetStringHandlesNamedByteTypes(t *testing.T) {
+	ctx := NewContext()
+
+	t.Run("encode named slice", func(t *testing.T) {
+		got, err := ctx.encodeOctetString(reflect.ValueOf(namedBytes{1, 2, 3}))
+		if err != nil {
+			t.Fatalf("encode namedBytes: %v", err)
+		}
+		if !bytes.Equal(got, []byte{1, 2, 3}) {
+			t.Errorf("got % x, want 01 02 03", got)
+		}
+	})
+
+	t.Run("encode named array", func(t *testing.T) {
+		got, err := ctx.encodeOctetString(reflect.ValueOf(namedArray{10, 20, 30, 40}))
+		if err != nil {
+			t.Fatalf("encode namedArray: %v", err)
+		}
+		if !bytes.Equal(got, []byte{10, 20, 30, 40}) {
+			t.Errorf("got % x, want 0a 14 1e 28", got)
+		}
+	})
+
+	t.Run("decode into named slice", func(t *testing.T) {
+		var into namedBytes
+		if err := ctx.decodeOctetString([]byte{4, 5, 6}, reflect.ValueOf(&into).Elem()); err != nil {
+			t.Fatalf("decode into namedBytes: %v", err)
+		}
+		if !bytes.Equal(into, namedBytes{4, 5, 6}) {
+			t.Errorf("got % x, want 04 05 06", into)
+		}
+	})
+
+	t.Run("decode into named array", func(t *testing.T) {
+		var into namedArray
+		if err := ctx.decodeOctetString([]byte{7, 8, 9, 10}, reflect.ValueOf(&into).Elem()); err != nil {
+			t.Fatalf("decode into namedArray: %v", err)
+		}
+		if into != (namedArray{7, 8, 9, 10}) {
+			t.Errorf("got %v, want [7 8 9 10]", into)
+		}
+	})
+
+	t.Run("round trip through a struct field", func(t *testing.T) {
+		type holder struct {
+			Addr namedBytes2 `asn1:"tag:1"`
+		}
+		der, err := ctx.Encode(holder{Addr: namedBytes2{192, 168, 0, 1}})
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		var got holder
+		if _, err := ctx.Decode(der, &got); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if !bytes.Equal(got.Addr, namedBytes2{192, 168, 0, 1}) {
+			t.Errorf("Addr = % x, want c0 a8 00 01", got.Addr)
+		}
+	})
 }

@@ -5,6 +5,7 @@ package iri
 
 import (
 	"bytes"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -179,7 +180,7 @@ func TestEventDiscrimination(t *testing.T) {
 		{"registration", sampleRegistration(), func(e any) bool { _, ok := e.(AMFRegistration); return ok }},
 		{"deregistration", AMFDeregistration{DeregistrationDirection: DirNetworkInitiated, AccessType: AccessBoth}, func(e any) bool { _, ok := e.(AMFDeregistration); return ok }},
 		{"startOfInterception", AMFStartOfInterceptionWithRegisteredUE{RegistrationResult: RegResult3GPPAccess, SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFStartOfInterceptionWithRegisteredUE); return ok }},
-		{"smfStartOfInterception", SMFStartOfInterceptionWithEstablishedPDUSession{SUPI: IMSI("1"), PDUSessionID: 5, PDUSessionType: PDUSessionTypeIPv4, DNN: "internet", RequestType: SMRequestExisting}, func(e any) bool { _, ok := e.(SMFStartOfInterceptionWithEstablishedPDUSession); return ok }},
+		{"smfStartOfInterception", SMFStartOfInterceptionWithEstablishedPDUSession{SUPI: IMSI("1"), PDUSessionID: 5, PDUSessionType: PDUSessionTypeIPv4, UEEndpoint: UEEndpoint(net.ParseIP("10.45.0.2")), DNN: "internet", RequestType: SMRequestExisting}, func(e any) bool { _, ok := e.(SMFStartOfInterceptionWithEstablishedPDUSession); return ok }},
 		{"identifierAssociation", AMFIdentifierAssociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFIdentifierAssociation); return ok }},
 		{"identifierDeassociation", AMFIdentifierDeassociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFIdentifierDeassociation); return ok }},
 	}

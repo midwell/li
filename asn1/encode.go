@@ -38,6 +38,13 @@ func (ctx *Context) EncodeWithOptions(obj interface{}, options string) (data []b
 
 // Main encode function
 func (ctx *Context) encode(value reflect.Value, opts *fieldOptions) (*rawValue, error) {
+	// LOCAL PATCH (omec/li) 7/7: a `choice` on a SEQUENCE OF / SET OF field applies
+	// to its elements. Split it before the interface unwrap below, which is the only
+	// point where the field's declared type is still visible.
+	if value.IsValid() {
+		opts = splitElementChoice(value.Type(), opts)
+	}
+
 	// Skip the interface type
 	switch value.Kind() {
 	case reflect.Interface:
@@ -142,6 +149,14 @@ func (ctx *Context) encodeValue(value reflect.Value, opts *fieldOptions) (raw *r
 				raw.Tag = tagSequence
 				raw.Constructed = true
 				encoder = ctx.encodeSlice
+				// LOCAL PATCH (omec/li) 7/7: SEQUENCE OF CHOICE — each element is
+				// encoded with the CHOICE the field declared.
+				if opts.elemChoice != nil {
+					elemOpts := elementOptions(opts)
+					encoder = func(v reflect.Value) ([]byte, error) {
+						return ctx.encodeSliceWithOptions(v, elemOpts)
+					}
+				}
 			}
 		}
 	}
@@ -300,10 +315,29 @@ func (ctx *Context) encodeStructAsSet(value reflect.Value) ([]byte, error) {
 
 // encodeSlice encodes a slice or array as a sequence of values.
 func (ctx *Context) encodeSlice(value reflect.Value) ([]byte, error) {
+	return ctx.encodeSliceWithOptions(value, &fieldOptions{})
+}
+
+// encodeSliceWithOptions encodes a slice or array as a sequence of values, applying
+// elemOpts to each element.
+//
+// LOCAL PATCH (omec/li) 7/7: upstream's encodeSlice recursed into its elements with
+// an empty options string, so a SEQUENCE OF CHOICE could not be expressed — the
+// CHOICE never reached the elements, and was instead resolved against the slice
+// type itself, which has no registered alternative.
+func (ctx *Context) encodeSliceWithOptions(value reflect.Value, elemOpts *fieldOptions) ([]byte, error) {
 	content := []byte{}
 	for i := 0; i < value.Len(); i++ {
 		itemValue := value.Index(i)
-		childBytes, err := ctx.EncodeWithOptions(itemValue.Interface(), "")
+		raw, err := ctx.encode(itemValue, elemOpts)
+		if err != nil {
+			return nil, err
+		}
+		if raw == nil {
+			// An element cannot be absent: optionality belongs to the sequence.
+			return nil, syntaxError("missing value in sequence of '%s'", value.Type())
+		}
+		childBytes, err := raw.encode()
 		if err != nil {
 			return nil, err
 		}
