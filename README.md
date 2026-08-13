@@ -408,8 +408,69 @@ symmetric with that: it strands an element that is still tasked and now has nowh
 deliver, which is why the standard also guards it — an NE refuses the request while any
 destination is still referenced by a task.
 
-Both are library options rather than configuration keys, so a deployment that wants
-non-default behaviour sets them where the X1 server is constructed.
+##### Setting them
+
+Both are **deployment configuration**, because TS 103 221-1 makes them a matter of prior
+agreement — "It should be agreed in advance as to whether the DeactivateAllTasks request is
+enabled or disabled" — and an agreement differs per deployment. Honouring one is not
+supposed to need a rebuilt image.
+
+| Element | Where | Keys |
+|---|---|---|
+| AMF, SMF | `li:` in `amfcfg.yaml` / `smfcfg.yaml` (chart: `config.<nf>.li`) | `deactivateAllTasks`, `removeAllDestinations` |
+| UPF | `li` in `upf.jsonc` | `deactivate_all_tasks`, `remove_all_destinations` |
+
+Each is a **tri-state**, and leaving it out is a meaningful answer rather than an omission:
+
+| Value | Meaning |
+|---|---|
+| unset | "no agreement in advance" — the specification's own phrase, and its own defaults: bulk deactivation performed, bulk destination removal refused |
+| `false` | the operation is refused, with the error the specification defines for it (5010 / 8020) |
+| `true` | the operation is performed |
+
+A value that will not parse as a boolean is a configuration error and stops the element
+from starting; it is never read as unset, because unset is the permissive answer for bulk
+deactivation and a typo must not widen what an element will do.
+
+Setting `deactivateAllTasks: false` is **visible to your ADMF**: it starts receiving error
+5010 where it previously received an acknowledgement. That is the point of the switch, but
+it is a change to what a peer sees and is worth agreeing before it is deployed.
+
+`RequireResolvableDIDs` is deliberately *not* configuration, though it looks like a switch
+of the same kind. It follows from the role an element performs rather than from an
+agreement: a triggered CC-POI must refuse a content task whose destination it cannot
+resolve, because that refusal is the only way its triggering function learns the
+destination was lost — and an IRI-POI must not, because an ADMF legitimately names DIDs it
+never provisioned. A deployment able to set it could break the LI_T3 contract from a values
+file, so it is not offered.
+
+##### What to set
+
+**On the UPF, disabling both is recommended.** The UPF's X1 peer is not an agency's ADMF
+but this deployment's own SMF, acting as CC Triggering Function — and the triggering side
+of this library (`x1.Requester`) implements `CreateDestination`, `ActivateTask`,
+`ModifyTask`, `DeactivateTask`, `TaskXIDs` and `Keepalive`, and **no bulk message at all**.
+Nothing in the AMF, SMF or UPF sends one. So on a UPF both operations are reachable only by
+a peer presenting a certificate bound to the SMF's identity, they are used by nothing, and
+turning them off cannot break content interception:
+
+```jsonc
+"li": {
+  // …
+  "deactivate_all_tasks": false,
+  "remove_all_destinations": false
+}
+```
+
+**On the AMF and SMF this project recommends neither direction.** Their X1 peer is the
+agency's ADMF, the setting follows the agreement between you and that agency, and this
+project is not party to it. The defaults above are the specification's, and a deployment
+that sets nothing is conformant.
+
+The defaults are not changed per element to match the UPF recommendation: deviating from
+the specification's defaults by role is a conformance argument nobody has made, and it
+would mean an element behaving differently from the standard with no configuration
+present.
 
 #### What happens after a restart, and what the ADMF does about it
 
@@ -655,6 +716,8 @@ The blocks above are what LI reads on disk; deployment tooling sets them for you
 | `admfUrl` | `admf_url` | ADMF X1 endpoint for NE-initiated fault reports | optional |
 | `admfId` | `admf_id` | Responsible ADMF identifier — on the AMF/SMF it also restricts who may task the NF (recommended) | optional |
 | `keepaliveTimeout` | — | Purge-all-tasking window (Go duration, e.g. `30s`). The fail-safe is **off unless set**; leave it unset until you know the ADMF's keepalive cadence, since a window shorter than that purges live warrants | AMF/SMF: optional |
+| `deactivateAllTasks` | `deactivate_all_tasks` | Whether this element performs a bulk deactivation of all its tasking. Boolean; **unset means "no agreement in advance"**, which is the specification's default of *enabled*. Recommended `false` on the UPF — see *[Bulk deactivation is enabled by default](#bulk-deactivation-is-enabled-by-default)* | optional |
+| `removeAllDestinations` | `remove_all_destinations` | Whether this element performs a bulk removal of all its destinations. Boolean; unset is the specification's default of *disabled* | optional |
 | — | `x3_sockaddr` | Datapath X3 tee socket (match `LI_X3_SOCKET_PATH`) | UPF: yes |
 
 ### Certificate requirements

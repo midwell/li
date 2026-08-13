@@ -130,6 +130,104 @@ func TestBulkOperationsRefuseWithTheSpecifiedText(t *testing.T) {
 	}
 }
 
+// TestBulkOptionsNoAgreementLeavesTheSpecificationsDefaults is the case a deployment that
+// configures nothing takes, and the one the helper exists to keep correct.
+//
+// Both directions are asserted against a server actually built from the helper's output,
+// not against the length of the slice: "returns no options" is only interesting because of
+// what the resulting element does, and an element is what an ADMF meets.
+func TestBulkOptionsNoAgreementLeavesTheSpecificationsDefaults(t *testing.T) {
+	opts := BulkOptions(nil, nil)
+	if len(opts) != 0 {
+		t.Errorf("no agreement in advance yielded %d option(s); it must yield none, since the "+
+			"options express deviations from the defaults this package holds", len(opts))
+	}
+
+	st := store.New()
+	st.Activate(types.InterceptTask{
+		XID:      testXID,
+		Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
+		Products: []types.ProductType{types.ProductIRI},
+	})
+	srv := NewServer(st, "neID", opts...)
+	srv.now = func() time.Time { return zeroTailInstant }
+
+	if _, err := srv.Process(request("DeactivateAllTasksRequest", ""), admfPeer(t)); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if st.Len() != 0 {
+		t.Error("bulk deactivation is enabled with no agreement in advance and did not take effect")
+	}
+
+	resp, err := srv.Process(request("RemoveAllDestinationsRequest", ""), admfPeer(t))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if resp.Messages[0].ErrorInformation == nil {
+		t.Error("bulk destination removal is disabled with no agreement in advance and was performed")
+	}
+}
+
+// TestBulkOptionsCarryTheNonDefaultDirections asserts the two deviations reach the element
+// the way a network function will send them: as a pair of configured values rather than as
+// a hand-picked option.
+//
+// The inversion between the two is the specification's, and it is the part of this helper a
+// mistake would hide: a value of false means "disabled" for one and is the default for the
+// other, so a condition written the same way twice is wrong once.
+func TestBulkOptionsCarryTheNonDefaultDirections(t *testing.T) {
+	no, yes := false, true
+
+	t.Run("bulk deactivation disabled", func(t *testing.T) {
+		st := store.New()
+		st.Activate(types.InterceptTask{
+			XID:      testXID,
+			Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
+			Products: []types.ProductType{types.ProductIRI},
+		})
+		srv := NewServer(st, "neID", BulkOptions(&no, nil)...)
+		srv.now = func() time.Time { return zeroTailInstant }
+
+		resp, err := srv.Process(request("DeactivateAllTasksRequest", ""), admfPeer(t))
+		if err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		m := resp.Messages[0]
+		if m.ErrorInformation == nil {
+			t.Fatalf("want a refusal, got %+v", m)
+		}
+		if m.ErrorInformation.ErrorCode != errCodeDeactAllOff {
+			t.Errorf("code = %d, want %d", m.ErrorInformation.ErrorCode, errCodeDeactAllOff)
+		}
+		if want := "DeactivateAllTasks message is not enabled"; m.ErrorInformation.ErrorDescription != want {
+			t.Errorf("description = %q, want the specification's own %q",
+				m.ErrorInformation.ErrorDescription, want)
+		}
+		if st.Len() != 1 {
+			t.Error("tasking was removed despite the refusal")
+		}
+	})
+
+	t.Run("bulk destination removal enabled", func(t *testing.T) {
+		srv := NewServer(store.New(), "neID", BulkOptions(nil, &yes)...)
+		srv.now = func() time.Time { return zeroTailInstant }
+		srv.destinations[testDID] = heldDestination{
+			DeliveryType: deliveryX2Only, Address: "10.0.60.122:42069",
+		}
+
+		resp, err := srv.Process(request("RemoveAllDestinationsRequest", ""), admfPeer(t))
+		if err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if e := resp.Messages[0].ErrorInformation; e != nil {
+			t.Fatalf("want the removal performed, got error %d: %s", e.ErrorCode, e.ErrorDescription)
+		}
+		if _, held := srv.destinationByDID(testDID); held {
+			t.Error("the destination survived an accepted removal")
+		}
+	})
+}
+
 // TestRemoveAllDestinationsRefusesWhileReferenced covers the specification's guard: "an NE
 // shall respond with an error if the ADMF sends a RemoveAllDestinations request while any of
 // the Destinations are referenced by Tasks."

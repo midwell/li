@@ -304,6 +304,30 @@ func WithRemoveAllDestinations() Option {
 	return func(s *Server) { s.removeAllDestinationsEnabled = true }
 }
 
+// BulkOptions turns a deployment's expressed policy on the two bulk operations into the
+// options that carry it, so a network function reads its configuration and passes the
+// result rather than deciding for itself what an unset value means.
+//
+// A nil value is "no agreement in advance" — the specification's own phrase for the state
+// its defaults are stated against — and yields no option, leaving the default this package
+// holds. A non-nil value that already matches the default likewise yields no option, since
+// the options express deviations.
+//
+// It exists because three network functions would otherwise each write the same pair of
+// conditions, one of which is inverted with respect to the other. A single inverted
+// condition in one of them changes what one element does about a destructive operation,
+// which is the least likely difference to be noticed and the worst to have.
+func BulkOptions(deactivateAllTasks, removeAllDestinations *bool) []Option {
+	var opts []Option
+	if deactivateAllTasks != nil && !*deactivateAllTasks {
+		opts = append(opts, WithoutDeactivateAllTasks())
+	}
+	if removeAllDestinations != nil && *removeAllDestinations {
+		opts = append(opts, WithRemoveAllDestinations())
+	}
+	return opts
+}
+
 // RequireResolvableDIDs makes the server refuse a task that requests content
 // delivery but names destinations it does not know.
 //
