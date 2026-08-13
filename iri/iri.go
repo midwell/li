@@ -442,11 +442,27 @@ func EncodeXIRI(ctx *asn1.Context, event any) ([]byte, error) {
 // address, which is never true — and an agency cannot tell that claim apart from
 // one we actually meant. Refusing here rather than in each caller keeps the rule
 // on the single path both the SMF's record builders take.
+// Both records that carry ueEndpoint are checked, because the difference between
+// them is only which shape counts as wrong. In the start-of-interception record
+// the field is mandatory, so absent and empty are both wrong. In the
+// establishment record it is OPTIONAL, so absent is correct and only
+// present-and-empty is wrong — a nil slice is omitted, a non-nil empty one is
+// emitted as a present empty SEQUENCE.
 func validateEvent(event any) error {
-	if soi, ok := event.(SMFStartOfInterceptionWithEstablishedPDUSession); ok && len(soi.UEEndpoint) == 0 {
-		return fmt.Errorf(
-			"iri: SMFStartOfInterceptionWithEstablishedPDUSession has an empty uEEndpoint; " +
-				"the field is mandatory and an empty list asserts the session has no endpoint address")
+	switch rec := event.(type) {
+	case SMFStartOfInterceptionWithEstablishedPDUSession:
+		if len(rec.UEEndpoint) == 0 {
+			return fmt.Errorf(
+				"iri: SMFStartOfInterceptionWithEstablishedPDUSession has an empty uEEndpoint; " +
+					"the field is mandatory and an empty list asserts the session has no endpoint address")
+		}
+	case SMFPDUSessionEstablishment:
+		if rec.UEEndpoint != nil && len(rec.UEEndpoint) == 0 {
+			return fmt.Errorf(
+				"iri: SMFPDUSessionEstablishment has a present but empty uEEndpoint; " +
+					"the field is optional, so leave it nil to omit it — an empty list " +
+					"asserts the session has no endpoint address")
+		}
 	}
 	return nil
 }

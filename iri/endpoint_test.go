@@ -252,3 +252,45 @@ func TestEndpointIsNotTheTunnelEndpoint(t *testing.T) {
 		t.Error("uEEndpoint and gTPTunnelID carry the same address; they are different endpoints")
 	}
 }
+
+// TestEstablishmentRefusesPresentButEmptyEndpoint closes the other half of the
+// no-empty-list rule. uEEndpoint is OPTIONAL on this record, so a nil slice is
+// correct and simply omits the field — but a non-nil empty slice is not omitted
+// (the codec's isEmpty compares against the zero value, and an empty slice is
+// not nil), so it would be emitted as a present empty SEQUENCE: schema-valid,
+// unrejectable downstream, and asserting the session has no endpoint address.
+//
+// No caller produces that shape today; UEEndpoint returns nil or one entry. The
+// guard is here because the rule was deliberately placed on the encode path both
+// record builders share, and enforcing it for only one of the two records leaves
+// it one careless edit from being false again.
+func TestEstablishmentRefusesPresentButEmptyEndpoint(t *testing.T) {
+	ctx := NewContext()
+	base := SMFPDUSessionEstablishment{
+		SUPI:           IMSI("262019876543210"),
+		PDUSessionID:   5,
+		GTPTunnelID:    FTEID{TEID: 1, IPv4Address: []byte{10, 20, 30, 40}},
+		PDUSessionType: PDUSessionTypeIPv4,
+		DNN:            DNN("internet"),
+		RequestType:    SMRequestInitial,
+	}
+
+	// nil: the field is optional and absent, which is correct.
+	if _, err := EncodeXIRI(ctx, base); err != nil {
+		t.Fatalf("absent (nil) endpoint must still encode: %v", err)
+	}
+
+	// present but empty: refused.
+	empty := base
+	empty.UEEndpoint = []any{}
+	if _, err := EncodeXIRI(ctx, empty); err == nil {
+		t.Error("encoded an establishment record with a present but empty uEEndpoint; want a refusal")
+	}
+
+	// populated: encodes.
+	full := base
+	full.UEEndpoint = UEEndpoint(net.ParseIP("10.45.0.2"))
+	if _, err := EncodeXIRI(ctx, full); err != nil {
+		t.Errorf("populated endpoint must encode: %v", err)
+	}
+}
