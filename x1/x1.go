@@ -231,6 +231,47 @@ func CanApply(fn func(types.InterceptTask) error) Option {
 // knows whether it is currently losing copies.
 type FaultProbe func() *X1Error
 
+// NEFault is the fault a probe reports for one of the conditions in report.go.
+//
+// The condition leads the description exactly as it does in a pushed report, so an ADMF
+// reads the same token whichever mechanism carried it and a probe cannot invent a
+// vocabulary of its own. detail says how much is wrong: it must name no target, warrant or
+// destination, since the element's own status carries none of those and a probe written by
+// whoever holds the knowledge is where that rule is easiest to break.
+//
+// The error code is the registry's generic one. TS 103 221-1's codes name failures of a
+// *request*, and none of them names a condition of the element, so what an ADMF can act on
+// here is the condition rather than a number picked to look specific.
+func NEFault(condition, detail string) *X1Error {
+	return &X1Error{
+		ErrorCode:        errCodeGeneric,
+		ErrorDescription: condition + ": " + detail,
+	}
+}
+
+// MDFUnreachableProbe returns the probe every POI registers: whether the mediation functions
+// this element delivers to can be reached right now.
+//
+// count answers how many destinations are currently unreachable and how many are in use at
+// all — x2x3.Pool.Unreachable is that function, and a POI keeping its own clients supplies
+// the equivalent. It is called on the X1 request goroutine, so it must not perform I/O
+// (see FaultProbe).
+//
+// It takes counts rather than the destinations themselves so that the answer *cannot* name
+// one. An element's own status says how much is wrong, never whose product is affected, and
+// making that structural is cheaper than remembering it at three call sites.
+func MDFUnreachableProbe(count func() (unreachable, inUse int)) FaultProbe {
+	return func() *X1Error {
+		unreachable, inUse := count()
+		if unreachable == 0 {
+			return nil
+		}
+
+		return NEFault(NEIssueMDFUnreachable, fmt.Sprintf(
+			"%d of %d delivery destination(s) unreachable", unreachable, inUse))
+	}
+}
+
 // WithFaultProbes registers conditions the element can observe about itself, for the status a
 // provisioning function can ask for.
 //

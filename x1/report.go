@@ -23,6 +23,49 @@ const reportThrottle = 30 * time.Second
 // TS 103 221-1 typeOfNeIssueMessage values for the LI-plane faults a POI reports.
 // These are NE-level (no target/warrant identifier). The exact XSD enumeration
 // should be confirmed against a conformant ADMF during in-cluster e2e (group 7).
+//
+// Each condition is carried by exactly one of this element's two mechanisms, and which
+// one is decided by the condition's nature rather than by convenience.
+//
+// A *state* can be re-observed, so a fault probe answers it whenever a provisioning
+// function asks for the element's status (see WithFaultProbes). An *event* happened once
+// and cannot be observed again, so it is pushed when it happens (Notify) and is never
+// accumulated into the status answer: accumulating events needs either an expiry, which
+// discards real faults on a timer nobody can justify, or none at all, which makes an
+// element permanently faulty. Both end with the answer no longer being read.
+//
+//	mdfUnreachable      state  probe  the mediation function is reachable or it is not
+//	x3EgressDown        state  probe  the datapath egress socket is up or it is not
+//	x3PuntLost          event  push   a copy the datapath could not hand over
+//	x3FramingLost       event  push   a copy this element could not frame in time
+//	x3DeliveryLost      event  push   a copy the delivery queue had no room for
+//	contentUntasked     event  push   a copy that arrived under no warrant
+//	x3TagInvalid        event  push   a copy that arrived uncorrelatable
+//	contentTaskOverlap  event  push   a copy delivered under one of several warrants
+//	taskingPurged       event  push   tasking the fail-safe removed, once
+//	reconcileFailed     event  push   a restart this element could not reconcile
+//	x1AuthFailed        event  push   a provisioning attempt that was refused
+//	taskingAbsent       state  push   observable, deliberately not a probe (below)
+//	x1ListenFailed      state  push   observable, but unaskable (below)
+//	invalidConfig       state  push   observable, but unaskable (below)
+//
+// The last three are re-observable and still do not belong in a status answer, which is
+// the part of this that cannot be recovered from the code:
+//
+//   - taskingAbsent. Holding no tasking is checkable at any moment and is not a fault.
+//     Most elements hold none most of the time, so reporting it would make "faulty" the
+//     normal state and the field worthless. It is pushed once at startup, where it means
+//     something else entirely — this element has *lost* the tasking it held — which is a
+//     transition rather than a state.
+//   - x1ListenFailed. If the X1 listener did not come up there is nobody to ask, so a
+//     probe for it could never be consulted. It travels the reporting path, which is a
+//     different socket, and that is the only mechanism that can carry it.
+//   - invalidConfig. The same shape: an element that refuses its configuration never
+//     reaches the point of answering questions about itself.
+//
+// Adding a condition means answering this question first, and getting it wrong in the
+// probe direction is what withdrew the first probe this package shipped — it reasoned
+// about delivery it could not see, and every healthy element answered "Faults".
 const (
 	NEIssueX1ListenFailed = "x1ListenFailed"
 	NEIssueX3EgressDown   = "x3EgressDown"

@@ -5,6 +5,7 @@ package x2x3
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -130,6 +131,12 @@ func TestSendMarshalError(t *testing.T) {
 	if err := c.Send(&PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormatGTPU}); err == nil {
 		t.Error("Send accepted an invalid PDU")
 	}
+	// And a PDU this element could not frame says nothing about the destination: no attempt
+	// was made. Reporting the MDF unreachable for it would make an element faulty over a
+	// fault of its own that the ADMF cannot act on.
+	if c.Unreachable() {
+		t.Error("an unframeable PDU left the destination reported as unreachable")
+	}
 }
 
 // TestSendBatchReportsMarshalFailure: a PDU that cannot be framed is intercept
@@ -177,5 +184,100 @@ func TestSendBatchReportsMarshalFailure(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatalf("timeout waiting for framable PDU %d of 2", i+1)
 		}
+	}
+}
+
+// TestUnreachableFollowsTheLastAttempt covers the state a POI's fault probe reports, on
+// both edges — which are not symmetric in how they are noticed. Stuck off means an element
+// that cannot deliver answers healthy, which is invisible and the reason the status answer
+// exists at all. Stuck on means every element reports itself faulty, which discredits the
+// field immediately.
+//
+// The destination is unreachable first and reachable second, so each answer follows an
+// attempt whose outcome the test knows. Nothing clears the state explicitly: a delivery
+// that succeeds is the only thing that can, and that is the property being pinned.
+func TestUnreachableFollowsTheLastAttempt(t *testing.T) {
+	// A free address with nothing on it: taking the listener away again is how the MDF is
+	// "not running yet" for the first half of this test.
+	free, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := free.Addr().String()
+	if closeErr := free.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	client := NewClient(addr, &tls.Config{InsecureSkipVerify: true})
+	defer client.Close()
+
+	if client.Unreachable() {
+		t.Error("a client that has attempted no delivery reports its destination unreachable; " +
+			"an element with nothing to send has not found the MDF unreachable, it has not looked")
+	}
+
+	pdu := &PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128, Payload: []byte("xiri-payload")}
+	if sendErr := client.Send(pdu); sendErr == nil {
+		t.Fatal("Send succeeded with nothing listening")
+	}
+	if !client.Unreachable() {
+		t.Error("a failed delivery left the destination reported as reachable; an element " +
+			"losing product would answer that nothing is wrong")
+	}
+
+	ln, err := tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{selfSignedServer(t)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				for {
+					if _, readErr := readPDU(c); readErr != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	if sendErr := client.Send(pdu); sendErr != nil {
+		t.Fatalf("Send to a listening MDF: %v", sendErr)
+	}
+	if client.Unreachable() {
+		t.Error("the destination is still reported unreachable after a delivered PDU; nothing " +
+			"else clears this, so the element would stay faulty for the life of the process")
+	}
+}
+
+// TestUnreachableDoesNotWaitForADeliveryInFlight is the rule a probe cannot break by
+// accident: it answers from state, and never behind the lock a dial is held under.
+//
+// A probe runs on the X1 request goroutine. One that waited for a delivery in progress
+// would hold a provisioning function's answer for as long as the dial timeout, and with a
+// short enough timeout at the ADMF a working element would look dead while it was merely
+// asking itself a slow question.
+func TestUnreachableDoesNotWaitForADeliveryInFlight(t *testing.T) {
+	c := NewClient("198.51.100.1:1", &tls.Config{})
+
+	// Stands in for the dial or write a delivery is inside: both hold this, and a dial is
+	// bounded by ten seconds, not by anything the ADMF would wait for.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	answered := make(chan bool, 1)
+	go func() { answered <- c.Unreachable() }()
+
+	select {
+	case <-answered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Unreachable blocked on a delivery in flight; a fault probe consulting it would " +
+			"hold up the answer to a provisioning function")
 	}
 }

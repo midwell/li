@@ -13,6 +13,17 @@ type Sender interface {
 	Close() error
 }
 
+// Reachability is implemented by a Sender that knows whether it can currently reach its
+// destination — from what its last delivery attempt established, never by dialling.
+// *Client and *AsyncSender both do.
+//
+// It is separate from Sender because a POI asks it from a fault probe rather than from the
+// delivery path, and because a test double delivering into a slice has no destination to
+// have an opinion about.
+type Reachability interface {
+	Unreachable() bool
+}
+
 // AsyncSender decouples X2/X3 delivery from the caller's goroutine. Send enqueues
 // the PDU onto a bounded buffer drained by a single background worker and returns
 // immediately, so a slow or unreachable MDF never blocks a signalling or
@@ -119,6 +130,21 @@ func (a *AsyncSender) Send(pdu *PDU) error {
 		}
 	}
 	return nil
+}
+
+// Unreachable reports whether the sender behind the queue currently cannot reach its
+// destination.
+//
+// The answer belongs to the wrapped sender: Send here only enqueues, and enqueueing can
+// establish nothing about a destination. A sender that cannot answer — a test double — is
+// taken as reachable, because inventing a fault is the failure that gets an element's
+// status answer ignored altogether.
+func (a *AsyncSender) Unreachable() bool {
+	if inner, ok := a.inner.(Reachability); ok {
+		return inner.Unreachable()
+	}
+
+	return false
 }
 
 // Close stops accepting new PDUs, drains those already queued, waits for the

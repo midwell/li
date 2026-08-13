@@ -142,3 +142,66 @@ func TestTaskFaultsStayOutOfTheElementStatus(t *testing.T) {
 		t.Errorf("taskStatus should carry an empty fault list\ngot:\n%s", out)
 	}
 }
+
+// TestMDFUnreachableProbeAnswersBothEdges covers the probe every POI registers, at the level
+// this package is responsible for: what the element *says* when its shipper reports a
+// destination it cannot reach.
+//
+// All three assertions matter and two of them are about the probe staying quiet. A probe
+// stuck on makes every element report itself faulty — noticed at once, and it discredits the
+// field — and a probe stuck off leaves an element that has been losing product for hours
+// answering that nothing is wrong, which is invisible and the reason this answer exists.
+func TestMDFUnreachableProbeAnswersBothEdges(t *testing.T) {
+	unreachable := 0
+	srv := NewServer(store.New(), "neID", WithFaultProbes(MDFUnreachableProbe(
+		func() (int, int) { return unreachable, 3 })))
+	srv.now = func() time.Time { return zeroTailInstant }
+
+	if got := statusOf(t, srv); !strings.Contains(got, "<ns1:neStatus>OK</ns1:neStatus>") {
+		t.Errorf("with every destination reachable, want OK\ngot:\n%s", got)
+	}
+
+	unreachable = 2
+	got := statusOf(t, srv)
+	if !strings.Contains(got, "<ns1:neStatus>Faults</ns1:neStatus>") {
+		t.Errorf("with delivery failing, want Faults\ngot:\n%s", got)
+	}
+	// The condition leads the description because it is the only field of this answer where
+	// it may appear, and an ADMF has to be able to tell one fault from another.
+	if !strings.Contains(got, NEIssueMDFUnreachable) {
+		t.Errorf("the answer does not name the condition\ngot:\n%s", got)
+	}
+	// How much is wrong, so an ADMF can tell one failing destination from all of them.
+	if !strings.Contains(got, "2 of 3") {
+		t.Errorf("the answer does not say how much is wrong\ngot:\n%s", got)
+	}
+
+	// Nothing clears it: the shipper stops reporting the condition and the next answer
+	// reflects that.
+	unreachable = 0
+	if got := statusOf(t, srv); !strings.Contains(got, "<ns1:neStatus>OK</ns1:neStatus>") {
+		t.Errorf("once delivery recovered, want OK with nothing having cleared the fault\ngot:\n%s", got)
+	}
+}
+
+// TestNEFaultCarriesNoIdentity keeps the NE-level answer at NE level.
+//
+// The probe is handed counts and never the destinations themselves, so an address cannot
+// reach the description by accident — this asserts the property rather than trusting the
+// signature, because it is the one an author adding a probe is most likely to break while
+// trying to be helpful.
+func TestNEFaultCarriesNoIdentity(t *testing.T) {
+	fault := MDFUnreachableProbe(func() (int, int) { return 1, 2 })()
+	if fault == nil {
+		t.Fatal("a destination that cannot be reached reported no fault")
+	}
+	for _, identity := range []string{"10.0.60.122", "42069", string(testXID), "262019876543210"} {
+		if strings.Contains(fault.ErrorDescription, identity) {
+			t.Errorf("the fault names %q; an element's own status says how much is wrong, never whose",
+				identity)
+		}
+	}
+	if fault.ErrorCode == 0 {
+		t.Error("the fault carries no error code, which the schema makes mandatory in an unresolvedFault")
+	}
+}

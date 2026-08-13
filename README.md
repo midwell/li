@@ -115,6 +115,7 @@ more expensive than one read here.
 | | An `X2andX3` destination serves both interfaces | One destination, two endpoints |
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
 | | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
+| | The element answers for the conditions it can currently observe | `GetNEStatus` reports `mdfUnreachable` while delivery is failing and `x3EgressDown` while the datapath egress is down, and stops reporting each when it stops holding — see *Asking an element how it is* below |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
 | | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the ninth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction, PDR; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |
 | | Several criteria on one task, matched as alternatives | Traffic matching any of them is intercepted, and ships **once** however many matched |
@@ -437,11 +438,76 @@ reports the fault conditions that hold at the moment it is asked, computed from 
 element can observe rather than from a history — so nothing needs clearing and no answer
 can go stale. Lost tasking is an event, and events travel by the push in step 1. The two
 mechanisms answer different questions, "what just went wrong" and "what is wrong now", and
-an operator should expect a restarted, re-provisioned element to answer `OK`.
+an operator should expect a restarted, re-provisioned element to answer `OK` — see *Asking an
+element how it is* below for what it answers when something actually is wrong.
 
 The UPF is the exception to all of this: its triggering function is the SMF, which is still
 running, so it is re-provisioned and re-triggered with no operator action. A UPF restart is
 invisible to the ADMF.
+
+#### Asking an element how it is
+
+`GetNEStatus` answers `OK` or `Faults`, and `Faults` lists the conditions that hold at the
+moment the question is asked. A healthy element answers:
+
+```xml
+<ns1:neStatusDetails>
+  <ns1:neStatus>OK</ns1:neStatus>
+  <ns1:listOfFaults/>
+</ns1:neStatusDetails>
+```
+
+and one that cannot currently deliver answers:
+
+```xml
+<ns1:neStatusDetails>
+  <ns1:neStatus>Faults</ns1:neStatus>
+  <ns1:listOfFaults>
+    <ns1:unresolvedFault>
+      <ns1:errorCode>1000</ns1:errorCode>
+      <ns1:errorDescription>mdfUnreachable: 1 of 2 delivery destination(s) unreachable</ns1:errorDescription>
+    </ns1:unresolvedFault>
+  </ns1:listOfFaults>
+</ns1:neStatusDetails>
+```
+
+Two conditions can appear, each answered by the part of the element that can see it:
+
+| Condition | Means | Observed by |
+|---|---|---|
+| `mdfUnreachable` | delivery to one or more of this element's mediation functions failed on the last attempt and has not since succeeded | the X2/X3 delivery clients — every POI has them |
+| `x3EgressDown` | the datapath's content egress socket is not connected, so duplicated packets are discarded before this element ever sees them | the UPF's content shipper, the only party that can see its own egress |
+
+The description says how much is wrong — "1 of 2" — and never which destination, nor any
+target or warrant: an element's own status is NE-level, and TS 103 221-1 keeps it separate
+from the faults reported per XID and per DID. The error code is the registry's generic 1000,
+because its codes name failures of a *request* and none of them names a condition of the
+element; what an ADMF acts on here is the condition.
+
+Nothing clears a fault. The answer is computed per request from what the element can observe,
+so a condition that stops holding stops being reported and one that starts holding appears in
+the next answer, with no message having been exchanged in between. There is one consequence
+worth knowing before reading an `OK`: reachability is what the last delivery attempt
+established, never a dial made to answer the question, so an element that has had nothing to
+send answers `OK` because it has not looked. An element that is producing product answers
+from real attempts.
+
+**Why a pushed report can name something the status answer does not.** The push reporting is
+unchanged by any of this, and the two mechanisms carry different kinds of condition:
+
+- a **state** can be re-observed, so it belongs in the status answer — the mediation function
+  is reachable or it is not.
+- an **event** happened once and cannot be observed again — a copy dropped at the egress,
+  a provisioning attempt refused, tasking purged by the fail-safe — so it is reported when it
+  happens over `ReportNEIssue`, and never accumulated into the status answer.
+
+So an ADMF that receives `x3PuntLost` and then asks the element for its status is told `OK`,
+and both answers are true: copies were lost a moment ago, and nothing is wrong now.
+Accumulating events into the answer would need either an expiry, which discards real faults on
+a timer nobody can justify, or none at all, which leaves an element faulty forever after one
+bad second — and either way the field stops being read. The full classification, every
+condition and which mechanism carries it, is in `x1/report.go` beside the constants, which is
+where somebody adding one will be looking.
 
 ## Enabling LI
 

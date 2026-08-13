@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +28,12 @@ type Client struct {
 
 	mu   sync.Mutex
 	conn net.Conn
+
+	// unreachable is what the most recent delivery attempt established about this
+	// destination, kept outside mu because a fault probe reads it on the X1 request
+	// goroutine: mu is held across a dial and a write, and an answer to a provisioning
+	// function must not wait for either. See Unreachable.
+	unreachable atomic.Bool
 }
 
 // NewClient returns a delivery client for the MDF at addr ("host:port").
@@ -46,10 +53,35 @@ func (c *Client) Send(pdu *PDU) error {
 	return c.sendBytes(b)
 }
 
-// sendBytes writes already-marshalled PDU bytes, reconnecting once if the MDF has
-// dropped an idle connection. Shared by Send and SendBatch so both get the same
-// reconnect behaviour — a batch is only a longer write.
+// sendBytes writes already-marshalled PDU bytes and records what the attempt established
+// about the destination. One place records it, so the answer Unreachable gives cannot
+// disagree with the outcome the caller saw.
 func (c *Client) sendBytes(b []byte) error {
+	err := c.deliver(b)
+	c.unreachable.Store(err != nil)
+
+	return err
+}
+
+// Unreachable reports whether the most recent delivery attempt to this destination failed
+// and none has since succeeded.
+//
+// It answers from what that attempt already established and dials nothing. A POI consults
+// it from a fault probe, which runs on the X1 request goroutine: a probe that performed I/O
+// would hold up a provisioning function's answer and — with a short enough timeout at the
+// other end — could make a working element look dead while it asked itself a slow question.
+//
+// It is false before anything has been sent, deliberately. An element with nothing to
+// deliver has not found its mediation function unreachable; it has not looked. So a
+// destination that fails while idle is reported at the next send and not before.
+func (c *Client) Unreachable() bool {
+	return c.unreachable.Load()
+}
+
+// deliver writes already-marshalled PDU bytes, reconnecting once if the MDF has
+// dropped an idle connection. Reached from both Send and SendBatch through sendBytes, so
+// both get the same reconnect behaviour — a batch is only a longer write.
+func (c *Client) deliver(b []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

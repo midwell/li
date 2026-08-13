@@ -57,6 +57,33 @@ func (p *Pool) For(addr string) Sender {
 	return s
 }
 
+// Unreachable reports how many of this element's delivery destinations cannot currently be
+// reached, and how many it holds a client for at all.
+//
+// Both numbers, because an element may deliver to several agencies and "one of three" and
+// "three of three" call for different responses from a provisioning function. Neither names
+// an address: which destination is failing belongs to that destination's own status, not to
+// the element's, and a probe is the one place that distinction is easy to lose.
+//
+// A destination nothing has been sent to counts as reachable — see Client.Unreachable — so
+// an element that has delivered nothing reports nothing.
+//
+// It performs no I/O and answers from state each client already holds, so it is safe to call
+// from a fault probe on the X1 request goroutine.
+func (p *Pool) Unreachable() (unreachable, inUse int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, s := range p.senders {
+		inUse++
+		if r, ok := s.(Reachability); ok && r.Unreachable() {
+			unreachable++
+		}
+	}
+
+	return unreachable, inUse
+}
+
 // Close drains and closes every client. It returns the first error, having closed the
 // rest regardless: a half-closed pool would leave delivery workers running with nothing
 // left to deliver to.
