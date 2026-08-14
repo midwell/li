@@ -117,6 +117,13 @@ cannot be mistaken for clearance: `pCCRules`, `pCCRuleIDs`, `oldPDUSessionID`,
 field in a network function's context that was not followed through to the point of
 interception.
 
+**The 26 `MET` and 4 `BLOCKED` entries are held in a separate list from the rest.**
+`asn1_drift_test.go` keeps `declaredAbsent` for fields this project need not populate and
+`knownConditionalDefects` for the 30 it should and does not, and pins that count — so adding
+another is a deliberate act rather than one more line among fields that are fine. A field
+its payload table marks **M** is rejected from the disposition list outright: a mandatory
+field is either populated or a known defect, never a disposition.
+
 The 26 `N/A` verdicts rest on features this deployment does not implement: EPS/5GS
 interworking over N26 and the SGW/PGW role, non-3GPP access through an N3IWF, TNGF or TWIF,
 satellite backhaul, multi-USIM, and non-public networks. Each was checked against the code

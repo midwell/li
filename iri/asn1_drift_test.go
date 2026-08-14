@@ -32,15 +32,22 @@ import (
 //     module — which has happened, and is recorded in CONFORMANCE.md.
 //
 // The judgement therefore stays with the reader: this test enumerates, the
-// payload tables decide, and declaredAbsent records what was decided.
+// payload tables decide, and two maps record what was decided —
+// declaredAbsent for fields that need not be populated, and
+// knownConditionalDefects for fields that should be and are not.
 
 const asn1ModulePath = "testdata/asn1/TS33128Payloads.asn"
 
 // declaredAbsent lists, per record, the module-defined fields this package does
-// not model, each with the reason. The rule is the same anti-rot rule the X1
-// audit uses: a field missing from this map fails the test, AND a field listed
-// here that has since been modelled also fails, so the list cannot quietly rot
-// into a description of a state that no longer holds.
+// not model *and need not*, each with the reason. Fields it SHOULD populate and
+// does not live in knownConditionalDefects instead: mixing the two would let a
+// real omission be silenced by the same edit that records an inapplicable field.
+// A field whose payload table marks it M is rejected from this map outright.
+//
+// The anti-rot rule is the X1 audit's: a field in neither map fails the test, AND
+// an entry that has since been modelled — or that the module no longer defines —
+// also fails, so neither list can rot into a description of a state that has moved
+// on.
 //
 // Every entry carries the field's M/C/O marker, the payload table it came from,
 // and a verdict on whether this project meets the condition:
@@ -61,32 +68,24 @@ var declaredAbsent = map[string]map[string]string{
 		"cause":                        "C, table 6.2.2.2.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"location":                     "C, table 6.2.2.2.3-1: DEFERRED: li/iri.Location models only locationInfo.currentLocation; the userLocation subtree the table asks for is a documented deferral, so the reportable content does not exist yet",
 		"reRegRequiredIndicator":       "C, table 6.2.2.2.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUCI":                         "C, table 6.2.2.2.3-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 		"switchOffIndicator":           "C, table 6.2.2.2.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"unavailabilityPeriodDuration": "C, table 6.2.2.2.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 	},
 	"AMFIdentifierAssociation": {
 		"additionalUserIdentifiers": "C, table 6.2.2.2.7-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"fiveGSTAIList":             "C, table 6.2.2.2.7-1: MET (finding): the AMF holds the UE's TAI list",
-		"sUCI":                      "C, table 6.2.2.2.7-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFIdentifierDeassociation": {
 		"additionalUserIdentifiers": "C, table 6.2.2.2.7-2: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"gPSI":                      "C, table 6.2.2.2.7-2: MET (finding): the AMF holds the GPSI and reports it in every other record it emits",
 		"location":                  "C, table 6.2.2.2.7-2: DEFERRED: li/iri.Location models only locationInfo.currentLocation; the userLocation subtree the table asks for is a documented deferral, so the reportable content does not exist yet",
-		"pEI":                       "C, table 6.2.2.2.7-2: MET (finding): the AMF holds the PEI and reports it in every other record it emits",
-		"sUCI":                      "C, table 6.2.2.2.7-2: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFLocationUpdate": {
 		"additionalUserIdentifiers":     "C, table 6.2.2.2.4-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"deprecatedOldGUTI":             "C, table 6.2.2.2.4-1: DEPRECATED: the specification records it as no longer used",
 		"deprecatedSMSOverNASIndicator": "C, table 6.2.2.2.4-1: DEPRECATED: the specification records it as no longer used",
-		"sUCI":                          "C, table 6.2.2.2.4-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 		"uEAreaIndication":              "C, table 6.2.2.2.4-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 	},
 	"AMFPositioningInfoTransfer": {
 		"additionalUserIdentifiers": "C, table 6.2.2.2.8-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUCI":                      "C, table 6.2.2.2.8-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFRANHandoverRequest": {
 		"locationReportingRequestType": "C, table 6.2.2.2.9.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
@@ -100,7 +99,6 @@ var declaredAbsent = map[string]map[string]string{
 		"equivalentPLMNList":              "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"establishmentCauseNon3GPPAccess": "C, table 6.2.2.2.2-1: N/A: requires non-3GPP access (N3IWF/TNGF/TWIF), which this deployment does not provide",
 		"fiveGMMCapability":               "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"fiveGSTAIList":                   "C, table 6.2.2.2.2-1: MET (finding): the AMF holds the UE's TAI list",
 		"fiveGSUpdateType":                "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"initialRANUEContextSetup":        "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"location":                        "C, table 6.2.2.2.2-1: DEFERRED: li/iri.Location models only locationInfo.currentLocation; the userLocation subtree the table asks for is a documented deferral, so the reportable content does not exist yet",
@@ -112,11 +110,9 @@ var declaredAbsent = map[string]map[string]string{
 		"nonIMEISVPEI":                    "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"oldGUTI":                         "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"pagingRestrictionIndicator":      "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"rATType":                         "C, table 6.2.2.2.2-1: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
 		"rRCEstablishmentCause":           "C, table 6.2.2.2.2-1: UNTRACED: the AMF holds RAN-supplied UE context; whether the establishment cause survives to the POI was not traced",
 		"sMSOverNasIndicator":             "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"sORTransparentContainer":         "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUCI":                            "C, table 6.2.2.2.2-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 		"slice":                           "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"uEAreaIndication":                "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"unavailabilityPeriodDuration":    "C, table 6.2.2.2.2-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
@@ -124,22 +120,17 @@ var declaredAbsent = map[string]map[string]string{
 	"AMFStartOfInterceptionWithRegisteredUE": {
 		"additionalUserIdentifiers":    "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"eMM5GRegStatus":               "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"fiveGSTAIList":                "C, table 6.2.2.2.5-1: MET (finding): the AMF holds the UE's TAI list",
 		"fiveGSUpdateType":             "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"location":                     "C, table 6.2.2.2.5-1: DEFERRED: li/iri.Location models only locationInfo.currentLocation; the userLocation subtree the table asks for is a documented deferral, so the reportable content does not exist yet",
 		"non3GPPAccessEndpoint":        "C, table 6.2.2.2.5-1: N/A: requires non-3GPP access (N3IWF/TNGF/TWIF), which this deployment does not provide",
 		"oldGUTI":                      "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"sMSOverNASIndicator":          "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"sORTransparentContainer":      "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUCI":                         "C, table 6.2.2.2.5-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 		"slice":                        "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"timeOfRegistration":           "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"uEAreaIndication":             "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"uEPolicy":                     "C, table 6.2.2.2.5-1: UNTRACED: the AMF holds policy association state; whether it carries the MANAGE UE POLICY COMMAND payload was not traced",
 		"unavailabilityPeriodDuration": "C, table 6.2.2.2.5-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-	},
-	"AMFUEPolicyTransfer": {
-		"sUCI": "C, table 6.2.2.2.12-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFUEServiceAccept": {
 		"deprecatedUERequestType": "O, table 6.2.2.2.13-1: DEPRECATED: the specification records it as no longer used",
@@ -153,10 +144,8 @@ var declaredAbsent = map[string]map[string]string{
 		"additionalUserIdentifiers": "C, table 6.2.2.2.6-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"alternativeNSSAI":          "C, table 6.2.2.2.6-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"requestedSlice":            "C, table 6.2.2.2.6-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUCI":                      "C, table 6.2.2.2.6-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"SMFPDUSessionEstablishment": {
-		"aMFID":                         "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
 		"alternativeNSSAI":              "C, table 6.2.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"ePS5GSComboInfo":               "C, table 6.2.3-1: N/A: reports an EPS/5GS interworking case; this project implements no N26 interworking or SGW/PGW role",
 		"ePSPDNConnectionEstablishment": "C, table 6.2.3-1: N/A: reports an EPS/5GS interworking case; this project implements no N26 interworking or SGW/PGW role",
@@ -167,12 +156,9 @@ var declaredAbsent = map[string]map[string]string{
 		"non3GPPAccessEndpoint":         "C, table 6.2.3-1: N/A: requires non-3GPP access (N3IWF/TNGF/TWIF), which this deployment does not provide",
 		"oldPDUSessionID":               "C, table 6.2.3-1: UNTRACED: a similarly named field exists in the SMF context; the mapping was not traced",
 		"pCCRules":                      "C, table 6.2.3-1: UNTRACED: the SMF holds SmPolicyData; whether it carries the PCC rule set in the reported form was not traced",
-		"rATType":                       "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
 		"sMPDUDNRequest":                "C, table 6.2.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUPIUnauthenticated":           "C, table 6.2.3-1: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
 		"satelliteBackhaulCategory":     "C, table 6.2.3-1: N/A: satellite backhaul is not implemented",
 		"selectedDNN":                   "C, table 6.2.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"servingNetwork":                "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.ServingNetwork",
 		"uEEPSPDNConnection":            "C, table 6.2.3-1: N/A: reports an EPS/5GS interworking case; this project implements no N26 interworking or SGW/PGW role",
 	},
 	"SMFPDUSessionModification": {
@@ -185,11 +171,7 @@ var declaredAbsent = map[string]map[string]string{
 		"non3GPPAccessEndpoint":        "C, table 6.2.3-2: N/A: requires non-3GPP access (N3IWF/TNGF/TWIF), which this deployment does not provide",
 		"pCCRules":                     "C, table 6.2.3-2: UNTRACED: the SMF holds SmPolicyData; whether it carries the PCC rule set in the reported form was not traced",
 		"pFDDataForApp":                "C, table 6.2.3-2: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"rATType":                      "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
-		"sUPIUnauthenticated":          "C, table 6.2.3-2: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
 		"satelliteBackhaulCategory":    "C, table 6.2.3-2: N/A: satellite backhaul is not implemented",
-		"servingNetwork":               "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.ServingNetwork",
-		"uEEndpoint":                   "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.PDUAddress and already reports it in the session records",
 		"uPPathChange":                 "C, table 6.2.3-2: NOT HELD: the network function does not hold this datum, so the condition is not met",
 	},
 	"SMFPDUSessionRelease": {
@@ -205,7 +187,6 @@ var declaredAbsent = map[string]map[string]string{
 		"timeOfLastPacket":        "C, table 6.2.3-3: NOT HELD: the network function does not hold this datum, so the condition is not met",
 	},
 	"SMFStartOfInterceptionWithEstablishedPDUSession": {
-		"aMFID":           "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
 		"ePS5GSComboInfo": "C, table 6.2.3-4: N/A: reports an EPS/5GS interworking case; this project implements no N26 interworking or SGW/PGW role",
 		"ePSStartOfInterceptionWithEstablishedPDNConnection": "C, table 6.2.3-4: N/A: reports an EPS/5GS interworking case; this project implements no N26 interworking or SGW/PGW role",
 		"gEOSatelliteID":             "C, table 6.2.3-4: N/A: satellite backhaul is not implemented",
@@ -214,25 +195,88 @@ var declaredAbsent = map[string]map[string]string{
 		"non3GPPAccessEndpoint":      "C, table 6.2.3-4: N/A: requires non-3GPP access (N3IWF/TNGF/TWIF), which this deployment does not provide",
 		"pCCRules":                   "C, table 6.2.3-4: UNTRACED: the SMF holds SmPolicyData; whether it carries the PCC rule set in the reported form was not traced",
 		"pFDDataForApps":             "C, table 6.2.3-4: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"rATType":                    "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
 		"sMPDUDNRequest":             "C, table 6.2.3-4: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUPIUnauthenticated":        "C, table 6.2.3-4: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
 		"satelliteBackhaulCategory":  "C, table 6.2.3-4: N/A: satellite backhaul is not implemented",
-		"servingNetwork":             "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.ServingNetwork",
 		"timeOfSessionEstablishment": "C, table 6.2.3-4: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"uEEPSPDNConnection":         "C, table 6.2.3-4: N/A: reports an EPS/5GS interworking case; this project implements no N26 interworking or SGW/PGW role",
 	},
 	"SMFUnsuccessfulProcedure": {
-		"aMFID":                       "C, table 6.2.3-5: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
 		"alternativeNSSAI":            "C, table 6.2.3-5: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"ePSPDNUnsuccessfulProcedure": "C, table 6.2.3-5: N/A: reports an EPS/5GS interworking case; this project implements no N26 interworking or SGW/PGW role",
 		"hSMFURI":                     "C, table 6.2.3-5: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"location":                    "C, table 6.2.3-5: DEFERRED: li/iri.Location models only locationInfo.currentLocation; the userLocation subtree the table asks for is a documented deferral, so the reportable content does not exist yet",
 		"non3GPPAccessEndpoint":       "C, table 6.2.3-5: N/A: requires non-3GPP access (N3IWF/TNGF/TWIF), which this deployment does not provide",
-		"rATType":                     "C, table 6.2.3-5: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
 		"requestedSlice":              "C, table 6.2.3-5: NOT HELD: the network function does not hold this datum, so the condition is not met",
 		"sMPDUDNRequest":              "C, table 6.2.3-5: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		"sUPIUnauthenticated":         "C, table 6.2.3-5: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+	},
+}
+
+// knownConditionalDefects is the other half, and the distinction is the point: these
+// are fields whose condition this project MEETS, or would meet but for a codec
+// limitation, and which it does not populate. They are defects, not dispositions —
+// each is a record that decodes cleanly and carries less than TS 33.128 says it
+// should, which no decoder can see.
+//
+// They are listed separately so they can be counted, and TestKnownDefectsDoNotGrow
+// pins that count. Adding one therefore has to be a deliberate, reviewed act rather
+// than another line in a list of things that are fine. The findings themselves are
+// written up in CONFORMANCE.md.
+var knownConditionalDefects = map[string]map[string]string{
+	"AMFDeregistration": {
+		"sUCI": "C, table 6.2.2.2.3-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFIdentifierAssociation": {
+		"fiveGSTAIList": "C, table 6.2.2.2.7-1: MET (finding): the AMF holds the UE's TAI list",
+		"sUCI":          "C, table 6.2.2.2.7-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFIdentifierDeassociation": {
+		"gPSI": "C, table 6.2.2.2.7-2: MET (finding): the AMF holds the GPSI and reports it in every other record it emits",
+		"pEI":  "C, table 6.2.2.2.7-2: MET (finding): the AMF holds the PEI and reports it in every other record it emits",
+		"sUCI": "C, table 6.2.2.2.7-2: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFLocationUpdate": {
+		"sUCI": "C, table 6.2.2.2.4-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFPositioningInfoTransfer": {
+		"sUCI": "C, table 6.2.2.2.8-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFRegistration": {
+		"fiveGSTAIList": "C, table 6.2.2.2.2-1: MET (finding): the AMF holds the UE's TAI list",
+		"rATType":       "C, table 6.2.2.2.2-1: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
+		"sUCI":          "C, table 6.2.2.2.2-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFStartOfInterceptionWithRegisteredUE": {
+		"fiveGSTAIList": "C, table 6.2.2.2.5-1: MET (finding): the AMF holds the UE's TAI list",
+		"sUCI":          "C, table 6.2.2.2.5-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFUEPolicyTransfer": {
+		"sUCI": "C, table 6.2.2.2.12-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"AMFUnsuccessfulProcedure": {
+		"sUCI": "C, table 6.2.2.2.6-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
+	},
+	"SMFPDUSessionEstablishment": {
+		"aMFID":               "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
+		"rATType":             "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
+		"sUPIUnauthenticated": "C, table 6.2.3-1: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+		"servingNetwork":      "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.ServingNetwork",
+	},
+	"SMFPDUSessionModification": {
+		"rATType":             "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
+		"sUPIUnauthenticated": "C, table 6.2.3-2: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+		"servingNetwork":      "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.ServingNetwork",
+		"uEEndpoint":          "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.PDUAddress and already reports it in the session records",
+	},
+	"SMFStartOfInterceptionWithEstablishedPDUSession": {
+		"aMFID":               "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
+		"rATType":             "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
+		"sUPIUnauthenticated": "C, table 6.2.3-4: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+		"servingNetwork":      "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.ServingNetwork",
+	},
+	"SMFUnsuccessfulProcedure": {
+		"aMFID":               "C, table 6.2.3-5: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
+		"rATType":             "C, table 6.2.3-5: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
+		"sUPIUnauthenticated": "C, table 6.2.3-5: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
 	},
 }
 
@@ -329,7 +373,21 @@ func TestASN1RecordDrift(t *testing.T) {
 			continue
 		}
 		modelled := modelledTags(t, reflect.TypeOf(goldenSamples()[name]))
-		declared := declaredAbsent[name]
+		declared := map[string]string{}
+		for fld, why := range declaredAbsent[name] {
+			declared[fld] = why
+			// A field the payload tables mark M is never a disposition. Allowing one
+			// here would let a mandatory omission be silenced by the same edit that
+			// records an inapplicable field, which is the hole this split closes.
+			if strings.HasPrefix(why, "M,") {
+				t.Errorf("%s/%s is marked M by its payload table but is listed in declaredAbsent. "+
+					"A mandatory field is either modelled or a known defect — move it to "+
+					"knownConditionalDefects, or model it", name, fld)
+			}
+		}
+		for fld, why := range knownConditionalDefects[name] {
+			declared[fld] = why
+		}
 
 		for _, f := range fields {
 			_, isModelled := modelled[f.tag]
@@ -369,7 +427,8 @@ func TestASN1RecordDrift(t *testing.T) {
 		t.Errorf("%d field(s) the published module defines that this package neither models "+
 			"nor declares absent. Judge each against its payload table in TS 33.128 clause 6.2 "+
 			"— the module marks nearly everything OPTIONAL, so this list says nothing about which "+
-			"are mandatory — then record the verdict in declaredAbsent:\n  %s",
+			"are mandatory — then record the verdict in declaredAbsent, or in "+
+			"knownConditionalDefects if this project meets the condition and does not report it:\n  %s",
 			len(undeclared), strings.Join(undeclared, "\n  "))
 	}
 }
@@ -416,8 +475,44 @@ func TestASN1DriftAuditDetectsAnOmission(t *testing.T) {
 		t.Error("sUPIUnauthenticated is now modelled: repoint this sentinel at a field that is not, " +
 			"and update CONFORMANCE.md, which records it as a finding")
 	}
-	if _, declared := declaredAbsent["SMFPDUSessionModification"]["sUPIUnauthenticated"]; !declared {
-		t.Error("sUPIUnauthenticated is neither modelled nor declared absent, which the audit above " +
-			"should already have caught — this test and that one disagree")
+	// It belongs in the defect list, not the disposition list: the condition holds
+	// whenever a SUPI is reported, so this is a field we should populate.
+	if _, known := knownConditionalDefects["SMFPDUSessionModification"]["sUPIUnauthenticated"]; !known {
+		t.Error("sUPIUnauthenticated is not recorded as a known conditional defect, which the audit " +
+			"above should already have caught — this test and that one disagree")
 	}
+	if _, misfiled := declaredAbsent["SMFPDUSessionModification"]["sUPIUnauthenticated"]; misfiled {
+		t.Error("sUPIUnauthenticated is filed as a disposition; its condition is one this project " +
+			"meets, so it is a defect")
+	}
+}
+
+// TestKnownDefectsDoNotGrow pins the number of fields this project should report
+// and does not.
+//
+// The count is the point. Each of these is a record that decodes cleanly against
+// the published module while carrying less than TS 33.128 requires, so nothing
+// downstream can notice one — and without a pinned total, adding another is a
+// one-line edit indistinguishable from recording an inapplicable field. Changing
+// this number is meant to be a deliberate act with a reason in the commit.
+//
+// Going *down* fails too: a defect that has been fixed should leave the list.
+func TestKnownDefectsDoNotGrow(t *testing.T) {
+	const want = 30
+
+	got := 0
+	for _, fields := range knownConditionalDefects {
+		got += len(fields)
+	}
+	if got == want {
+		return
+	}
+	verb := "grown"
+	if got < want {
+		verb = "shrunk"
+	}
+	t.Errorf("knownConditionalDefects has %s to %d entries, expected %d. These are fields "+
+		"TS 33.128 says this project should report and it does not; if you have fixed one, "+
+		"remove it and lower the count, and if you have added one, say why in the commit. "+
+		"CONFORMANCE.md is where they are written up.", verb, got, want)
 }
