@@ -78,7 +78,7 @@ acknowledgement will be the first thing to do.
 | Payload Direction | 2 | 5.2.6 | **Emitted and parsed.** All six values are modelled; see the direction table below. |
 | XID | 16 | 5.2.7 | **Emitted and parsed.** Correctly implements the ProductID override: the clause requires that when the X1 task carries an optional ProductID, the XID field is populated with it instead of the task's own XID. `types.InterceptTask.DeliveryXID` encodes that rule and all three POIs label product through it. |
 | Correlation ID | 8 | 5.2.8 | **Emitted and parsed.** Supplied by the triggering function for triggered tasks and never derived locally; zero when the POI does not correlate the PDU, as the clause requires. |
-| Conditional Attribute Fields | variable | 5.3 | **Parsed, never emitted.** See table 5.3.1-2 below — this is the largest gap. |
+| Conditional Attribute Fields | variable | 5.3 | **Emitted and parsed.** The six TS 33.128 requires are populated by all three POIs; the remaining sixteen are absent with a reason. See table 5.3.1-2 below. |
 | Payload | variable | 5.4 | **Emitted and parsed.** |
 
 ## PDU types — table 5.2.2-1
@@ -106,15 +106,23 @@ mechanism and is consequently never emitted, for the reason in the PDU type tabl
 
 ## Conditional attributes — table 5.3.1-2
 
-**None of the 22 defined attribute types is ever emitted.** The TLV mechanism itself is
-implemented — `Marshal` writes the type/length/value structure of table 5.3.1-1 and
-`Unmarshal` parses it back — but no producer in this project populates `PDU.Attributes`, and
-no consumer reads them.
+**Six of the 22 defined attribute types are emitted; the other sixteen are not.** That is a
+change: until `add-li-x2x3-conditional-attributes`, every xIRI and every xCC this project had
+ever delivered carried none of them. The TLV mechanism was implemented — `Marshal` writes the
+type/length/value structure of table 5.3.1-1 and `Unmarshal` parses it back — and no producer
+populated `PDU.Attributes`.
+
+**Correction to what this document previously claimed.** The Timestamp row used to say that
+"the record carries its own timestamps inside the payload; the header attribute is required in
+addition". That is wrong, and it understated the defect. `li/iri` reads no clock, and every
+`Timestamp` field in `TS33128Payloads.asn` is OPTIONAL and left unset here — so before this
+change an agency receiving our product could not tell when an intercepted event happened, only
+when the PDU arrived. The header attribute is not additional metadata; it is the only event
+time this element sends.
 
 Clause 5.3 makes these attributes something the POI "may provide … as directed by the
 relevant LI architecture", and for this project the relevant architecture is 3GPP TS 33.128 —
-which directs a great deal. **Six of the 22 are required, and this project emits none of
-them.**
+which directs a great deal. **Six of the 22 are required, and all six are now emitted.**
 
 TS 33.128 table 5.3.1-2 applies to both LI_X2 and LI_X3 and says the **NFID** "shall be set
 to indicate the NF that contains the POI" and the **IPID** "shall be set to indicate the POI
@@ -126,8 +134,15 @@ with all other target identities present at the NF"). Table 5.3.3-2 requires Tim
 Sequence Number on LI_X3 too, and makes AXRI optional.
 
 So the AMF and SMF IRI-POIs each owe six attributes on every xIRI, and the UPF CC-POI owes
-four on every xCC. This is the largest gap this disposition records, and it is sized as its
-own change rather than patched here.
+four on every xCC. All are emitted as of `add-li-x2x3-conditional-attributes`.
+
+**What that change verified, and what it did not.** Four PDUs were sent to the independent
+sipgate reference before any of it was implemented — a 40-byte control beside headers of 49, 80
+and 163 bytes — and it stored all four and parsed the attribute region of each
+(`tests/e2e-li/evidence-260814/`). So a peer accepts a header longer than the mandatory 40, and
+accepts the unprefixed target-identifier fragment clause 5.3.18 illustrates. That peer does not
+validate the fragment as XML, and no mediation function that *requires* these attributes has
+been observed at all — the same limit every interoperability result here carries.
 
 | Type | Name | Clause | Disposition |
 |---|---|---|---|
@@ -136,10 +151,10 @@ own change rather than patched here.
 | 3 | 3GPP TS 33.108 defined attribute | 5.3.4 | Absent. TS 33.108 is the EPS-generation interface; not implemented here. |
 | 4 | Proprietary attribute | 5.3.5 | Absent by choice. A standardized attribute is preferable and the clause frames this as temporary support. |
 | 5 | Domain ID (DID) | 5.3.6 | Absent. TS 33.128 does not require it; the destination is resolved from the X1 task. |
-| 6 | Network Function ID (NFID) | 5.3.7 | **Absent and REQUIRED** on X2 and X3 (TS 33.128 table 5.3.1-2, "shall be set"). |
-| 7 | Interception Point ID (IPID) | 5.3.8 | **Absent and REQUIRED** on X2 and X3 (table 5.3.1-2, "shall be set"). |
-| 8 | Sequence Number | 5.3.9 | **Absent and REQUIRED** on X2 and X3 (tables 5.3.2-2 and 5.3.3-2, "shall be present"). Also a dependency of the keepalive mechanism, which matches an acknowledgement to its request by it. |
-| 9 | Timestamp | 5.3.10 | **Absent and REQUIRED** on X2 and X3 (tables 5.3.2-2 and 5.3.3-2, "shall be present"). The record carries its own timestamps inside the payload; the header attribute is required in addition. |
+| 6 | Network Function ID (NFID) | 5.3.7 | **Emitted** on X2 and X3, set to the identifier the element asserts on X1 (its `neId`), so the identity an MDF receives is the one the ADMF tasks. |
+| 7 | Interception Point ID (IPID) | 5.3.8 | **Emitted** on X2 and X3: `AMF-IRI-POI`, `SMF-IRI-POI`, `UPF-CC-POI`. Each network function contains one point of interception, so the value is a property of the code rather than of the deployment. |
+| 8 | Sequence Number | 5.3.9 | **Emitted** on X2 and X3, numbered per the clause's `(XID, DID, NFID, IPID, Correlation ID)` context and not per connection — `Sequencer` holds one counter per live context and drops it when the tasking does. The keepalive mechanism needs its own counter: a Keepalive PDU zeroes the XID and Correlation ID, so its context is not any task's. |
+| 9 | Timestamp | 5.3.10 | **Emitted** on X2 and X3 as the clause's POSIX timespec, two *unsigned* 32-bit integers. On X2 it is the time the event occurred, captured at the report hook; on X3 the time the xCC was generated, taken at framing. **It is the only time information this element sends** — see the note below. |
 | 10 | Source IPv4 address | 5.3.11 | Absent. For X3 the addresses are inside the intercepted packet. |
 | 11 | Destination IPv4 address | 5.3.12 | Absent, as above. |
 | 12 | Source IPv6 address | 5.3.13 | Absent, as above. |
@@ -147,8 +162,8 @@ own change rather than patched here.
 | 14 | Source port | 5.3.15 | Absent, as above. |
 | 15 | Destination port | 5.3.16 | Absent, as above. |
 | 16 | IP protocol | 5.3.17 | Absent, as above. |
-| 17 | Matched target identifier | 5.3.18 | **Absent and REQUIRED** on X2 (table 5.3.2-2, "shall be set to indicate what target identity was matched"). |
-| 18 | Other target identifier | 5.3.19 | **Absent and REQUIRED** on X2 (table 5.3.2-2, "shall be set with all other target identities present at the NF"). |
+| 17 | Matched target identifier | 5.3.18 | **Emitted** on X2, one occurrence per identity of the task that the subject presents, as the clause's bare UTF-8 fragment (`<supiimsi>…</supiimsi>`). Not emitted on X3, which table 5.3.3-2 does not require and a CC-POI tasked by packet criteria could not populate without inventing it. |
+| 18 | Other target identifier | 5.3.19 | **Emitted** on X2, one occurrence per remaining identity **of that subject**. Not every identity the network function holds: the literal reading of table 5.3.2-2 would disclose unrelated subscribers to an agency holding a warrant for one. |
 | 19 | MIME content type | 5.3.20 | Absent. Applies to the MIME payload format, which this project does not emit. |
 | 20 | MIME content transfer encoding | 5.3.21 | Absent, as above. |
 | 21 | Additional XID related information (AXRI) | 5.3.22 | Absent. TS 33.128 clause 5.3.3 makes it a "may" for efficient xCC delivery, not a requirement. |
@@ -210,9 +225,9 @@ plainly, so nobody mistakes its scope for a clean bill of health:
    PDU types shall be supported and the POI shall emit a Keepalive at least every TIME_P1.
    This element emits none, answers none, and never applies the TIME_P2 disconnect. It
    depends on conditional attribute type 8.
-2. **No conditional attribute is ever emitted, and TS 33.128 requires six of them.** NFID
-   and IPID on both interfaces, plus Timestamp, Sequence Number, Matched Target Identifier
-   and Other Target Identifier on X2, and Timestamp and Sequence Number on X3. Every xIRI
-   and every xCC this project has ever sent is missing them.
-3. **The emitted Version field is 5, and V1.10.1 defines 6.** Deliberate while gap 1 stands;
+2. **The emitted Version field is 5, and V1.10.1 defines 6.** Deliberate while gap 1 stands;
    see the version section above.
+
+**Closed since this disposition was written:** every conditional attribute TS 33.128 requires
+was absent, on both interfaces. All six are now emitted — see table 5.3.1-2 above — which
+leaves the sixteen that are absent by decision rather than by omission.

@@ -1135,7 +1135,11 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 // The output round-trips: what this emits, mapTarget parses back to the same
 // identifier.
 func targetXML(t types.TargetIdentifier) string {
-	if el, ok := plainTargetElement(t.Type); ok {
+	// The element names come from types, which is where they have to live now that
+	// the X2 conditional attribute of TS 103 221-2 clause 5.3.18 renders the same
+	// identifiers: one mapping, so the two interfaces cannot come to disagree about
+	// what an identifier is called. The prefix is this document's, not the mapping's.
+	if el, ok := t.Type.XMLElement(); ok {
 		return "<ns1:" + el + ">" + escapeXML(t.Value) + "</ns1:" + el + ">"
 	}
 
@@ -1153,29 +1157,6 @@ func targetXML(t types.TargetIdentifier) string {
 		"<ext:UPFLIT3TargetIdentifier>" + arm + "</ext:UPFLIT3TargetIdentifier>" +
 		"</ext:UPFLIT3TargetIdentifierExtensions>" +
 		"</ns1:targetIdentifierExtension>"
-}
-
-// plainTargetElement gives the TS 103 221-1 element name for identifiers that have
-// one. The names are the schema's, which are lowercase-initial.
-func plainTargetElement(t types.TargetIdentifierType) (string, bool) {
-	switch t {
-	case types.TargetSUPI:
-		return "supiimsi", true
-	case types.TargetPEI:
-		return "peiImei", true
-	case types.TargetGPSI:
-		return "gpsiMsisdn", true
-	case types.TargetUEIPv4:
-		return "ipv4Address", true
-	case types.TargetUEIPv6:
-		return "ipv6Address", true
-	case types.TargetTCPPort:
-		return "tcpPort", true
-	case types.TargetUDPPort:
-		return "udpPort", true
-	default:
-		return "", false
-	}
 }
 
 // extensionTargetArm renders the 3GPP LI_T3 arm for a packet-detection criterion.

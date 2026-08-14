@@ -684,7 +684,11 @@ configuration:
   li:
     x1Listen: ":8443"                     # address the NF's X1 listener binds (ADMF connects here)
     mdf2: "mdf2.li.example:9000"          # X2 delivery destination (MDF2 host:port)
-    neId: "amf-1"                         # this network element's identifier (use "smf-1" on the SMF)
+    neId: "amf-1"                         # this network element's identifier (use "smf-1" on the SMF).
+                                          # Required: it is both the identity the ADMF tasks on
+                                          # X1 and the Network Function ID every delivered
+                                          # record carries, so interception refuses to start
+                                          # without it — one setting, so the two cannot disagree.
     cert: "/etc/li/certs/tls.crt"         # X0-pre-provisioned LI certificate
     key: "/etc/li/certs/tls.key"          #   its private key
     caCert: "/etc/li/certs/ca.crt"        #   the LI CA trust anchor
@@ -945,12 +949,24 @@ records are not exercised, because a handover needs two RAN nodes. See
 formats, and they are the honest answer rather than this table:**
 
 - `x2x3/CONFORMANCE.md` — every TS 103 221-2 header field, PDU type, conditional attribute
-  and payload format, against V1.10.1. Two gaps are recorded there and neither is subtle:
+  and payload format, against V1.10.1. One gap is recorded there and it is not subtle:
   **the clause 6.2.4 keepalive mechanism is not implemented**, so this element sends no
-  Keepalive PDU and applies no TIME_P2 disconnect; and **no conditional attribute is ever
-  emitted**, six of which TS 33.128 requires. The emitted Version field is deliberately held
-  at 5 rather than the 6 that V1.10.1 defines, because raising it would claim a conformance
-  this element does not yet have.
+  Keepalive PDU and applies no TIME_P2 disconnect. The emitted Version field is deliberately
+  held at 5 rather than the 6 that V1.10.1 defines, because raising it would claim a
+  conformance this element does not yet have.
+
+  **The six conditional attributes TS 33.128 requires are emitted**, and an integrator can
+  expect them without reading the code: the Network Function ID (the element's own `neId`) and
+  the Interception Point ID (`AMF-IRI-POI`, `SMF-IRI-POI`, `UPF-CC-POI`) on both interfaces; a
+  Timestamp and a Sequence Number on both; and, on X2 only, one Matched Target Identifier per
+  identity of the task the subject presents plus one Other Target Identifier per remaining
+  identity of that subject. The header is therefore no longer a fixed 40 bytes — which is what
+  the header length field is for, and what an MDF has to read it for. The timestamp is the
+  event's time on X2 and the xCC's generation time on X3, as TS 33.128 tables 5.3.2-2 and
+  5.3.3-2 respectively define them. The sequence number is numbered per
+  `(XID, Correlation ID)` context and not per connection, so one record delivered to two of a
+  task's destinations carries one number, and product dropped under sustained MDF slowness
+  leaves a visible gap rather than being renumbered over.
 - `iri/CONFORMANCE.md` — the TS 33.128 records, bounded to those this project emits, with the
   M/C/O verdict for every field the published ASN.1 module defines and we do not populate.
 

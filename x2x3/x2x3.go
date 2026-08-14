@@ -181,20 +181,20 @@ func (p *PDU) Marshal() ([]byte, error) {
 		return nil, err
 	}
 
-	var attrs []byte
+	// Size the attribute region before allocating, so the header is written once
+	// into a buffer of its final length. Building the TLVs into a separate slice
+	// first would cost an allocation per PDU, which on X3 is an allocation per
+	// duplicated packet.
+	attrsLen := 0
 	for _, t := range p.Attributes {
 		if len(t.Value) > 0xFFFF {
 			return nil, fmt.Errorf("x2x3: TLV type %d value too long (%d bytes)", t.Type, len(t.Value))
 		}
-		var h [4]byte
-		binary.BigEndian.PutUint16(h[0:2], t.Type)
-		binary.BigEndian.PutUint16(h[2:4], uint16(len(t.Value)))
-		attrs = append(attrs, h[:]...)
-		attrs = append(attrs, t.Value...)
+		attrsLen += 4 + len(t.Value)
 	}
 
-	headerLen := MandatoryHeaderLength + len(attrs)
-	out := make([]byte, MandatoryHeaderLength, headerLen+len(p.Payload))
+	headerLen := MandatoryHeaderLength + attrsLen
+	out := make([]byte, headerLen, headerLen+len(p.Payload))
 	out[0] = MajorVersion
 	out[1] = MinorVersion
 	binary.BigEndian.PutUint16(out[2:4], uint16(p.Type))
@@ -204,7 +204,15 @@ func (p *PDU) Marshal() ([]byte, error) {
 	binary.BigEndian.PutUint16(out[14:16], uint16(p.Direction))
 	copy(out[16:32], p.XID[:])
 	copy(out[32:40], p.CorrelationID[:])
-	out = append(out, attrs...)
+
+	off := MandatoryHeaderLength
+	for _, t := range p.Attributes {
+		binary.BigEndian.PutUint16(out[off:off+2], t.Type)
+		binary.BigEndian.PutUint16(out[off+2:off+4], uint16(len(t.Value)))
+		off += 4
+		off += copy(out[off:], t.Value)
+	}
+
 	out = append(out, p.Payload...)
 	return out, nil
 }

@@ -253,6 +253,46 @@ func (t InterceptTask) TargetsAny(ids []TargetIdentifier) bool {
 	return false
 }
 
+// SplitTargets divides the identities a network function holds for one subject into
+// the ones this task matched and the rest, which is the distinction ETSI
+// TS 103 221-2 clauses 5.3.18 and 5.3.19 draw between the Matched and Other Target
+// Identifier attributes an xIRI carries.
+//
+// It is TargetsAny's witness-returning sibling and lives beside it for the same
+// reason: the rule belongs in one place rather than being re-derived by each POI.
+// Every match is returned, not the first — where a task names both a SUPI and a PEI
+// that the network function holds, both did match, and picking one to report as *the*
+// match would be an arbitrary claim. Clause 5.3.18 permits multiple occurrences
+// precisely so it need not be made.
+//
+// "Other" is the rest of this subject's identities, never another subscriber's: the
+// literal reading of TS 33.128's "all other target identities present at the NF"
+// would disclose unrelated subscribers to an agency holding a warrant for one.
+func (t InterceptTask) SplitTargets(ids []TargetIdentifier) (matched, other []TargetIdentifier) {
+	for _, have := range ids {
+		if slices.Contains(t.Targets, have) {
+			matched = append(matched, have)
+		} else {
+			other = append(other, have)
+		}
+	}
+
+	return matched, other
+}
+
+// XMLFragments renders each identifier in the clause 5.3.18 form, dropping any this
+// package cannot render rather than substituting something else — see XMLFragment.
+func XMLFragments(ids []TargetIdentifier) []string {
+	var out []string
+	for _, id := range ids {
+		if frag, ok := id.XMLFragment(); ok {
+			out = append(out, frag)
+		}
+	}
+
+	return out
+}
+
 // WantsProduct reports whether the task requires the given product type.
 func (t InterceptTask) WantsProduct(p ProductType) bool {
 	return slices.Contains(t.Products, p)
