@@ -67,7 +67,9 @@ unimplemented, so the field would have asserted conformance to a revision this e
 not meet. Keepalive is now implemented — see the PDU type table below — and the bump is
 held back by the peer instead: the reference implementation this project interoperates with
 **refuses a 0.6 PDU**, closing the connection and storing nothing
-(`tests/e2e-li/evidence-260814/x2-probe-keepalive.json`). Clause 5.2.1 makes a minor
+(`tests/e2e-li/evidence-260814/x2-probe-keepalive.json`). Confirmed from that peer's own
+source, which it ships with its classes: `li-lib-x1x2x3` 1.0.3 holds `MINOR_VERSION = 5` and
+throws on anything else. Clause 5.2.1 makes a minor
 increment backwards-compatible, so that is a defect in the peer — and one that would cost
 all delivery to it, not part of it, if this element raised the field.
 
@@ -251,7 +253,9 @@ plainly, so nobody mistakes its scope for a clean bill of health:
 - **The keepalive mechanism of clause 6.2.4 was unimplemented**: this element emitted no
   Keepalive, answered none, and never applied the TIME_P2 disconnect. All three are now
   done, on X2 and X3, in `keepalive.go`. What that has *not* been verified against is an
-  independent implementation — the reference answers no Keepalive at all, so the
-  acknowledgement path is exercised only against this project's own endpoint. That is a
+  independent implementation, and cannot currently be: the reference declares
+  `PduType.KEEPALIVE` and `KEEPALIVE_ACK` and references neither anywhere in its X2/X3 code —
+  precisely the state this package was in before this change — so the acknowledgement path is
+  exercised only against this project's own endpoint. That is a
   limit of the evidence, not of the implementation, and it is recorded here because the
   distinction is exactly what this document exists to keep visible.
