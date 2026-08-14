@@ -295,6 +295,13 @@ func (c *Client) sendKeepalive(st *connState) bool {
 	}
 
 	if err := c.writeOn(st, b); err != nil {
+		// A connection this element replaced is not a fault, and saying so here is the
+		// whole point of the distinction: the loop ends because its connection ended,
+		// and the replacement has a timer of its own.
+		if errors.Is(err, errStaleConn) {
+			return false
+		}
+
 		c.unreachable.Store(true)
 		c.fault(fmt.Errorf("x2x3: keepalive to %s: %w", c.addr, err))
 
@@ -303,6 +310,17 @@ func (c *Client) sendKeepalive(st *connState) bool {
 
 	return true
 }
+
+// errStaleConn reports that st is no longer the connection this client holds: it was
+// dropped and redialled, or closed. It is deliberately distinct from a write failure.
+//
+// A write failure says something about the mediation function. This says something about
+// us — the connection went because *this element* replaced it, which the one-shot redial
+// in deliver does on any write error and Close does at shutdown. Reporting it as a fault
+// would push mdfUnreachable and set the probe's answer to "faulty" every time an ordinary
+// redial happened to race the keepalive timer, in the one mechanism whose purpose is
+// telling a dead mediation function from a live one.
+var errStaleConn = errors.New("x2x3: connection replaced")
 
 // writeOn writes to st, but only while st is still the connection this client holds.
 //
@@ -315,7 +333,7 @@ func (c *Client) writeOn(st *connState, b []byte) error {
 	defer c.mu.Unlock()
 
 	if c.live != st {
-		return net.ErrClosed
+		return errStaleConn
 	}
 	if err := c.writeLocked(b); err != nil {
 		// Drop rather than redial here: the next delivery redials, and a keepalive
@@ -447,6 +465,11 @@ func (c *Client) answerKeepalive(st *connState, p *PDU) bool {
 // Reported rather than dropped quietly: a mediation function sending something this
 // element cannot parse is a fault in the delivery plane, and the ADMF is the only
 // party that can act on it.
+//
+// It reports even when the connection has already been replaced, which is deliberate and
+// is *not* the errStaleConn case above. There, the connection went because this element
+// replaced it and nothing had gone wrong; here a peer sent bytes no X2/X3 implementation
+// should send, and that stays true whichever socket carried them.
 func (c *Client) protocolError(st *connState, err error) {
 	c.mu.Lock()
 	if c.live == st {

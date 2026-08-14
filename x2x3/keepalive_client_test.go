@@ -6,7 +6,6 @@ package x2x3
 import (
 	"crypto/tls"
 	"encoding/binary"
-	"errors"
 	"net"
 	"runtime"
 	"strings"
@@ -603,10 +602,64 @@ func TestKeepaliveReaderIsQuietOnOurOwnClose(t *testing.T) {
 
 	select {
 	case err := <-faults:
-		if !errors.Is(err, net.ErrClosed) {
-			t.Errorf("a redial this element performed reported a fault: %v", err)
-		}
+		t.Errorf("a redial this element performed reported a fault: %v", err)
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// TestKeepaliveOnAReplacedConnectionIsSilent covers the race the test above cannot make
+// happen on demand: a keepalive that has already taken its number and is waiting on the
+// mutex while a delivery drops its connection and dials another.
+//
+// It is written against the connection rather than the clock because that is the only way
+// to reach the case deterministically — and the case matters. Reporting it would push
+// mdfUnreachable and make the fault probe answer "faulty" every time an ordinary redial
+// raced the timer, which is a false fault in the mechanism whose whole purpose is telling a
+// dead mediation function from a live one.
+//
+// This is the assertion the first version of these tests got wrong: it accepted the fault
+// as long as it wrapped net.ErrClosed, so it passed against the defect it existed to catch.
+func TestKeepaliveOnAReplacedConnectionIsSilent(t *testing.T) {
+	m := startMDF(t, answerCorrectly)
+
+	faults := make(chan error, 4)
+	c := clientTo(t, m.addr, KeepaliveConfig{TimeP1: time.Hour, TimeP2: time.Hour, OnFault: func(err error) {
+		select {
+		case faults <- err:
+		default:
+		}
+	}})
+
+	if err := c.Send(product()); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// The connection a keepalive is about to be written on...
+	c.mu.Lock()
+	stale := c.live
+	c.mu.Unlock()
+
+	// ...dropped and replaced by this element, exactly as a failed write would.
+	c.mu.Lock()
+	c.dropLocked()
+	c.mu.Unlock()
+
+	if err := c.Send(product()); err != nil {
+		t.Fatalf("Send() after a drop: %v", err)
+	}
+
+	if c.sendKeepalive(stale) {
+		t.Error("sendKeepalive reported success writing to a connection that had been replaced")
+	}
+
+	select {
+	case err := <-faults:
+		t.Errorf("a connection this element replaced was reported as a fault: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if c.Unreachable() {
+		t.Error("Unreachable() is true after this element replaced its own connection; " +
+			"the mediation function never failed anything")
 	}
 }
 
