@@ -237,3 +237,21 @@ func TestKeepaliveConfigValidate(t *testing.T) {
 		})
 	}
 }
+
+// TestKeepaliveDefaultsAreTheSpecifications is the delta spec's "timers with nothing
+// configuring them" scenario at its source: a deployment that configures nothing gets
+// 60 and 180 seconds, and the three network functions inherit that by passing zeros
+// through rather than each writing the numbers down.
+func TestKeepaliveDefaultsAreTheSpecifications(t *testing.T) {
+	got := KeepaliveConfig{}.withDefaults()
+
+	if got.TimeP1 != 60*time.Second {
+		t.Errorf("default TIME_P1 = %s, want 60s (clause 6.2.4)", got.TimeP1)
+	}
+	if got.TimeP2 != 180*time.Second {
+		t.Errorf("default TIME_P2 = %s, want 180s (clause 6.2.4)", got.TimeP2)
+	}
+	if got.Disabled {
+		t.Error("the zero value disables the mechanism; a deployment that says nothing must get the conformant behaviour")
+	}
+}
