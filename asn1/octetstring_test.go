@@ -153,3 +153,55 @@ func TestOctetStringHandlesNamedByteTypes(t *testing.T) {
 		}
 	})
 }
+
+// A named *element* type — `type b uint8; type X []b` — is admitted by the same
+// guard, because the guard tests the element's kind. The bodies did not handle
+// it: reflect.Copy and Value.Convert both require identical element types, so
+// each panicked. That is the defect patch 8 exists to fix, surviving inside
+// patch 8's own fix, and it was found by enumerating what the guard admits
+// against what the body handles rather than by anything failing.
+//
+// It is latent rather than live: every named byte type in li/iri is `[]byte`,
+// the shape above. It matters because encodeOctetString accepts these shapes, so
+// leaving decode unable to read them would make a value this codec can write and
+// cannot read back.
+type (
+	namedByteElem  uint8
+	namedElemSlice []namedByteElem
+	namedElemArray [4]namedByteElem
+)
+
+func TestOctetStringHandlesNamedElementTypes(t *testing.T) {
+	ctx := NewContext()
+
+	for _, tc := range []struct {
+		name string
+		val  any
+	}{
+		{"named slice of named byte", namedElemSlice{1, 2, 3, 4}},
+		{"named array of named byte", namedElemArray{1, 2, 3, 4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A panic here is the regression: it is how both paths failed before.
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panicked on a shape the guard admits: %v", r)
+				}
+			}()
+			enc, err := ctx.encodeOctetString(reflect.ValueOf(tc.val))
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			if !bytes.Equal(enc, []byte{1, 2, 3, 4}) {
+				t.Errorf("encoded % x, want 01 02 03 04", enc)
+			}
+			into := reflect.New(reflect.TypeOf(tc.val)).Elem()
+			if err := ctx.decodeOctetString(enc, into); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !reflect.DeepEqual(into.Interface(), tc.val) {
+				t.Errorf("round-trip = %v, want %v", into.Interface(), tc.val)
+			}
+		})
+	}
+}

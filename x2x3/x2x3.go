@@ -17,8 +17,18 @@
 //	off 40..   conditional attribute fields: [type(2)|length(2)|value]*
 //	then       payload
 //
-// The layout and validation rules match the published spec and the independent
-// sipgate li-lib implementation used as the interoperability reference.
+// The layout and validation rules were read against ETSI TS 103 221-2 V1.10.1
+// (2026-03) field by field; CONFORMANCE.md in this directory records the
+// disposition of every header field, PDU type, conditional attribute and payload
+// format the specification defines, including what this package does not
+// implement. Read it before assuming a field is handled — that document, and
+// this comment, are claims rather than evidence, and the gaps it lists were
+// invisible for as long as the comment here asserted conformance without naming
+// a revision.
+//
+// Interoperability against the independent sipgate li-lib implementation
+// exercises the parts both sides emit, which is why the gaps are all in fields
+// neither implementation ever sends.
 package x2x3
 
 import (
@@ -27,6 +37,15 @@ import (
 	"fmt"
 )
 
+// The Version field (TS 103 221-2 clause 5.2.1) asserts which revision of the
+// specification a PDU was created against, so it is a conformance claim and not
+// a build stamp. Value 5 is what V1.6.1 through V1.9.1 define; V1.10.1 raised it
+// to 6.
+//
+// It stays at 5 deliberately. Raising it to 6 would claim conformance to V1.10.1
+// while the keepalive mechanism of clause 6.2.4 is unimplemented — see the gaps
+// in CONFORMANCE.md — which would hide the gap rather than close it. The bump
+// belongs with the change that implements keepalive.
 const (
 	MajorVersion          = 0
 	MinorVersion          = 5
@@ -71,10 +90,17 @@ const (
 	PayloadFormat33108EPSIRI  PayloadFormat = 14
 	PayloadFormatMIME         PayloadFormat = 15
 	PayloadFormatUnstructured PayloadFormat = 16
+	PayloadFormatPSPDUPayload PayloadFormat = 17 // ETSI TS 102 232-1 PS-PDU.Payload, added in V1.8.1
 )
 
 // payloadFormatRules records whether each format is permitted on X2 and X3
-// respectively, mirroring TS 103 221-2 (and the sipgate reference).
+// respectively, transcribed from TS 103 221-2 table 5.4.1-1.
+//
+// TRANSCRIBED FROM V1.10.1 (2026-03). Restate the revision whenever this table
+// is updated: the table is not checked against any published source, so without
+// a version a stale copy and a current one look identical. That is exactly how
+// value 17 stayed missing for three revisions. CONFORMANCE.md carries the
+// per-value disposition, and x2x3_test.go asserts this whole table.
 var payloadFormatRules = map[PayloadFormat][2]bool{
 	PayloadFormatReserved:     {false, false},
 	PayloadFormatETSI102232_1: {true, true},
@@ -93,6 +119,7 @@ var payloadFormatRules = map[PayloadFormat][2]bool{
 	PayloadFormat33108EPSIRI:  {true, false},
 	PayloadFormatMIME:         {true, true},
 	PayloadFormatUnstructured: {false, true},
+	PayloadFormatPSPDUPayload: {true, true},
 }
 
 func (f PayloadFormat) allowedOn(t PDUType) bool {
@@ -199,8 +226,17 @@ func Unmarshal(b []byte) (*PDU, int, error) {
 		return nil, 0, ErrIncomplete
 	}
 	total := int(headerLen) + int(payloadLen) // safe: the uint64 check above bounds the sum by len(b) ≤ maxInt
-	if b[0] != MajorVersion || b[1] != MinorVersion {
-		return nil, 0, fmt.Errorf("x2x3: unsupported version %d.%d", b[0], b[1])
+	// TS 103 221-2 clause 5.2.1 defines the major version as incrementing on a
+	// backwards-incompatible change and the minor on a backwards-compatible
+	// addition, so a peer ahead of us on the minor number is required to remain
+	// decodable: it can only have added a PDU type, direction, conditional
+	// attribute or payload format, none of which changes the layout parsed here.
+	// Rejecting that peer outright — which this did — would refuse a conformant
+	// MDF running a newer revision than ours.
+	// A differing minor in either direction stays decodable: a lower one uses a
+	// subset of what we know, a higher one adds values that do not move any field.
+	if b[0] != MajorVersion {
+		return nil, 0, fmt.Errorf("x2x3: unsupported major version %d (this implementation speaks %d.x)", b[0], MajorVersion)
 	}
 
 	p := &PDU{

@@ -220,19 +220,45 @@ func (ctx *Context) decodeOctetString(data []byte, value reflect.Value) error {
 	// array decodes into itself. Previously the array path asserted the destination
 	// to []byte and the slice path assigned a plain []byte into it, both of which
 	// fail for a named type the guard above admits.
+	// The guard above admits any array or slice whose element *kind* is uint8,
+	// which includes a named element type such as `type b uint8; type X []b`.
+	// reflect.Copy and Value.Convert both require identical element types, so
+	// both panicked on that shape — the guard admitting what the body cannot
+	// handle, which is the very defect patch 8 was written to fix, surviving in
+	// its own fix. encodeOctetString accepts those shapes, so refusing them here
+	// would leave a value this codec can encode and cannot decode.
+	//
+	// Assigning element by element handles every shape the guard admits, at the
+	// cost of a loop on a path that previously used a bulk copy. The common
+	// shapes (`[]byte` and `type X []byte`) keep the bulk path.
+	elemIsExactlyByte := value.Type().Elem() == reflect.TypeOf(byte(0))
 	if kind == reflect.Array {
 		// Check array length
 		if len(data) != value.Len() {
 			t := fmt.Sprintf("[%d]uint8", value.Len())
 			return wrongType(t, value)
 		}
-		reflect.Copy(value, reflect.ValueOf(data))
-	} else {
+		if elemIsExactlyByte {
+			reflect.Copy(value, reflect.ValueOf(data))
+			return nil
+		}
+		for i, b := range data {
+			value.Index(i).SetUint(uint64(b))
+		}
+		return nil
+	}
+	if elemIsExactlyByte {
 		// Set value with a copy of the data, typed as the destination slice.
 		buf := make([]byte, len(data))
 		copy(buf, data)
 		value.Set(reflect.ValueOf(buf).Convert(value.Type()))
+		return nil
 	}
+	out := reflect.MakeSlice(value.Type(), len(data), len(data))
+	for i, b := range data {
+		out.Index(i).SetUint(uint64(b))
+	}
+	value.Set(out)
 	return nil
 }
 

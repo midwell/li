@@ -115,3 +115,97 @@ func TestRejectsBadVersionAndFormat(t *testing.T) {
 		t.Errorf("Marshal rejected a valid X3 IPv4 PDU: %v", err)
 	}
 }
+
+// TestPayloadFormatTableMatchesSpec asserts the whole of TS 103 221-2 V1.10.1
+// table 5.4.1-1, not only the handful of formats this project emits. The table in
+// x2x3.go is transcribed by hand from a specification that publishes no
+// machine-readable form, so nothing checks it against the source; what this test
+// does is make the *next* revision's addition fail here rather than pass
+// unnoticed, which is how value 17 went missing for three revisions.
+func TestPayloadFormatTableMatchesSpec(t *testing.T) {
+	// Value, name, permitted on X2, permitted on X3 — table 5.4.1-1.
+	spec := []struct {
+		value  PayloadFormat
+		name   string
+		x2, x3 bool
+	}{
+		{PayloadFormatReserved, "Reserved for Keepalive mechanism", false, false}, // N/A in the table
+		{PayloadFormatETSI102232_1, "ETSI TS 102 232-1 Defined Payload", true, true},
+		{PayloadFormat3GPP33128, "3GPP TS 33.128 Defined Payload", true, true},
+		{PayloadFormat3GPP33108, "3GPP TS 33.108 Defined Payload", true, true},
+		{PayloadFormatProprietary, "Proprietary Payload", true, true},
+		{PayloadFormatIPv4, "IPv4 Packet", true, true},
+		{PayloadFormatIPv6, "IPv6 Packet", true, true},
+		{PayloadFormatEthernet, "Ethernet Frame", false, true},
+		{PayloadFormatRTP, "RTP Packet", false, true},
+		{PayloadFormatSIP, "SIP Message", true, false},
+		{PayloadFormatDHCP, "DHCP Message", true, false},
+		{PayloadFormatRADIUS, "RADIUS Packet", true, false},
+		{PayloadFormatGTPU, "GTP-U Message", false, true},
+		{PayloadFormatMSRP, "MSRP Message", false, true},
+		{PayloadFormat33108EPSIRI, "3GPP TS 33.108 EpsIRIContent", true, false},
+		{PayloadFormatMIME, "MIME Message", true, true},
+		{PayloadFormatUnstructured, "3GPP Unstructured PDU", false, true},
+		{PayloadFormatPSPDUPayload, "ETSI TS 102 232-1 PS-PDU.Payload", true, true},
+	}
+
+	if len(payloadFormatRules) != len(spec) {
+		t.Errorf("payloadFormatRules has %d entries, table 5.4.1-1 defines %d", len(payloadFormatRules), len(spec))
+	}
+	for _, want := range spec {
+		if _, ok := payloadFormatRules[want.value]; !ok {
+			t.Errorf("payload format %d (%s) is missing from payloadFormatRules", want.value, want.name)
+			continue
+		}
+		if got := want.value.allowedOn(PDUTypeX2); got != want.x2 {
+			t.Errorf("format %d (%s) on X2 = %v, table 5.4.1-1 says %v", want.value, want.name, got, want.x2)
+		}
+		if got := want.value.allowedOn(PDUTypeX3); got != want.x3 {
+			t.Errorf("format %d (%s) on X3 = %v, table 5.4.1-1 says %v", want.value, want.name, got, want.x3)
+		}
+	}
+}
+
+// TestVersionCompatibility covers the rule in clause 5.2.1: the major version
+// increments on a backwards-incompatible change and the minor on a
+// backwards-compatible addition. A peer one minor ahead — which every MDF built
+// against V1.10.1 is, since that revision raised the value to 6 — must therefore
+// still decode. Rejecting it, as this once did, refuses a conformant peer.
+func TestVersionCompatibility(t *testing.T) {
+	encode := func(t *testing.T) []byte {
+		t.Helper()
+		b, err := (&PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128, Payload: []byte("x")}).Marshal()
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		return b
+	}
+
+	t.Run("a higher minor version decodes", func(t *testing.T) {
+		b := encode(t)
+		b[1] = MinorVersion + 1 // 0.6 — what V1.10.1 defines
+		p, _, err := Unmarshal(b)
+		if err != nil {
+			t.Fatalf("Unmarshal rejected version 0.%d: %v", MinorVersion+1, err)
+		}
+		if !bytes.Equal(p.Payload, []byte("x")) {
+			t.Errorf("payload = % x, want %q", p.Payload, "x")
+		}
+	})
+
+	t.Run("a lower minor version decodes", func(t *testing.T) {
+		b := encode(t)
+		b[1] = MinorVersion - 1
+		if _, _, err := Unmarshal(b); err != nil {
+			t.Errorf("Unmarshal rejected version 0.%d: %v", MinorVersion-1, err)
+		}
+	})
+
+	t.Run("a differing major version is rejected", func(t *testing.T) {
+		b := encode(t)
+		b[0] = MajorVersion + 1 // 1.5 — a layout this implementation cannot assume
+		if _, _, err := Unmarshal(b); err == nil {
+			t.Error("Unmarshal accepted major version 1, which may have moved fields")
+		}
+	})
+}

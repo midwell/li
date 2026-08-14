@@ -40,6 +40,7 @@ func goldenSamples() map[string]any {
 	guti := FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 200, AMFSetID: 1, AMFPointer: 0, FiveGTMSI: 3735928559}
 	loc := Location{LocationInfo: LocationInfo{CurrentLocation: true}}
 	fteid := FTEID{TEID: 0x01020304, IPv4Address: []byte{10, 20, 30, 40}}
+	tunnelInfo := GTPTunnelInfo{FiveGSGTPTunnels: FiveGSGTPTunnels{ULNGUUPTunnelInformation: fteid}}
 	snssai := SNSSAI{SliceServiceType: 1, SliceDifferentiator: []byte{0x00, 0x00, 0x7B}}
 	ids := Identifiers(IMSI("262019876543210"), IMEISV("3534250000000151"), MSISDN("4915123456789"))
 
@@ -95,9 +96,9 @@ func goldenSamples() map[string]any {
 			SUPI: IMSI("262019876543210"),
 			GUTI: guti,
 		},
-		// SMFPDUSessionEstablishment gains an OPTIONAL uEEndpoint in this change.
-		// This sample deliberately leaves it unset, so the record must still encode
-		// byte-identically: an added optional that nobody populates changes nothing.
+		// The three records below gain gTPTunnelInfo, which the TS 33.128 payload
+		// tables mark mandatory and which was omitted. Their encodings therefore
+		// change, and expectedUnchanged no longer names them.
 		"SMFPDUSessionEstablishment": SMFPDUSessionEstablishment{
 			SUPI:           IMSI("262019876543210"),
 			PEI:            IMEI("35342500000001"),
@@ -109,15 +110,17 @@ func goldenSamples() map[string]any {
 			DNN:            DNN("internet"),
 			RequestType:    SMRequestInitial,
 			AccessType:     AccessThreeGPP,
+			GTPTunnelInfo:  tunnelInfo,
 		},
 		"SMFPDUSessionModification": SMFPDUSessionModification{
-			SUPI:         IMSI("262019876543210"),
-			PEI:          IMEI("35342500000001"),
-			GPSI:         MSISDN("4915123456789"),
-			SNSSAI:       snssai,
-			RequestType:  SMRequestModification,
-			AccessType:   AccessThreeGPP,
-			PDUSessionID: 5,
+			SUPI:          IMSI("262019876543210"),
+			PEI:           IMEI("35342500000001"),
+			GPSI:          MSISDN("4915123456789"),
+			SNSSAI:        snssai,
+			RequestType:   SMRequestModification,
+			AccessType:    AccessThreeGPP,
+			PDUSessionID:  5,
+			GTPTunnelInfo: tunnelInfo,
 		},
 		"SMFPDUSessionRelease": SMFPDUSessionRelease{
 			SUPI:           IMSI("262019876543210"),
@@ -127,8 +130,6 @@ func goldenSamples() map[string]any {
 			UplinkVolume:   123456,
 			DownlinkVolume: 654321,
 		},
-		// The one record expected to change: its mandatory uEEndpoint was emitted as
-		// an empty SEQUENCE before this change and now carries the UE's address.
 		"SMFStartOfInterceptionWithEstablishedPDUSession": SMFStartOfInterceptionWithEstablishedPDUSession{
 			SUPI:           IMSI("262019876543210"),
 			PEI:            IMEI("35342500000001"),
@@ -141,6 +142,7 @@ func goldenSamples() map[string]any {
 			DNN:            DNN("internet"),
 			RequestType:    SMRequestExisting,
 			AccessType:     AccessThreeGPP,
+			GTPTunnelInfo:  tunnelInfo,
 		},
 		"SMFUnsuccessfulProcedure": SMFUnsuccessfulProcedure{
 			FailedProcedureType: SMFFailedPDUSessionEstablishment,
@@ -206,8 +208,6 @@ var expectedUnchanged = map[string]bool{
 	"AMFUnsuccessfulProcedure":               true,
 	"AMFIdentifierAssociation":               true,
 	"AMFIdentifierDeassociation":             true,
-	"SMFPDUSessionEstablishment":             true,
-	"SMFPDUSessionModification":              true,
 	"SMFPDUSessionRelease":                   true,
 	"SMFUnsuccessfulProcedure":               true,
 	"AMFUEServiceAccept":                     true,
@@ -266,6 +266,18 @@ func writeGolden(t *testing.T, encodings map[string]string) {
 	sort.Strings(names)
 
 	var b strings.Builder
+	// The generated file is checked in, so it needs its own licensing information
+	// or `reuse lint` fails the build. It is written here rather than in a
+	// `.license` sidecar precisely because this function rewrites the file: a
+	// sidecar would outlive a regeneration that dropped the tags from the file it
+	// describes, which is how the tags went missing in the first place.
+	// REUSE-IgnoreStart -- these tags describe the generated file, not this one;
+	// without the guard `reuse lint` reads the string literal's trailing escape as
+	// part of the licence expression and rejects it.
+	b.WriteString("# SPDX-FileCopyrightText: 2026 Forsway Scandinavia AB\n")
+	b.WriteString("# SPDX-License-Identifier: Apache-2.0\n")
+	// REUSE-IgnoreEnd
+	b.WriteString("#\n")
 	b.WriteString("# DER encodings of every xIRI record type, one per line: <RecordName> <hex>.\n")
 	b.WriteString("# Regenerate with: go test ./iri/ -run TestGoldenEncodings -update-golden\n")
 	b.WriteString("# These pin the output of the shared li/asn1 codec so a codec change has to\n")

@@ -334,6 +334,29 @@ var detailsTemplate = template.Must(template.New("x1all").Funcs(template.FuncMap
 // nobody can withdraw is exactly what must not exist. A liveness signal cannot
 // substitute — a restarted requester is perfectly alive.
 func (r *Requester) TaskXIDs() ([]types.XID, error) {
+	reported, err := r.ReportedTasks()
+	if err != nil {
+		return nil, err
+	}
+	xids := make([]types.XID, 0, len(reported))
+	for _, t := range reported {
+		if t.TaskDetails.XID != "" {
+			xids = append(xids, types.XID(t.TaskDetails.XID))
+		}
+	}
+
+	return xids, nil
+}
+
+// ReportedTasks asks the NE what tasking it holds and returns each task with the
+// status the NE reports for it.
+//
+// TaskXIDs answers "which tasks", which is what reconciliation after a restart
+// needs. This answers "and how are they", which is what a triggering function
+// needs in order to notice that a trigger it installed is not actually running —
+// a task whose provisioning failed, or which carries an unresolved fault, is
+// content interception that is not happening while everyone believes it is.
+func (r *Requester) ReportedTasks() ([]TaskResponseDetails, error) {
 	var body bytes.Buffer
 	if err := detailsTemplate.Execute(&body, struct{ Header header }{Header: r.header("GetAllDetailsRequest")}); err != nil {
 		return nil, err
@@ -362,15 +385,7 @@ func (r *Requester) TaskXIDs() ([]types.XID, error) {
 		return nil, &RequestError{Code: m.ErrorInformation.ErrorCode, Description: m.ErrorInformation.ErrorDescription}
 	}
 
-	reported := m.ReportedTasks()
-	xids := make([]types.XID, 0, len(reported))
-	for _, t := range reported {
-		if t.TaskDetails.XID != "" {
-			xids = append(xids, types.XID(t.TaskDetails.XID))
-		}
-	}
-
-	return xids, nil
+	return m.ReportedTasks(), nil
 }
 
 // Keepalive tells the NE this requester is still present.

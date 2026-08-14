@@ -110,6 +110,18 @@ const (
 	// warrants it provisioned are gone, since tasking is held in memory and nothing
 	// else announces the loss.
 	NEIssueTaskingAbsent = "taskingAbsent"
+	// NEIssueTriggerFaulty: a POI this element triggers reports that a content
+	// trigger this element installed is not running — its provisioning did not
+	// complete, or it carries an unresolved fault. The warrant is live and the
+	// triggering function believes interception is in place, so nothing else would
+	// report the gap: the POI answers to this element, not to the ADMF, and the
+	// ADMF cannot ask it directly over the internal triggering interface.
+	//
+	// A terminating fault would be wrong. The interception has stopped, but this
+	// element has not stopped it and may recover it on the next session event, so
+	// what the ADMF is told is that something is currently broken rather than that
+	// the tasking is over.
+	NEIssueTriggerFaulty = "triggerFaulty"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
 	// interception is running but its product is not correlatable — a fault the ADMF
@@ -174,6 +186,7 @@ var neIssueEncodings = map[string]neIssueEncoding{
 	NEIssueX3DeliveryLost:  {neIssueFaultReport, issueCodeNonTerminatingFault},
 	NEIssueX3TagInvalid:    {neIssueFaultReport, issueCodeNonTerminatingFault},
 	NEIssueReconcileFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueTriggerFaulty:   {neIssueFaultReport, issueCodeNonTerminatingFault},
 	// Nothing has broken — every packet is delivered under some warrant — so this is
 	// a Warning rather than a FaultReport. What it warns of is that one warrant's
 	// product is complete at the cost of another's being empty.

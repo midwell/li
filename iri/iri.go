@@ -128,6 +128,30 @@ type FTEID struct {
 	IPv6Address []byte `asn1:"tag:3,optional"` // OCTET STRING(16)
 }
 
+// FiveGSGTPTunnels ::= SEQUENCE — the 5GS user plane tunnels of a PDU session
+// (TS 33.128 table 6.2.3-1C). Only uLNGUUPTunnelInformation is modelled: it is
+// the F-TEID of the UPF endpoint of the NG-U transport bearer, which is the
+// value a POI here can supply. additionalULNGUUPTunnelInformation (multiple NG-U
+// bearers) and dLRANTunnelInformation (downlink RAN tunnel and QoS flows) are
+// not modelled — the SMF holds neither for the single default path it manages.
+type FiveGSGTPTunnels struct {
+	ULNGUUPTunnelInformation FTEID `asn1:"tag:1,optional"`
+}
+
+// GTPTunnelInfo ::= SEQUENCE — the user plane GTP tunnels of a session
+// (TS 33.128 table 6.2.3-1B). The payload tables mark this field **M** in
+// SMFPDUSessionEstablishment, SMFPDUSessionModification and
+// SMFStartOfInterceptionWithEstablishedPDUSession, while the published ASN.1
+// module marks it OPTIONAL — so a record omitting it decodes cleanly and is
+// still non-conformant. It was absent here for exactly that reason; see
+// CONFORMANCE.md.
+//
+// ePSGTPTunnels [2] is not modelled: it reports PDN connection events at an
+// SGW/PGW, which this project does not implement.
+type GTPTunnelInfo struct {
+	FiveGSGTPTunnels FiveGSGTPTunnels `asn1:"tag:1,optional"`
+}
+
 // Location ::= SEQUENCE — minimal model. All six members are OPTIONAL; we model
 // only locationInfo [1] (and within it only currentLocation), so a Location may
 // be empty. The deeper detail (userLocation → EUTRA/NR/N3GA/..., positioningInfo,
@@ -372,18 +396,20 @@ type SMFPDUSessionEstablishment struct {
 	DNN            DNN                `asn1:"tag:12"`
 	RequestType    FiveGSMRequestType `asn1:"tag:15"`
 	AccessType     AccessType         `asn1:"tag:16,optional"`
+	GTPTunnelInfo  GTPTunnelInfo      `asn1:"tag:25,optional"`
 }
 
 // SMFPDUSessionModification is a slice of the same-named record. Only
 // requestType is mandatory.
 type SMFPDUSessionModification struct {
-	SUPI         any                `asn1:"tag:1,explicit,choice:supi,optional"`
-	PEI          any                `asn1:"tag:3,explicit,choice:pei,optional"`
-	GPSI         any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
-	SNSSAI       SNSSAI             `asn1:"tag:5,optional"`
-	RequestType  FiveGSMRequestType `asn1:"tag:8"`
-	AccessType   AccessType         `asn1:"tag:9,optional"`
-	PDUSessionID PDUSessionID       `asn1:"tag:11,optional"` // note: value 0 indistinguishable from absent
+	SUPI          any                `asn1:"tag:1,explicit,choice:supi,optional"`
+	PEI           any                `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI          any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	SNSSAI        SNSSAI             `asn1:"tag:5,optional"`
+	RequestType   FiveGSMRequestType `asn1:"tag:8"`
+	AccessType    AccessType         `asn1:"tag:9,optional"`
+	PDUSessionID  PDUSessionID       `asn1:"tag:11,optional"` // note: value 0 indistinguishable from absent
+	GTPTunnelInfo GTPTunnelInfo      `asn1:"tag:16,optional"`
 }
 
 // SMFPDUSessionRelease is a slice of the same-named record. Mandatory: sUPI,
@@ -515,6 +541,7 @@ type SMFStartOfInterceptionWithEstablishedPDUSession struct {
 	DNN            DNN                `asn1:"tag:12"`
 	RequestType    FiveGSMRequestType `asn1:"tag:15"`
 	AccessType     AccessType         `asn1:"tag:16,optional"`
+	GTPTunnelInfo  GTPTunnelInfo      `asn1:"tag:23,optional"`
 }
 
 // SMFUnsuccessfulProcedure is a slice of the same-named record (XIRIEvent [10]),

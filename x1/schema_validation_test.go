@@ -61,16 +61,32 @@ var vendoredSchemaDigests = map[string]string{
 
 // requireXmllint reports whether a validator is available, loudly.
 //
-// It skips rather than fails, because a developer without libxml2 should not be blocked —
-// but the message says exactly what is not being checked. A quiet skip is how the TS
-// 33.128 record-conformance check contributed nothing for weeks while reading as
-// coverage, and this test exists because of that class of mistake.
+// A developer without libxml2 should not be blocked, so this skips by default — but the
+// message says exactly what is not being checked. Where validation is guaranteed it fails
+// instead, because a check that skips is not a check: a run that reports success because
+// the validator was missing is indistinguishable from one that validated.
+//
+// The guarantee is an explicit opt-in rather than a test for CI, and that distinction is
+// load-bearing. The shared `unit-test` reusable workflow runs on a runner image whose
+// declared package list does not include libxml2-utils, so keying off CI would either fail
+// that job or quietly depend on a transitive package — and depending on an undeclared
+// transitive package is how this validation came to skip unnoticed in the first place. The
+// `conformance` job in .github/workflows/main.yml installs the validator and sets this
+// variable, so exactly one job promises to validate and fails if it cannot.
+const requireValidationEnv = "LI_REQUIRE_SCHEMA_VALIDATION"
+
 func requireXmllint(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("xmllint"); err != nil {
-		t.Skip("xmllint (libxml2) not installed: X1 output is NOT being validated against " +
-			"the published schema by this run. Install libxml2-utils; CI must have it.")
+	if _, err := exec.LookPath("xmllint"); err == nil {
+		return
 	}
+	const msg = "xmllint (libxml2) not installed: X1 output is NOT being validated against " +
+		"the published schema by this run. Install libxml2-utils."
+	if os.Getenv(requireValidationEnv) != "" {
+		t.Fatalf("%s %s is set, so this is a failure rather than a skip — the job that sets "+
+			"it exists to guarantee validation runs.", msg, requireValidationEnv)
+	}
+	t.Skipf("%s The conformance CI job sets %s and fails if the validator is absent.", msg, requireValidationEnv)
 }
 
 func checkVendoredSchemas(t *testing.T) {

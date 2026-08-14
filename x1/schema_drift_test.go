@@ -261,6 +261,46 @@ func deref(t reflect.Type) reflect.Type {
 // Nothing is on this list because it was inconvenient. Each entry is a case where the
 // specification addresses the element to a function this element is not, or where
 // discarding it cannot change what is intercepted or where the product goes.
+// disregardedResponseElements is the response-side counterpart. It is a separate map
+// because the two audits walk different type sets: an entry naming a response type would
+// read as stale to the request-side anti-rot check, which never visits it. The rules are
+// otherwise identical.
+//
+// A requester that drops a field of an *answer* misreads what a peer holds, which is a
+// different failure from an element that drops a field of an instruction. The two fields of
+// TaskStatus a triggering function can act on — provisioningStatus and listOfFaults — are
+// modelled and acted on; these are the rest.
+var disregardedResponseElements = map[string]map[string]string{
+	"TaskStatus": {
+		"amountOfX2Data":         "a statistic; the triggering function reconciles against tasking, not volumes, and relaying a figure it has not verified would state it as fact",
+		"amountOfX3Data":         "as amountOfX2Data",
+		"numberOfModifications":  "a statistic, as above",
+		"timeOfLastIntercept":    "a statistic, as above",
+		"timeOfLastModification": "a statistic, as above",
+		"taskStatusExtensions":   "the schema's extension point; nothing is defined here for this element to act on, and an extension it cannot interpret is not one it can honour",
+	},
+	"GetAllDetailsResponse": {
+		// The requester asks GetAllDetails to learn what tasking a POI holds. The peer's
+		// own health is a different question, with its own message (GetNEStatus) and its
+		// own condition set.
+		//
+		// Worth knowing before this changes: over the internal triggering interface the
+		// ADMF cannot ask the UPF anything — the UPF authenticates its peer as the SMF's
+		// triggering function — so this SMF is the only party that could ever relay a
+		// UPF's element health onward. If that is wanted, this field is where it comes
+		// from.
+		"neStatusDetails": "element health is asked with GetNEStatus, not inferred from a tasking answer",
+		// The triggering function provisions a destination before the task naming it and
+		// treats the create as idempotent, learning from error 2030 that the peer already
+		// holds one. Reading the list would save a round trip; it would not change what is
+		// provisioned or where product goes.
+		"listOfDestinationResponseDetails": "destinations are re-provisioned idempotently; error 2030 already reports one that is held",
+		// This element supports no Generic Objects and answers by omitting the list, so
+		// there is never one to read.
+		"listOfGenericObjectResponseDetails": "this element supports no Generic Objects, so the list is always absent",
+	},
+}
+
 var disregardedElements = map[string]map[string]string{
 	"GetAllGenericObjectDetailsRequest": {
 		// The third find of this class, and the first found by a test rather than by
@@ -338,6 +378,9 @@ type auditor struct {
 	// one can be reported.
 	used map[string]map[string]bool
 	seen map[string]bool
+	// exempt is the disregard list this audit is judged against. The request and
+	// response audits pass different maps; see disregardedResponseElements.
+	exempt map[string]map[string]string
 }
 
 func (a *auditor) walk(path, xsdType string, node *declNode, depth int) {
@@ -368,7 +411,7 @@ func (a *auditor) walk(path, xsdType string, node *declNode, depth int) {
 			// the message is refused, so nothing is discarded silently.
 			a.refusable = append(a.refusable, finding{path: where})
 		default:
-			if _, exempt := disregardedElements[xsdType][m.name]; exempt {
+			if _, exempt := a.exempt[xsdType][m.name]; exempt {
 				if a.used[xsdType] == nil {
 					a.used[xsdType] = map[string]bool{}
 				}
@@ -386,7 +429,7 @@ func TestNoHandledFieldIsSilentlyDiscarded(t *testing.T) {
 	checkVendoredSchemas(t)
 	types := loadSchema(t)
 
-	a := &auditor{types: types, used: map[string]map[string]bool{}, seen: map[string]bool{}}
+	a := &auditor{types: types, used: map[string]map[string]bool{}, seen: map[string]bool{}, exempt: disregardedElements}
 	for _, c := range auditedRequestTypes {
 		a.walk(c.xsdType, c.xsdType, declaredBy(c.goType), 0)
 	}
@@ -400,10 +443,10 @@ func TestNoHandledFieldIsSilentlyDiscarded(t *testing.T) {
 
 	// The anti-rot half: an exemption that is no longer needed is an exemption that has
 	// stopped describing this element.
-	for xsdType, elements := range disregardedElements {
+	for xsdType, elements := range a.exempt {
 		for name := range elements {
 			if !a.used[xsdType][name] {
-				t.Errorf("disregardedElements lists %s/%s, but the audit no longer finds it "+
+				t.Errorf("the disregard list names %s/%s, but the audit no longer finds it "+
 					"undeclared — remove the entry rather than leaving the list describing a "+
 					"past that has moved on", xsdType, name)
 			}
@@ -422,7 +465,7 @@ func TestDriftAuditDistinguishesChoiceFromSequence(t *testing.T) {
 
 	// DeliveryAddress is an xs:choice with four arms; only ipAddressAndPort is modelled.
 	// None of the other three may be reported as a silent discard.
-	a := &auditor{types: types, used: map[string]map[string]bool{}, seen: map[string]bool{}}
+	a := &auditor{types: types, used: map[string]map[string]bool{}, seen: map[string]bool{}, exempt: disregardedElements}
 	a.walk("DeliveryAddress", "DeliveryAddress", declaredBy(reflect.TypeOf(DeliveryAddress{})), 0)
 	if len(a.silent) != 0 {
 		t.Errorf("unmodelled choice arms were reported as silent discards: %v", a.silent)
@@ -457,11 +500,35 @@ func TestDriftAuditDistinguishesChoiceFromSequence(t *testing.T) {
 // is a different failure from an element that drops a field of an instruction, and fixing
 // them means deciding what the CC-TF should do with each. Recorded here so the next
 // increment starts from a list rather than from another reading of the schema.
+// mergedDisregards combines disposition lists, later entries winning per type+element.
+func mergedDisregards(maps ...map[string]map[string]string) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, m := range maps {
+		for xsdType, elements := range m {
+			if out[xsdType] == nil {
+				out[xsdType] = map[string]string{}
+			}
+			for name, reason := range elements {
+				out[xsdType][name] = reason
+			}
+		}
+	}
+
+	return out
+}
+
 func TestResponseParsingGaps(t *testing.T) {
 	checkVendoredSchemas(t)
 	types := loadSchema(t)
 
-	a := &auditor{types: types, used: map[string]map[string]bool{}, seen: map[string]bool{}}
+	// Requests and responses share types — TaskDetails and MediationDetails appear in
+	// both — so a disposition already recorded for the request side governs the response
+	// side too. Only the response-specific entries are anti-rot checked below, because
+	// the request entries are exercised by the request audit and would read as stale here.
+	a := &auditor{
+		types: types, used: map[string]map[string]bool{}, seen: map[string]bool{},
+		exempt: mergedDisregards(disregardedElements, disregardedResponseElements),
+	}
 	for _, c := range []struct {
 		xsdType string
 		goType  reflect.Type
@@ -474,6 +541,17 @@ func TestResponseParsingGaps(t *testing.T) {
 		a.walk(c.xsdType, c.xsdType, declaredBy(c.goType), 0)
 	}
 
+	// The anti-rot half, over the response-specific entries only.
+	for xsdType, elements := range disregardedResponseElements {
+		for name := range elements {
+			if !a.used[xsdType][name] {
+				t.Errorf("disregardedResponseElements lists %s/%s, but the audit no longer finds "+
+					"it undeclared — remove the entry rather than leaving the list describing a "+
+					"past that has moved on", xsdType, name)
+			}
+		}
+	}
+
 	if len(a.silent) == 0 {
 		t.Log("the response-parsing structs declare every sequence element the schema defines")
 
@@ -481,8 +559,9 @@ func TestResponseParsingGaps(t *testing.T) {
 	}
 	gaps := paths(a.silent)
 	sort.Strings(gaps)
-	t.Logf("%d response element(s) a requester parsing a peer's answer would discard, "+
-		"recorded as follow-on work rather than fixed here:\n  %s",
+	t.Errorf("%d response element(s) a requester parsing a peer's answer would discard, and "+
+		"which are neither modelled nor listed in disregardedResponseElements. Decide what a "+
+		"requester should do with each, then act on it or record why not:\n  %s",
 		len(gaps), strings.Join(gaps, "\n  "))
 }
 

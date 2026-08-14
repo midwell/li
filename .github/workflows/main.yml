@@ -81,6 +81,36 @@ jobs:
     with:
       branch_name: ${{ github.ref }}
 
+  # The conformance checks validate this module's output against the published
+  # ETSI and 3GPP definitions vendored under testdata. The X1 half shells out to
+  # xmllint, which the shared unit-test runner image does not declare, so it
+  # skips there — and a skipped check reports success while validating nothing.
+  # This job installs the validator and sets LI_REQUIRE_SCHEMA_VALIDATION, which
+  # turns that skip into a failure, so exactly one job promises the validation
+  # actually ran. The TS 33.128 record audit needs no external tooling and runs
+  # everywhere, including here.
+  conformance:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install the XML schema validator
+        run: sudo apt-get update && sudo apt-get install -y libxml2-utils
+
+      - name: Confirm the validator is present
+        run: xmllint --version
+
+      - name: Run the conformance checks
+        env:
+          LI_REQUIRE_SCHEMA_VALIDATION: '1'
+        run: go test -v ./x1/ ./iri/ -run 'Validate|Drift|Schema|ASN1'
+
   analysis:
     if: github.repository_owner == 'omec-project'
     permissions:

@@ -108,3 +108,15 @@ been archived.
    round-trips. Found while adding patch 7, since a CHOICE of address types is
    exactly this shape. `octetstring_test.go` covers both paths for named slices and
    named arrays.
+
+   **Extended after an audit of this patch against its own guard.** The guard tests
+   the element's *kind*, so it also admits a named **element** type
+   (`type b uint8; type X []b`) — and the decode bodies still could not handle that:
+   `reflect.Copy` and `Value.Convert` both require identical element types, and each
+   panicked. The same defect the patch was written to fix, surviving inside the fix.
+   Decode now assigns element by element for that shape, keeping the bulk copy for
+   `[]byte` and `type X []byte`; refusing the shape instead was rejected because
+   `encodeOctetString` accepts it, and a value this codec can write and cannot read
+   back is worse than a slow path. Latent rather than live — every named byte type
+   in `li/iri` is `[]byte` — and found by enumerating what the guard admits against
+   what the body handles, not by anything failing.

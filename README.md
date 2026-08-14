@@ -83,7 +83,7 @@ Three network functions act as POIs:
 | `store`  | Concurrency-safe active-task store, indexed by target identifier |
 | `x1`     | ETSI TS 103 221-1 X1 provisioning listener + NE-issue reporter (ADMF direction) |
 | `iri`    | 3GPP TS 33.128 xIRI record builders + BER/CHOICE encoder |
-| `x2x3`   | ETSI TS 103 221-2 X2/X3 PDU framing + delivery client |
+| `x2x3`   | ETSI TS 103 221-2 X2/X3 PDU framing + delivery client (see `x2x3/CONFORMANCE.md`) |
 | `mtls`   | Loads the LI PKI credentials and builds the X1/X2/X3 TLS configs |
 | `asn1`   | Bundled BER/CHOICE ASN.1 codec used by `iri` |
 
@@ -937,9 +937,26 @@ records are not exercised, because a handover needs two RAN nodes. See
 ## Standards
 
 - ETSI TS 103 221-1 — X1 (task provisioning)
-- ETSI TS 103 221-2 — X2/X3 (xIRI/xCC delivery framing)
+- ETSI TS 103 221-2 — X2/X3 (xIRI/xCC delivery framing), read against **V1.10.1**
 - 3GPP TS 33.127 — LI architecture; 3GPP TS 33.128 — stage-3 procedures / xIRI records
 - ETSI TS 104 000 — X0 (credential pre-provisioning)
+
+**Two conformance dispositions record what is and is not implemented on the other two wire
+formats, and they are the honest answer rather than this table:**
+
+- `x2x3/CONFORMANCE.md` — every TS 103 221-2 header field, PDU type, conditional attribute
+  and payload format, against V1.10.1. Two gaps are recorded there and neither is subtle:
+  **the clause 6.2.4 keepalive mechanism is not implemented**, so this element sends no
+  Keepalive PDU and applies no TIME_P2 disconnect; and **no conditional attribute is ever
+  emitted**, six of which TS 33.128 requires. The emitted Version field is deliberately held
+  at 5 rather than the 6 that V1.10.1 defines, because raising it would claim a conformance
+  this element does not yet have.
+- `iri/CONFORMANCE.md` — the TS 33.128 records, bounded to those this project emits, with the
+  M/C/O verdict for every field the published ASN.1 module defines and we do not populate.
+
+Both are readings rather than checks where the specification is prose, and each says which
+it is. `iri/asn1_drift_test.go` makes the record half mechanical: it fails when the module
+defines a field no record models and nothing declares it absent.
 
 The published X1 schemas are vendored under `x1/testdata/schemas/`, pinned by digest, with
 their source URLs and versions beside them. Every X1 message this element sends is

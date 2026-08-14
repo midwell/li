@@ -10,6 +10,8 @@ package x1
 
 import (
 	"encoding/xml"
+	"fmt"
+	"strings"
 
 	"github.com/omec-project/li/types"
 )
@@ -381,7 +383,62 @@ type ReportedDestination struct {
 // clause 6.2.5).
 type TaskResponseDetails struct {
 	TaskDetails TaskDetails `xml:"taskDetails"`
-	TaskStatus  string      `xml:"taskStatus"`
+	TaskStatus  TaskStatus  `xml:"taskStatus"`
+}
+
+// TaskStatus is how a peer reports the state of a task it holds. It is a complex
+// type in the schema, and this used to be parsed as a plain string — so a
+// requester read a peer's entire account of a task as concatenated character data
+// and acted on none of it.
+//
+// Only the two fields a requester can act on are modelled. The rest are declared
+// disregarded, with reasons, in the response-side drift audit:
+//
+//   - timeOfLastIntercept, amountOfX2Data, amountOfX3Data, timeOfLastModification,
+//     numberOfModifications are statistics. A triggering function does not
+//     reconcile against them, and reporting them onward would state as fact
+//     figures it has not verified.
+//   - taskStatusExtensions is the schema's extension point; there is nothing
+//     defined for this element to act on.
+type TaskStatus struct {
+	// ProvisioningStatus is whether the peer has provisioned the task. Anything
+	// other than "complete" means the interception a triggering function believes
+	// it installed is not running.
+	ProvisioningStatus string `xml:"provisioningStatus"`
+	// Faults are the peer's unresolved faults for this task. Mandatory in the
+	// schema and may be empty, so an empty list is the healthy answer.
+	Faults []X1Error `xml:"listOfFaults>unresolvedFault"`
+}
+
+// Healthy reports whether a peer's account of a task says the interception is
+// actually running: provisioned, and with no unresolved fault.
+//
+// It treats an empty provisioning status as healthy. A peer that reports no
+// status is not reporting a *problem*, and the alternative — calling silence a
+// fault — would make every older or sparser implementation look broken.
+func (t TaskStatus) Healthy() bool {
+	return len(t.Faults) == 0 && (t.ProvisioningStatus == "" || t.ProvisioningStatus == "complete")
+}
+
+// Describe renders the unhealthy part of a status for a fault report. It never
+// includes a target identifier or anything else that could identify a subject —
+// callers pass it to the ADMF, which is told how much is wrong, never whose.
+func (t TaskStatus) Describe() string {
+	var b strings.Builder
+	if t.ProvisioningStatus != "" && t.ProvisioningStatus != "complete" {
+		fmt.Fprintf(&b, "provisioning status %q", t.ProvisioningStatus)
+	}
+	for _, f := range t.Faults {
+		if b.Len() > 0 {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "unresolved fault %d", f.ErrorCode)
+	}
+	if b.Len() == 0 {
+		return "no fault reported"
+	}
+
+	return b.String()
 }
 
 // X1Error carries an error response (subset).
