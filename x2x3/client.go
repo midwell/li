@@ -25,20 +25,34 @@ type Client struct {
 	tlsConfig    *tls.Config
 	dialTimeout  time.Duration
 	writeTimeout time.Duration
+	keepalive    KeepaliveConfig
 
-	mu   sync.Mutex
-	conn net.Conn
+	mu sync.Mutex
+	// live is the connection currently held, with the keepalive state that belongs
+	// to it, or nil when none is. Everything about one connection dies with it —
+	// see connState.
+	live *connState
 
-	// unreachable is what the most recent delivery attempt established about this
-	// destination, kept outside mu because a fault probe reads it on the X1 request
-	// goroutine: mu is held across a dial and a write, and an answer to a provisioning
-	// function must not wait for either. See Unreachable.
+	// unreachable is what the most recent exchange with this destination established,
+	// kept outside mu because a fault probe reads it on the X1 request goroutine: mu is
+	// held across a dial and a write, and an answer to a provisioning function must not
+	// wait for either. See Unreachable.
 	unreachable atomic.Bool
 }
 
 // NewClient returns a delivery client for the MDF at addr ("host:port").
-func NewClient(addr string, tlsConfig *tls.Config) *Client {
-	return &Client{addr: addr, tlsConfig: tlsConfig, dialTimeout: 10 * time.Second, writeTimeout: 5 * time.Second}
+//
+// The zero KeepaliveConfig is the conformant one — the clause 6.2.4 mechanism, at the
+// specification's own timers — so a caller that has no opinion gets the behaviour the
+// specification requires rather than none of it.
+func NewClient(addr string, tlsConfig *tls.Config, keepalive KeepaliveConfig) *Client {
+	return &Client{
+		addr:         addr,
+		tlsConfig:    tlsConfig,
+		dialTimeout:  10 * time.Second,
+		writeTimeout: 5 * time.Second,
+		keepalive:    keepalive.withDefaults(),
+	}
 }
 
 // Send marshals pdu and writes it to the MDF, (re)connecting as needed. A PDU
@@ -63,17 +77,23 @@ func (c *Client) sendBytes(b []byte) error {
 	return err
 }
 
-// Unreachable reports whether the most recent delivery attempt to this destination failed
-// and none has since succeeded.
+// Unreachable reports whether the most recent exchange with this destination failed and
+// none has since succeeded.
 //
-// It answers from what that attempt already established and dials nothing. A POI consults
+// It answers from what that exchange already established and dials nothing. A POI consults
 // it from a fault probe, which runs on the X1 request goroutine: a probe that performed I/O
 // would hold up a provisioning function's answer and — with a short enough timeout at the
 // other end — could make a working element look dead while it asked itself a slow question.
 //
-// It is false before anything has been sent, deliberately. An element with nothing to
-// deliver has not found its mediation function unreachable; it has not looked. So a
-// destination that fails while idle is reported at the next send and not before.
+// "Exchange" rather than "delivery attempt", since the keepalive mechanism: a connection
+// whose mediation function stops acknowledging is reported within TIME_P2 even though
+// nothing has been delivered over it. That is the improvement keepalive hands this probe —
+// a destination that dies while idle used to be invisible until the next send.
+//
+// It is still false before anything has been sent, deliberately, and the mechanism does not
+// change that: an element with nothing to deliver has not found its mediation function
+// unreachable, it has not looked, and keepalives run only on a connection that a delivery
+// has already dialled.
 func (c *Client) Unreachable() bool {
 	return c.unreachable.Load()
 }
@@ -85,7 +105,7 @@ func (c *Client) deliver(b []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.conn == nil {
+	if c.live == nil {
 		if err := c.dialLocked(); err != nil {
 			return err
 		}
@@ -114,7 +134,12 @@ func (c *Client) dialLocked() error {
 	if err != nil {
 		return fmt.Errorf("x2x3: dial %s: %w", c.addr, err)
 	}
-	c.conn = conn
+	c.live = &connState{conn: conn, stop: make(chan struct{})}
+	// The keepalive timer and the read path belong to this connection and to no
+	// other: they start here and stop in dropLocked, which is what makes a stale
+	// reader impossible and a keepalive on a connection nobody holds impossible.
+	c.startKeepaliveLocked(c.live)
+
 	return nil
 }
 
@@ -124,28 +149,49 @@ func (c *Client) writeLocked(b []byte) error {
 	// write error — drop + one redial.
 	if c.writeTimeout > 0 {
 		//nolint:errcheck // a deadline a connection will not take is not actionable here
-		_ = c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+		_ = c.conn().SetWriteDeadline(time.Now().Add(c.writeTimeout))
 	}
-	_, err := c.conn.Write(b)
+	_, err := c.conn().Write(b)
 	return err
 }
 
+// conn is the held connection. Callers hold mu, and every one of them has already
+// established that a connection exists.
+func (c *Client) conn() net.Conn { return c.live.conn }
+
+// dropLocked closes the held connection and signals whatever runs on its behalf to
+// stop. It does not wait for those goroutines, deliberately: the keepalive timer
+// takes mu to write, so waiting here — under mu — would deadlock against the very
+// goroutine being waited for. They observe the closed connection or the closed stop
+// channel and exit on their own, and nothing they do afterwards can touch the
+// client, because each checks that it is still the live connection first.
 func (c *Client) dropLocked() {
-	if c.conn != nil {
-		_ = c.conn.Close()
-		c.conn = nil
+	if c.live == nil {
+		return
 	}
+	_ = c.live.conn.Close()
+	close(c.live.stop)
+	c.live = nil
 }
 
-// Close closes the underlying connection, if any.
+// Close closes the underlying connection, if any, and waits for its keepalive timer
+// and reader to exit — so a caller that has closed a client is not left with
+// goroutines it cannot see. The wait happens after mu is released, for the reason
+// dropLocked gives.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
+	live := c.live
+	if live == nil {
+		c.mu.Unlock()
 		return nil
 	}
-	err := c.conn.Close()
-	c.conn = nil
+	err := live.conn.Close()
+	close(live.stop)
+	c.live = nil
+	c.mu.Unlock()
+
+	live.wg.Wait()
+
 	return err
 }
 

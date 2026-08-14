@@ -23,6 +23,7 @@ import (
 // Safe for concurrent use.
 type Pool struct {
 	tlsConfig *tls.Config
+	keepalive KeepaliveConfig
 	onError   func(error)
 	onDrop    func()
 
@@ -30,12 +31,24 @@ type Pool struct {
 	senders map[string]Sender
 }
 
-// NewPool returns a pool that dials with tlsConfig. onError is called with each worker
-// delivery error and onDrop when a full queue costs a PDU; both may be nil, and both run
-// on a delivery worker goroutine, so neither may block.
-func NewPool(tlsConfig *tls.Config, onError func(error), onDrop func()) *Pool {
+// NewPool returns a pool that dials with tlsConfig, running the clause 6.2.4 keepalive
+// mechanism on every connection it opens as keepalive describes — the zero value being
+// the specification's own defaults.
+//
+// onError is called with each worker delivery error and onDrop when a full queue costs a
+// PDU; both may be nil, and both run on a delivery worker goroutine, so neither may block.
+//
+// A keepalive fault means the same thing as a delivery error — this destination is not
+// working — so it is reported through onError rather than through a callback of its own.
+// One condition, one report, whichever of the two mechanisms noticed it.
+func NewPool(tlsConfig *tls.Config, keepalive KeepaliveConfig, onError func(error), onDrop func()) *Pool {
+	if keepalive.OnFault == nil {
+		keepalive.OnFault = onError
+	}
+
 	return &Pool{
 		tlsConfig: tlsConfig,
+		keepalive: keepalive,
 		onError:   onError,
 		onDrop:    onDrop,
 		senders:   make(map[string]Sender),
@@ -51,7 +64,7 @@ func (p *Pool) For(addr string) Sender {
 		return s
 	}
 
-	s := NewAsyncSender(NewClient(addr, p.tlsConfig), 0, p.onError, p.onDrop)
+	s := NewAsyncSender(NewClient(addr, p.tlsConfig, p.keepalive), 0, p.onError, p.onDrop)
 	p.senders[addr] = s
 
 	return s

@@ -88,7 +88,7 @@ func TestClientSendAndRedial(t *testing.T) {
 		}
 	}()
 
-	client := NewClient(ln.Addr().String(), &tls.Config{InsecureSkipVerify: true})
+	client := NewClient(ln.Addr().String(), &tls.Config{InsecureSkipVerify: true}, KeepaliveConfig{Disabled: true})
 	defer client.Close()
 
 	pdu := &PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128, Payload: []byte("xiri-payload")}
@@ -127,7 +127,7 @@ func TestClientSendAndRedial(t *testing.T) {
 
 func TestSendMarshalError(t *testing.T) {
 	// GTP-U is not allowed on an X2 PDU — Marshal fails, Send surfaces it before dialing.
-	c := NewClient("127.0.0.1:1", &tls.Config{})
+	c := NewClient("127.0.0.1:1", &tls.Config{}, KeepaliveConfig{Disabled: true})
 	if err := c.Send(&PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormatGTPU}); err == nil {
 		t.Error("Send accepted an invalid PDU")
 	}
@@ -166,7 +166,7 @@ func TestSendBatchReportsMarshalFailure(t *testing.T) {
 		}
 	}()
 
-	client := NewClient(ln.Addr().String(), &tls.Config{InsecureSkipVerify: true})
+	client := NewClient(ln.Addr().String(), &tls.Config{InsecureSkipVerify: true}, KeepaliveConfig{Disabled: true})
 	defer client.Close()
 
 	good := &PDU{Type: PDUTypeX3, PayloadFormat: PayloadFormatIPv4, Payload: []byte{0x45, 0x00}}
@@ -208,7 +208,7 @@ func TestUnreachableFollowsTheLastAttempt(t *testing.T) {
 		t.Fatal(closeErr)
 	}
 
-	client := NewClient(addr, &tls.Config{InsecureSkipVerify: true})
+	client := NewClient(addr, &tls.Config{InsecureSkipVerify: true}, KeepaliveConfig{Disabled: true})
 	defer client.Close()
 
 	if client.Unreachable() {
@@ -264,7 +264,7 @@ func TestUnreachableFollowsTheLastAttempt(t *testing.T) {
 // short enough timeout at the ADMF a working element would look dead while it was merely
 // asking itself a slow question.
 func TestUnreachableDoesNotWaitForADeliveryInFlight(t *testing.T) {
-	c := NewClient("198.51.100.1:1", &tls.Config{})
+	c := NewClient("198.51.100.1:1", &tls.Config{}, KeepaliveConfig{Disabled: true})
 
 	// Stands in for the dial or write a delivery is inside: both hold this, and a dial is
 	// bounded by ten seconds, not by anything the ADMF would wait for.

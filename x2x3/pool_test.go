@@ -18,7 +18,7 @@ func (s *stubReachable) Unreachable() bool { return s.down }
 // of them is unreachable is that destination's business rather than the element's — so the
 // pool answers in numbers and there is nothing here for a fault description to leak.
 func TestPoolUnreachableCountsWhatIsWrongAndNotWhose(t *testing.T) {
-	p := NewPool(nil, nil, nil)
+	p := NewPool(nil, KeepaliveConfig{Disabled: true}, nil, nil)
 	both := []string{"10.0.60.122:42069", "10.0.60.123:42069"}
 
 	if unreachable, inUse := p.UnreachableAmong(both); unreachable != 0 || inUse != 0 {
@@ -47,7 +47,7 @@ func TestPoolUnreachableCountsWhatIsWrongAndNotWhose(t *testing.T) {
 // element would report itself faulty for the life of the process, including while holding no
 // tasking at all. Asking only about destinations still in use is what settles it.
 func TestADestinationNoLongerInUseIsNotCounted(t *testing.T) {
-	p := NewPool(nil, nil, nil)
+	p := NewPool(nil, KeepaliveConfig{Disabled: true}, nil, nil)
 	p.senders["10.0.60.122:42069"] = &stubReachable{down: true}
 
 	if unreachable, _ := p.UnreachableAmong([]string{"10.0.60.122:42069"}); unreachable != 1 {
@@ -67,7 +67,7 @@ func TestADestinationNoLongerInUseIsNotCounted(t *testing.T) {
 // element built that way report itself faulty, which is how the withdrawn probe failed and
 // the failure that gets the whole field ignored.
 func TestASenderThatCannotAnswerIsTakenAsReachable(t *testing.T) {
-	p := NewPool(nil, nil, nil)
+	p := NewPool(nil, KeepaliveConfig{Disabled: true}, nil, nil)
 	p.senders["10.0.60.122:42069"] = &recordingSender{}
 
 	if unreachable, inUse := p.UnreachableAmong([]string{"10.0.60.122:42069"}); unreachable != 0 || inUse != 1 {
