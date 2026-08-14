@@ -160,6 +160,35 @@ type KeepaliveConfig struct {
 	OnFault func(error)
 }
 
+// Validate reports a configuration that would break the mechanism rather than run it.
+//
+// It lives here rather than in each network function because it is a rule about the
+// mechanism, not about any element's configuration file: three copies of it in three
+// repositories would be three chances for one of them to drift into accepting timers
+// that disconnect every connection on schedule.
+//
+// The specification constrains only that each timer is at least one second. The
+// relationship between them is left implied, and the implication is not subtle:
+// TIME_P2 is the time allowed for an acknowledgement, TIME_P1 the interval between
+// the requests being acknowledged, so a TIME_P2 that does not exceed TIME_P1 expires
+// before the keepalive that would refresh it is even sent. Every connection would then
+// be torn down on a timer, forever, and the element would report a fault each time —
+// the exact failure this mechanism exists to distinguish from a real one.
+func (k KeepaliveConfig) Validate() error {
+	if k.TimeP1 < 0 || k.TimeP2 < 0 {
+		return fmt.Errorf("x2x3: keepalive timers must not be negative (TIME_P1 %s, TIME_P2 %s)", k.TimeP1, k.TimeP2)
+	}
+
+	e := k.withDefaults()
+	if e.TimeP2 <= e.TimeP1 {
+		return fmt.Errorf(
+			"x2x3: TIME_P2 (%s) must exceed TIME_P1 (%s), or every connection is disconnected before the keepalive that would keep it is sent",
+			e.TimeP2, e.TimeP1)
+	}
+
+	return nil
+}
+
 func (k KeepaliveConfig) withDefaults() KeepaliveConfig {
 	if k.TimeP1 <= 0 {
 		k.TimeP1 = DefaultTimeP1

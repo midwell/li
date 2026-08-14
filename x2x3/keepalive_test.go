@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestKeepaliveIsClause51 pins the PDU byte for byte against clause 5.1: Version,
@@ -207,5 +208,32 @@ func TestKeepaliveDoesNotDisturbSequencer(t *testing.T) {
 	}
 	if got := s.Len(); got != 1 {
 		t.Errorf("Sequencer holds %d contexts, want 1 — a keepalive numbers no context", got)
+	}
+}
+
+// TestKeepaliveConfigValidate covers the relationship the specification leaves
+// implied, and the defaults it states outright.
+func TestKeepaliveConfigValidate(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cfg     KeepaliveConfig
+		wantErr bool
+	}{
+		{"the zero value is the specification's own defaults", KeepaliveConfig{}, false},
+		{"the specification's defaults, stated", KeepaliveConfig{TimeP1: DefaultTimeP1, TimeP2: DefaultTimeP2}, false},
+		{"a shortened pair keeping the ratio", KeepaliveConfig{TimeP1: time.Second, TimeP2: 3 * time.Second}, false},
+		{"only TIME_P1 set, so TIME_P2 defaults above it", KeepaliveConfig{TimeP1: 30 * time.Second}, false},
+		{"TIME_P2 equal to TIME_P1", KeepaliveConfig{TimeP1: time.Minute, TimeP2: time.Minute}, true},
+		{"TIME_P2 below TIME_P1", KeepaliveConfig{TimeP1: time.Minute, TimeP2: 30 * time.Second}, true},
+		{"a negative timer", KeepaliveConfig{TimeP1: -time.Second}, true},
+		// Only TIME_P2 set, below the default TIME_P1 of 60s: the pair that reads as
+		// harmless in a configuration file and disconnects every connection.
+		{"only TIME_P2 set, and below the default TIME_P1", KeepaliveConfig{TimeP2: 30 * time.Second}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.cfg.Validate(); (err != nil) != tc.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
 	}
 }
