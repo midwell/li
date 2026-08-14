@@ -35,12 +35,40 @@ func TestTableCriteriaAreDistinct(t *testing.T) {
 	}
 }
 
+// subscriberIdentifiers are the identity types an IRI-POI matches a target by. Two
+// separate properties are asserted against this one list, so adding a type means
+// updating one place rather than remembering two.
+var subscriberIdentifiers = []TargetIdentifierType{TargetSUPI, TargetPEI, TargetGPSI}
+
 // Subscriber identifiers must not be mistaken for packet-detection criteria: the
 // CC-POI has no way to evaluate them, and the IRI-POIs must keep matching on them.
 func TestSubscriberIdentifiersAreNotPacketCriteria(t *testing.T) {
-	for _, c := range []TargetIdentifierType{TargetSUPI, TargetPEI, TargetGPSI} {
+	for _, c := range subscriberIdentifiers {
 		if c.IsPacketCriterion() {
 			t.Errorf("%q is a subscriber identifier, not a packet-detection criterion", c)
+		}
+	}
+}
+
+// And every one of them must render, because an xIRI reports the identity it matched
+// as a conditional attribute TS 33.128 table 5.3.2-2 marks required.
+//
+// XMLFragments drops what it cannot render rather than substituting something else,
+// which is the right rule — but it means a subscriber identity type with no element
+// name would cost every xIRI matched on it a mandatory attribute, with nothing
+// failing and nothing logged. That is the failure this test exists to make loud, and
+// it is here rather than in a POI because here is where the type would be added.
+func TestEverySubscriberIdentifierRenders(t *testing.T) {
+	for _, c := range subscriberIdentifiers {
+		id := TargetIdentifier{Type: c, Value: "1234567890"}
+		frag, ok := id.XMLFragment()
+		if !ok {
+			t.Errorf("%q renders no XML fragment, so an xIRI matched on it would carry no matched target identifier", c)
+
+			continue
+		}
+		if frag == "" {
+			t.Errorf("%q renders an empty fragment", c)
 		}
 	}
 }
