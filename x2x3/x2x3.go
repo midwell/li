@@ -42,10 +42,19 @@ import (
 // a build stamp. Value 5 is what V1.6.1 through V1.9.1 define; V1.10.1 raised it
 // to 6.
 //
-// It stays at 5 deliberately. Raising it to 6 would claim conformance to V1.10.1
-// while the keepalive mechanism of clause 6.2.4 is unimplemented — see the gaps
-// in CONFORMANCE.md — which would hide the gap rather than close it. The bump
-// belongs with the change that implements keepalive.
+// It stays at 5, and the reason changed on 2026-08-14. It used to be that
+// keepalive was unimplemented, so claiming V1.10.1 would have hidden a gap; that
+// gap is now closed. What holds the bump back is the peer: probing the reference
+// implementation this project interoperates with found that it **refuses** a 0.6
+// PDU — it closes the connection and stores nothing — which is the same
+// exact-minor-version defect this package's own decoder had until the audit fixed
+// it, facing the other way. Clause 5.2.1 defines a minor increment as
+// backwards-compatible, so a conformant peer has to keep decoding; this one does
+// not, and raising the field would stop all delivery to it rather than degrade it.
+//
+// Evidence: tests/e2e-li/evidence-260814/x2-probe-keepalive.json. What would
+// unblock it is a mediation function that accepts 0.6, not work in this
+// repository.
 const (
 	MajorVersion          = 0
 	MinorVersion          = 5

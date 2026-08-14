@@ -72,6 +72,22 @@ Three network functions act as POIs:
   the controlling ADMF goes silent (no X1 message within that window) the network
   function purges all tasking — so warrants never outlive an operational
   controller. It is off until that window is set.
+- **X2/X3 keepalive (on by default):** a different mechanism, in the other
+  direction. ETSI TS 103 221-2 clause 6.2.4 has each POI send a Keepalive PDU on
+  every delivery connection at least every TIME_P1 (60 s), and disconnect,
+  reconnect and report `mdfUnreachable` if nothing acknowledges within TIME_P2
+  (180 s). It runs unconditionally, not only when a connection is idle: product
+  PDUs are never acknowledged, so traffic proves the socket is open and nothing
+  about whether the mediation function behind it is still running.
+
+  Both timers are deployment configuration (`x2x3KeepaliveTimeP1`,
+  `x2x3KeepaliveTimeP2`; TIME_P2 must exceed TIME_P1), and `x2x3KeepaliveEnabled:
+  false` turns it off. **That switch is for one situation:** a mediation function
+  that does not implement the MDF half of the clause and therefore never
+  acknowledges. This element would disconnect such a peer every TIME_P2 and lose
+  whatever was in flight. The sipgate reference simulator is one — probed
+  2026-08-14, it answers no Keepalive at all — so lab deployments pointed at it
+  set the switch false.
 - **Security:** X1/X2/X3 all use mutual TLS with credentials from a dedicated LI
   PKI, kept separate from the SBI certificates. Verification is never skipped.
 
@@ -535,7 +551,7 @@ Two conditions can appear, each answered by the part of the element that can see
 
 | Condition | Means | Observed by |
 |---|---|---|
-| `mdfUnreachable` | delivery to one or more of this element's mediation functions failed on the last attempt and has not since succeeded | the X2/X3 delivery clients — every POI has them |
+| `mdfUnreachable` | one or more of this element's mediation functions failed on the last *exchange* and has not since succeeded — either a delivery that failed, or a keepalive left unacknowledged for TIME_P2 | the X2/X3 delivery clients — every POI has them |
 | `x3EgressDown` | the datapath's content egress socket is not connected, so duplicated packets are discarded before this element ever sees them | the UPF's content shipper, the only party that can see its own egress |
 
 The description says how much is wrong — "1 of 2" — and never which destination, nor any

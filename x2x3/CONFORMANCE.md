@@ -14,8 +14,13 @@ is the reason the version is stated at the top rather than left implied.
 
 This is a **reading**, not a check. ETSI publishes no machine-readable definition of the
 X2/X3 framing: the sole attachment to part 2 is `TS_103_221_02_Configuration.xsd`, which
-describes how an X2/X3 interface is *configured* over X1 (keepalive enable and two timers)
-and says nothing about the PDU layout. The X1 side of this project can and does verify
+describes how an X2/X3 interface is *configured* over **X0** — annex C.1 opens "this annex
+is only applicable when the X0 interface (see ETSI TS 104 000) is used", and the schema
+extends `etsi104000:ConfigurationDetails` in namespace `urn:etsi:li:104000:xsdns:v2` — and
+says nothing about the PDU layout. (It said "over X1" here until 2026-08-14. TS 103 221-1
+defines no message carrying these fields, so there was never an X1 route to support or to
+decline; the element implements no X0 interface and the timers are deployment
+configuration.) The X1 side of this project can and does verify
 itself against a published XSD on every build; nothing equivalent is possible here, so this
 document is a per-field disposition maintained by hand and is only as current as its version
 stamp.
@@ -55,16 +60,26 @@ This table was compiled by reading clause 5.2.1 of each revision, because the ch
 annex flattens ambiguously and invites the conclusion that the value had been static since
 2019. It had not; it changed once, in V1.10.1.
 
-**This package emits 5**, which was correct for every revision through V1.9.1. It is
-deliberately not raised to 6 while the keepalive mechanism (clause 6.2.4) is unimplemented,
-because the field would then assert conformance to a revision this element does not meet.
-Raising it belongs with the work that implements keepalive.
+**This package emits 5**, which was correct for every revision through V1.9.1.
+
+The reason it is not 6 changed on 2026-08-14. It used to be that keepalive was
+unimplemented, so the field would have asserted conformance to a revision this element did
+not meet. Keepalive is now implemented — see the PDU type table below — and the bump is
+held back by the peer instead: the reference implementation this project interoperates with
+**refuses a 0.6 PDU**, closing the connection and storing nothing
+(`tests/e2e-li/evidence-260814/x2-probe-keepalive.json`). Clause 5.2.1 makes a minor
+increment backwards-compatible, so that is a defect in the peer — and one that would cost
+all delivery to it, not part of it, if this element raised the field.
+
+So this is blocked on a mediation function that accepts 0.6, not on work here. It is the
+one gap in this document whose remedy is not in this repository.
 
 **On decode**, a differing minor version is accepted and a differing major version is
-rejected, which follows the compatibility rule the clause defines. Note that this package is
-write-only in production today — `Unmarshal` is reached only from tests — so decode leniency
-matters from the moment anything reads from an X2/X3 socket, which the keepalive
-acknowledgement will be the first thing to do.
+rejected, which follows the compatibility rule the clause defines. This package is no longer
+write-only: the keepalive reader is the first thing here that reads an X2/X3 socket, so that
+leniency is now load-bearing rather than latent. The read path is bounded — a peer's
+declared length beyond a few kilobytes is refused and the connection dropped — because
+`Unmarshal` waits for as many bytes as a header claims and imposes no maximum of its own.
 
 ## Mandatory header fields — table 5.1-1
 
@@ -87,13 +102,15 @@ acknowledgement will be the first thing to do.
 |---|---|---|
 | 1 | X2 PDU | **Emitted** by the AMF and SMF IRI-POIs. |
 | 2 | X3 PDU | **Emitted** by the UPF CC-POI. |
-| 3 | Keepalive | **Declared, never emitted — a known gap.** Clause 6.2.4 states that the type shall be supported by POIs and MDFs, and that the POI shall send a Keepalive PDU at least every TIME_P1 (default 60 s). This element sends none. |
-| 4 | Keepalive Acknowledgement | **Declared, never read — the same gap.** Clause 6.2.4 has the MDF answer each Keepalive with a matching Sequence Number, and requires the POI to disconnect, reconnect and report an error over X1 if none arrives within TIME_P2 (default 180 s). |
+| 3 | Keepalive | **Emitted**, on every X2/X3 connection at least every TIME_P1 (default 60 s), unconditionally rather than when idle — product PDUs are not acknowledged, so traffic says nothing about the mediation function's liveness. Also **answered**: a Keepalive arriving at this element is acknowledged with its own Sequence Number, clause 6.2.4 making both types supported by POIs *and* MDFs. |
+| 4 | Keepalive Acknowledgement | **Emitted and read.** Read to apply the TIME_P2 rule (default 180 s), measured from the last acknowledgement seen rather than per Keepalive; on expiry the connection is disconnected, redialled and reported to the ADMF as `mdfUnreachable`. A Sequence Number this connection never sent is counted, not acted on — an MDF answering with the wrong number is still answering. |
 
 ## Payload directions — table 5.2.6-1
 
 All six values are modelled and match the table. Value 0 is reserved for the keepalive
-mechanism and is consequently never emitted, for the reason in the PDU type table above.
+mechanism, and is emitted on exactly the PDUs that reservation is for: clause 5.1 has a
+Keepalive zero every mandatory field but three, so its direction is 0 and never anything
+else. No product PDU carries it.
 
 | Value | Meaning | Modelled as |
 |---|---|---|
@@ -153,7 +170,7 @@ been observed at all — the same limit every interoperability result here carri
 | 5 | Domain ID (DID) | 5.3.6 | Absent. TS 33.128 does not require it; the destination is resolved from the X1 task. |
 | 6 | Network Function ID (NFID) | 5.3.7 | **Emitted** on X2 and X3, set to the identifier the element asserts on X1 (its `neId`), so the identity an MDF receives is the one the ADMF tasks. |
 | 7 | Interception Point ID (IPID) | 5.3.8 | **Emitted** on X2 and X3: `AMF-IRI-POI`, `SMF-IRI-POI`, `UPF-CC-POI`. Each network function contains one point of interception, so the value is a property of the code rather than of the deployment. |
-| 8 | Sequence Number | 5.3.9 | **Emitted** on X2 and X3, numbered per the clause's `(XID, DID, NFID, IPID, Correlation ID)` context and not per connection — `Sequencer` holds one counter per live context and drops it when the tasking does. The keepalive mechanism needs its own counter: a Keepalive PDU zeroes the XID and Correlation ID, so its context is not any task's. |
+| 8 | Sequence Number | 5.3.9 | **Emitted** on X2 and X3, numbered per the clause's `(XID, DID, NFID, IPID, Correlation ID)` context and not per connection — `Sequencer` holds one counter per live context and drops it when the tasking does. The keepalive mechanism has its own counter, one per connection, for the reason the clause implies: a Keepalive PDU zeroes the XID and Correlation ID, so its context is not any task's, and numbering keepalives from a task's sequence would advance the numbers an MDF reads to detect that task's lost product. |
 | 9 | Timestamp | 5.3.10 | **Emitted** on X2 and X3 as the clause's POSIX timespec, two *unsigned* 32-bit integers. On X2 it is the time the event occurred, captured at the report hook; on X3 the time the xCC was generated, taken at framing. **It is the only time information this element sends** — see the note below. |
 | 10 | Source IPv4 address | 5.3.11 | Absent. For X3 the addresses are inside the intercepted packet. |
 | 11 | Destination IPv4 address | 5.3.12 | Absent, as above. |
@@ -221,13 +238,20 @@ plainly, so nobody mistakes its scope for a clean bill of health:
 
 ## Known gaps, in order of consequence
 
-1. **The keepalive mechanism of clause 6.2.4 is unimplemented.** The specification says the
-   PDU types shall be supported and the POI shall emit a Keepalive at least every TIME_P1.
-   This element emits none, answers none, and never applies the TIME_P2 disconnect. It
-   depends on conditional attribute type 8.
-2. **The emitted Version field is 5, and V1.10.1 defines 6.** Deliberate while gap 1 stands;
-   see the version section above.
+1. **The emitted Version field is 5, and V1.10.1 defines 6.** No longer a matter of this
+   element's own conformance: the mechanism the bump was waiting on is implemented, and what
+   holds it back now is that the only interoperability peer available refuses 0.6. See the
+   version section above. **Blocked externally**, not deferred.
 
-**Closed since this disposition was written:** every conditional attribute TS 33.128 requires
-was absent, on both interfaces. All six are now emitted — see table 5.3.1-2 above — which
-leaves the sixteen that are absent by decision rather than by omission.
+**Closed since this disposition was written**, in order:
+
+- Every conditional attribute TS 33.128 requires was absent on both interfaces. All six are
+  now emitted — see table 5.3.1-2 above — which leaves the sixteen that are absent by
+  decision rather than by omission.
+- **The keepalive mechanism of clause 6.2.4 was unimplemented**: this element emitted no
+  Keepalive, answered none, and never applied the TIME_P2 disconnect. All three are now
+  done, on X2 and X3, in `keepalive.go`. What that has *not* been verified against is an
+  independent implementation — the reference answers no Keepalive at all, so the
+  acknowledgement path is exercised only against this project's own endpoint. That is a
+  limit of the evidence, not of the implementation, and it is recorded here because the
+  distinction is exactly what this document exists to keep visible.
