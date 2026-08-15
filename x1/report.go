@@ -44,6 +44,8 @@ const reportThrottle = 30 * time.Second
 //	contentTaskOverlap  event  push   a copy delivered under one of several warrants
 //	taskingPurged       event  push   tasking the fail-safe removed, once
 //	reconcileFailed     event  push   a restart this element could not reconcile
+//	taskingWithdrawalFailed  event push a withdrawal a POI did not acknowledge
+//	taskingWithdrawalStuck   event push a withdrawal outstanding long enough to matter
 //	x1AuthFailed        event  push   a provisioning attempt that was refused
 //	taskingAbsent       state  push   observable, deliberately not a probe (below)
 //	x1ListenFailed      state  push   observable, but unaskable (below)
@@ -133,6 +135,19 @@ const (
 	// the others receive none of it. Which warrants overlap is the ADMF's to know
 	// and not this element's to say, so the report carries only that it happened.
 	NEIssueContentTaskOverlap = "contentTaskOverlap"
+	// NEIssueTaskingWithdrawalFailed: this element ordered a POI it triggers to stop
+	// intercepting, and the POI did not acknowledge. The withdrawal is retried and
+	// the element still holds the trigger in its own bookkeeping, so nothing is lost
+	// — but until the POI answers, interception it has been told to end may be
+	// continuing. Distinct from reconcileFailed, which is the same ignorance arrived
+	// at from a restart rather than from a refused instruction.
+	NEIssueTaskingWithdrawalFailed = "taskingWithdrawalFailed"
+	// NEIssueTaskingWithdrawalStuck: a withdrawal has gone unacknowledged long
+	// enough that interception is probably still running without authority. It is a
+	// different condition from the failure that began it — "the last attempt failed"
+	// and "authority was removed some time ago and content is still flowing" call for
+	// different responses — and repeating the first would never say so.
+	NEIssueTaskingWithdrawalStuck = "taskingWithdrawalStuck"
 	// NEIssueX1AuthFailed: a peer holding an LI-CA certificate tried to provision
 	// this element under an identity it is not bound to, or one this element does
 	// not answer to. Nothing is malfunctioning — the request was refused — but
@@ -187,6 +202,13 @@ var neIssueEncodings = map[string]neIssueEncoding{
 	NEIssueX3TagInvalid:    {neIssueFaultReport, issueCodeNonTerminatingFault},
 	NEIssueReconcileFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
 	NEIssueTriggerFaulty:   {neIssueFaultReport, issueCodeNonTerminatingFault},
+	// A withdrawal that has not landed yet is a fault this element is working on:
+	// it is retrying, and the trigger is still in its bookkeeping.
+	NEIssueTaskingWithdrawalFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
+	// One that has not landed for long enough is terminating in the sense the
+	// registry means: this element cannot end an interception it was told to end,
+	// and no further attempt of its own is going to change that.
+	NEIssueTaskingWithdrawalStuck: {neIssueFaultReport, issueCodeTerminatingFault},
 	// Nothing has broken — every packet is delivered under some warrant — so this is
 	// a Warning rather than a FaultReport. What it warns of is that one warrant's
 	// product is complete at the cost of another's being empty.

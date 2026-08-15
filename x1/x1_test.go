@@ -93,17 +93,19 @@ func TestKeepaliveWatchdogPurgesTasking(t *testing.T) {
 	}
 }
 
-// TestKeepalivePurgeRunsDeactivateHook verifies the fail-safe purge runs the
-// per-task OnDeactivate hook (so a POI tears down product it applied elsewhere,
-// e.g. UPF CC duplication), clears the store, and is a no-op on subsequent
-// lapsed ticks once the store is empty.
-func TestKeepalivePurgeRunsDeactivateHook(t *testing.T) {
+// TestKeepalivePurgeRunsTeardown verifies the fail-safe purge runs the per-task
+// lifecycle callback (so a POI tears down product it applied elsewhere, e.g. UPF
+// CC duplication), clears the store, and is a no-op on subsequent lapsed ticks
+// once the store is empty.
+func TestKeepalivePurgeRunsTeardown(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: "a", Targets: []types.TargetIdentifier{supiTarget("1")}, Products: []types.ProductType{types.ProductCC}})
 	st.Activate(types.InterceptTask{XID: "b", Targets: []types.TargetIdentifier{supiTarget("2")}, Products: []types.ProductType{types.ProductCC}})
 	var torn []types.XID
-	srv := NewServer(st, "neID", OnDeactivate(func(task types.InterceptTask) {
-		torn = append(torn, task.XID)
+	srv := NewServer(st, "neID", OnTaskChange(func(prev, next *types.InterceptTask) {
+		if next == nil {
+			torn = append(torn, prev.XID)
+		}
 	}))
 	now := time.Now()
 	srv.now = func() time.Time { return now }
@@ -115,7 +117,7 @@ func TestKeepalivePurgeRunsDeactivateHook(t *testing.T) {
 		t.Fatalf("store not purged: %d tasks remain", st.Len())
 	}
 	if len(torn) != 2 {
-		t.Fatalf("OnDeactivate ran %d times, want 2 (one per purged task)", len(torn))
+		t.Fatalf("the teardown ran %d times, want 2 (one per purged task)", len(torn))
 	}
 
 	// A second lapsed tick must not re-run the hook (nothing left to tear down).
@@ -123,7 +125,7 @@ func TestKeepalivePurgeRunsDeactivateHook(t *testing.T) {
 	now = now.Add(10 * time.Second)
 	srv.purgeIfLapsed(5 * time.Second)
 	if len(torn) != 0 {
-		t.Errorf("second purge re-ran OnDeactivate %d times, want 0", len(torn))
+		t.Errorf("second purge re-ran the teardown %d times, want 0", len(torn))
 	}
 }
 
@@ -219,84 +221,6 @@ func TestProcessActivate(t *testing.T) {
 	}
 	if rm.X1TransactionID != "3741800e-971b-4aa9-85f4-466d2b1adc7f" || rm.NeIdentifier != "neID" {
 		t.Errorf("response header = %+v", rm)
-	}
-}
-
-func TestOnActivateCallback(t *testing.T) {
-	st := store.New()
-	var got []types.InterceptTask
-	srv := NewServer(st, "neID", OnActivate(func(task types.InterceptTask) {
-		got = append(got, task)
-	}))
-
-	// A fresh activation fires the callback exactly once, with the stored task.
-	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
-		t.Fatalf("activate: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("callback fired %d times on activate, want 1", len(got))
-	}
-	if got[0].XID != testXID {
-		t.Errorf("callback task XID = %q, want %q", got[0].XID, testXID)
-	}
-
-	// A modify of the same task must not re-fire (the target is already covered).
-	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
-	if _, err := srv.Process([]byte(modifyXML), admfPeer(t)); err != nil {
-		t.Fatalf("modify: %v", err)
-	}
-	if len(got) != 1 {
-		t.Errorf("callback fired %d times after same-target modify, want 1 (must not re-scan)", len(got))
-	}
-
-	// A modify that RETARGETS to a different identifier must re-fire — the new
-	// target's already-present state needs a start-of-interception scan too.
-	retargetXML := strings.Replace(modifyXML, "2125552368", "5551234567", 1)
-	if _, err := srv.Process([]byte(retargetXML), admfPeer(t)); err != nil {
-		t.Fatalf("retarget modify: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("callback fired %d times after retarget modify, want 2", len(got))
-	}
-	if got[1].Targets[0].Value != "5551234567" {
-		t.Errorf("retarget callback target = %q, want 5551234567", got[1].Targets[0].Value)
-	}
-}
-
-// TestModifyRetargetRunsDeactivateHook verifies a retargeting ModifyTask tears
-// down the OLD target's applied state via OnDeactivate (not only scanning the new
-// target via OnActivate), so a warrant that moves to a new identifier does not
-// leave stale product running for the old one.
-func TestModifyRetargetRunsDeactivateHook(t *testing.T) {
-	st := store.New()
-	var activated, deactivated []types.TargetIdentifier
-	srv := NewServer(st, "neID",
-		OnActivate(func(task types.InterceptTask) { activated = append(activated, task.Targets[0]) }),
-		OnDeactivate(func(task types.InterceptTask) { deactivated = append(deactivated, task.Targets[0]) }),
-	)
-	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
-		t.Fatalf("activate: %v", err)
-	}
-	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
-
-	// Same-target modify: no teardown, no re-scan.
-	if _, err := srv.Process([]byte(modifyXML), admfPeer(t)); err != nil {
-		t.Fatalf("modify: %v", err)
-	}
-	if len(deactivated) != 0 {
-		t.Fatalf("same-target modify ran OnDeactivate %d times, want 0", len(deactivated))
-	}
-
-	// Retarget: OnDeactivate fires for the old target, OnActivate for the new.
-	retargetXML := strings.Replace(modifyXML, "2125552368", "5551234567", 1)
-	if _, err := srv.Process([]byte(retargetXML), admfPeer(t)); err != nil {
-		t.Fatalf("retarget: %v", err)
-	}
-	if len(deactivated) != 1 || deactivated[0].Value != "2125552368" {
-		t.Fatalf("retarget OnDeactivate = %+v, want one call for old target 2125552368", deactivated)
-	}
-	if len(activated) != 2 || activated[1].Value != "5551234567" {
-		t.Fatalf("retarget OnActivate = %+v, want new target 5551234567", activated)
 	}
 }
 
@@ -586,7 +510,7 @@ func TestNEIssueEncodingsAreConformant(t *testing.T) {
 		NEIssueInvalidConfig, NEIssueContentUntasked, NEIssueX3PuntLost,
 		NEIssueX3FramingLost, NEIssueX3DeliveryLost, NEIssueX3TagInvalid,
 		NEIssueReconcileFailed, NEIssueTaskingPurged, NEIssueTaskingAbsent,
-		NEIssueX1AuthFailed,
+		NEIssueX1AuthFailed, NEIssueTaskingWithdrawalFailed, NEIssueTaskingWithdrawalStuck,
 	}
 
 	// issueCode is conditional, not mandatory: it is required when the condition
@@ -658,4 +582,234 @@ func TestActivateWithServiceTypeScopingIsRefused(t *testing.T) {
 	// 1080 until TS 103 221-1 table 6.7-3 was to hand, with a note in the code to
 	// substitute the specific value once confirmed rather than invent one.
 	assertRejected(t, resp, st, errCodeBadServiceType)
+}
+
+// taskChangeLog records what the lifecycle callback was told, in order. Both sides
+// are copied out: they are pointers to the caller's values, valid only for the
+// duration of the call.
+type taskChangeLog struct {
+	prev, next []*types.InterceptTask
+}
+
+func (l *taskChangeLog) record(prev, next *types.InterceptTask) {
+	l.prev = append(l.prev, cloneTaskPtr(prev))
+	l.next = append(l.next, cloneTaskPtr(next))
+}
+
+func cloneTaskPtr(t *types.InterceptTask) *types.InterceptTask {
+	if t == nil {
+		return nil
+	}
+	c := *t
+
+	return &c
+}
+
+// TestOnTaskChangeCarriesBothSides: a ModifyTask keeps the XID, so the previous
+// and the next task are the same key. Reporting them as two independent events
+// under that key asks a POI to infer an ordering the provisioning interface never
+// stated — and where the POI installs state for the new task and removes state for
+// the old, the removal can reclaim what the installation just created.
+func TestOnTaskChangeCarriesBothSides(t *testing.T) {
+	st := store.New()
+	var log taskChangeLog
+	srv := NewServer(st, "neID", OnTaskChange(log.record))
+
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if len(log.prev) != 1 || log.prev[0] != nil || log.next[0] == nil {
+		t.Fatalf("activation reported as prev=%v next=%v, want (nil, task)", log.prev, log.next)
+	}
+	if log.next[0].XID != testXID {
+		t.Errorf("activation carried XID %q, want %q", log.next[0].XID, testXID)
+	}
+
+	// A retarget: one event, both sides, so the POI reconciles rather than sequences.
+	retargetXML := strings.Replace(
+		strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1),
+		"2125552368", "5551234567", 1)
+	if _, err := srv.Process([]byte(retargetXML), admfPeer(t)); err != nil {
+		t.Fatalf("retarget: %v", err)
+	}
+	if len(log.prev) != 2 {
+		t.Fatalf("retarget fired %d events, want 1", len(log.prev)-1)
+	}
+	if log.prev[1] == nil || log.prev[1].Targets[0].Value != "2125552368" {
+		t.Errorf("retarget prev = %+v, want the task as it was, targeting 2125552368", log.prev[1])
+	}
+	if log.next[1] == nil || log.next[1].Targets[0].Value != "5551234567" {
+		t.Errorf("retarget next = %+v, want the task as it becomes, targeting 5551234567", log.next[1])
+	}
+
+	// An ActivateTask naming a held XID is a replacement, not a fresh activation:
+	// the ADMF's restart-recovery path sends exactly this, and a POI told only about
+	// the new task cannot take down what it applied for the old one.
+	replaceXML := strings.Replace(activateXML, "2125552368", "5555550000", 1)
+	if _, err := srv.Process([]byte(replaceXML), admfPeer(t)); err != nil {
+		t.Fatalf("replacement activate: %v", err)
+	}
+	if len(log.prev) != 3 {
+		t.Fatalf("replacement fired %d events, want 1", len(log.prev)-2)
+	}
+	if log.prev[2] == nil || log.prev[2].Targets[0].Value != "5551234567" {
+		t.Errorf("replacement prev = %+v, want the held task rather than nil", log.prev[2])
+	}
+
+	// Removal is the same event with no next.
+	deactivateXML := `<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:DeactivateTaskRequest">
+    <ns1:admfIdentifier>admfID</ns1:admfIdentifier>
+    <ns1:neIdentifier>neID</ns1:neIdentifier>
+    <ns1:messageTimestamp>2017-10-06T18:46:21.247432Z</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>3741800e-971b-4aa9-85f4-466d2b1adc7f</ns1:x1TransactionId>
+    <ns1:xId>50b93d1e-1b53-4d63-aacb-e4d99811bc0b</ns1:xId>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`
+	if _, err := srv.Process([]byte(deactivateXML), admfPeer(t)); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if len(log.prev) != 4 || log.prev[3] == nil || log.next[3] != nil {
+		t.Fatalf("deactivation reported as prev=%v next=%v, want (task, nil)", log.prev[3], log.next[3])
+	}
+}
+
+// TestExactReplayIsANoOp: re-provisioning is how a provisioning function restores
+// tasking after an element restarts, so it must not be refused — and it must not
+// be mistaken for a change. An interception that never stopped has no beginning to
+// report, and state that is already correct has nothing to tear down.
+func TestExactReplayIsANoOp(t *testing.T) {
+	st := store.New()
+	var log taskChangeLog
+	srv := NewServer(st, "neID", OnTaskChange(log.record))
+
+	for i := range 3 {
+		if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+			t.Fatalf("activate %d: %v", i, err)
+		}
+	}
+	if len(log.prev) != 1 {
+		t.Errorf("three identical activations fired %d events, want 1 — the ADMF's recovery "+
+			"path would re-emit a start of interception on every replay", len(log.prev))
+	}
+	if st.Len() != 1 {
+		t.Errorf("store holds %d tasks after a replay, want 1", st.Len())
+	}
+}
+
+// TestProductChangeReachesThePOI covers the two modifications that used to fire
+// nothing at all. Deriving "something changed" from the target identifiers alone
+// dropped both: adding CC never began content interception for sessions the target
+// already had, and removing it left content interception running after the
+// authority for it was withdrawn.
+func TestProductChangeReachesThePOI(t *testing.T) {
+	st := store.New()
+	var log taskChangeLog
+	srv := NewServer(st, "neID", OnTaskChange(log.record))
+
+	// IRI only to begin with.
+	iriOnly := strings.Replace(activateXML, "<ns1:deliveryType>X2andX3</ns1:deliveryType>",
+		"<ns1:deliveryType>X2Only</ns1:deliveryType>", 1)
+	if _, err := srv.Process([]byte(iriOnly), admfPeer(t)); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	// Add CC, target untouched.
+	addCC := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
+	if _, err := srv.Process([]byte(addCC), admfPeer(t)); err != nil {
+		t.Fatalf("add CC: %v", err)
+	}
+	if len(log.prev) != 2 {
+		t.Fatalf("adding CC to a live task fired %d events, want 1", len(log.prev)-1)
+	}
+	if log.prev[1].WantsProduct(types.ProductCC) || !log.next[1].WantsProduct(types.ProductCC) {
+		t.Errorf("the products change is not visible in the event: prev=%v next=%v",
+			log.prev[1].Products, log.next[1].Products)
+	}
+
+	// And back: removing CC is a lifecycle transition too, which is what withdraws
+	// the UPF's duplication.
+	removeCC := strings.Replace(iriOnly, "ActivateTaskRequest", "ModifyTaskRequest", 1)
+	if _, err := srv.Process([]byte(removeCC), admfPeer(t)); err != nil {
+		t.Fatalf("remove CC: %v", err)
+	}
+	if len(log.prev) != 3 {
+		t.Fatalf("removing CC from a live task fired %d events, want 1", len(log.prev)-2)
+	}
+	if !log.prev[2].WantsProduct(types.ProductCC) || log.next[2].WantsProduct(types.ProductCC) {
+		t.Errorf("the products change is not visible in the event: prev=%v next=%v",
+			log.prev[2].Products, log.next[2].Products)
+	}
+}
+
+// TestPurgeReasonNamesThePath: a fail-safe purge means the controlling function
+// stopped answering, which an operator must investigate. An expected withdrawal is
+// not that, and an element that reports both the same way teaches its operator to
+// ignore the channel the durability of withdrawal depends on.
+func TestPurgeReasonNamesThePath(t *testing.T) {
+	st := store.New()
+	var reasons []PurgeReason
+	var torn []types.XID
+	srv := NewServer(st, "neID",
+		OnTaskChange(func(prev, next *types.InterceptTask) {
+			if next == nil {
+				torn = append(torn, prev.XID)
+			}
+		}),
+		OnPurge(func(task types.InterceptTask, reason PurgeReason) {
+			if _, held := st.Get(task.XID); held {
+				t.Errorf("the purge of %s was reported while the task was still held", task.XID)
+			}
+			reasons = append(reasons, reason)
+		}),
+	)
+
+	deactivateXML := `<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:DeactivateTaskRequest">
+    <ns1:admfIdentifier>admfID</ns1:admfIdentifier>
+    <ns1:neIdentifier>neID</ns1:neIdentifier>
+    <ns1:messageTimestamp>2017-10-06T18:46:21.247432Z</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>3741800e-971b-4aa9-85f4-466d2b1adc7f</ns1:x1TransactionId>
+    <ns1:xId>50b93d1e-1b53-4d63-aacb-e4d99811bc0b</ns1:xId>
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`
+
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if _, err := srv.Process([]byte(deactivateXML), admfPeer(t)); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if len(reasons) != 1 || reasons[0] != PurgeWithdrawal {
+		t.Fatalf("an explicit deactivation reported %v, want one PurgeWithdrawal", reasons)
+	}
+
+	// Bulk deactivation: expected too, and its own reason.
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+		t.Fatalf("re-activate: %v", err)
+	}
+	srv.deactivateAll()
+	if len(reasons) != 2 || reasons[1] != PurgeBulkDeactivate {
+		t.Fatalf("bulk deactivation reported %v, want PurgeBulkDeactivate", reasons)
+	}
+
+	// Only the fail-safe can produce PurgeKeepaliveLapse.
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+		t.Fatalf("re-activate: %v", err)
+	}
+	now := time.Now()
+	srv.now = func() time.Time { return now }
+	srv.recordActivity()
+	now = now.Add(10 * time.Second)
+	srv.purgeIfLapsed(5 * time.Second)
+	if len(reasons) != 3 || reasons[2] != PurgeKeepaliveLapse {
+		t.Fatalf("the keepalive fail-safe reported %v, want PurgeKeepaliveLapse", reasons)
+	}
+
+	// Every path tore the task down, whatever it was called.
+	if len(torn) != 3 {
+		t.Errorf("teardown ran %d times over three removals", len(torn))
+	}
 }

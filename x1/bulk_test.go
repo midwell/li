@@ -22,8 +22,10 @@ import (
 func TestDeactivateAllTasksTearsDownWhatItRemoves(t *testing.T) {
 	st := store.New()
 	var tornDown []types.XID
-	srv := NewServer(st, "neID", OnDeactivate(func(task types.InterceptTask) {
-		tornDown = append(tornDown, task.XID)
+	srv := NewServer(st, "neID", OnTaskChange(func(prev, next *types.InterceptTask) {
+		if next == nil {
+			tornDown = append(tornDown, prev.XID)
+		}
 	}))
 	srv.now = func() time.Time { return zeroTailInstant }
 
@@ -292,8 +294,10 @@ func TestBulkDeactivationSharesTheFailSafePath(t *testing.T) {
 	run := func(viaKeepalive bool) []types.XID {
 		st := store.New()
 		var tornDown []types.XID
-		srv := NewServer(st, "neID", OnDeactivate(func(task types.InterceptTask) {
-			tornDown = append(tornDown, task.XID)
+		srv := NewServer(st, "neID", OnTaskChange(func(prev, next *types.InterceptTask) {
+			if next == nil {
+				tornDown = append(tornDown, prev.XID)
+			}
 		}))
 		base := zeroTailInstant
 		srv.now = func() time.Time { return base }

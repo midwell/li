@@ -838,8 +838,10 @@ func TestDeactivationRefusesWhatItCannotHonour(t *testing.T) {
 	t.Run("a task the element holds", func(t *testing.T) {
 		st := store.New()
 		var torn []types.XID
-		srv := NewServer(st, "neID", OnDeactivate(func(task types.InterceptTask) {
-			torn = append(torn, task.XID)
+		srv := NewServer(st, "neID", OnTaskChange(func(prev, next *types.InterceptTask) {
+			if next == nil {
+				torn = append(torn, prev.XID)
+			}
 		}))
 		mustAck(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyA), ""))
 		mustAck(t, srv, deactivate(string(testXID)))
@@ -848,7 +850,7 @@ func TestDeactivationRefusesWhatItCannotHonour(t *testing.T) {
 			t.Error("the task was not removed")
 		}
 		if len(torn) != 1 || torn[0] != testXID {
-			t.Errorf("OnDeactivate ran for %v, want exactly [%s]", torn, testXID)
+			t.Errorf("the teardown ran for %v, want exactly [%s]", torn, testXID)
 		}
 	})
 }

@@ -136,6 +136,7 @@ more expensive than one read here.
 | | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the ninth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction, PDR; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |
 | | Several criteria on one task, matched as alternatives | Traffic matching any of them is intercepted, and ships **once** however many matched |
 | | Criteria replaced by `ModifyTask`, mid-interception | Table 6.2.3-8. The task is not torn down: superseded traffic stops, newly selected traffic starts, attribution is unchanged |
+| | A `ModifyTask` that changes the **products** a task requires | Adding CC begins content interception for the target's existing sessions; removing it withdraws the trigger and clears the duplication. Derived from the task as a whole rather than from its target identifiers, so a change that leaves the target alone is still a change |
 | | A criterion this element cannot evaluate is refused **before** the task is acknowledged | Accepting one would leave the requesting function believing an interception is running that can never produce anything — undiscoverable from outside |
 | **IRI (X2)** | Every xIRI record TS 33.128 defines for the AMF and SMF is accounted for — produced, or out of scope with the reason | 16 of the 25 produced; see *Which xIRI records this produces* below. A count is not a coverage claim: "11 record types" was true of an implementation missing six mandated ones |
 | | TS 33.128 ASN.1 (BER) encoding | Verified against the published module, not against our own codec |
@@ -159,7 +160,8 @@ more expensive than one read here.
 | | Subscriber traffic and usage accounting unchanged | Measured exactly once despite duplication |
 | **Operational** | UPF restart: interception continues, with no operator action | The destination is re-provisioned and the POI re-triggered |
 | | SMF/AMF restart: tasking is lost, the ADMF is told, and it can interrogate the element to reconcile | The whole sequence in one place: *[What happens after a restart](#what-happens-after-a-restart-and-what-the-admf-does-about-it)* |
-| | Tasking left behind by a previous process is withdrawn at startup | |
+| | Tasking left behind by a previous process is withdrawn at startup | Retried per UPF until each answers, and the UPF is kept alive only once it has |
+| | A withdrawal the UPF does not acknowledge is retried, not forgotten | With the failure and the still-unwithdrawn condition reported separately — see *When a withdrawal cannot be delivered* below |
 | | UPF address change (its Service recreated): triggering recovers | No SMF restart needed |
 
 ### Not supported
@@ -279,6 +281,65 @@ to know after a restart.
 
 An ADMF that treats "already gone" as success can map 2020 onto that itself. It cannot
 recover the information the acknowledgement threw away.
+
+#### When a withdrawal cannot be delivered
+
+The SMF's CC Triggering Function withdraws a UPF's content trigger by sending it a
+`DeactivateTask`. That message can fail — the UPF may be restarting, its X1 endpoint may be
+unreachable, the name in `x1Url` may not resolve — and what happens next is the difference
+between an interception that ends and one that does not.
+
+**The trigger stays in the SMF's own bookkeeping until the UPF acknowledges.** It is not
+released at the moment of the attempt, so an unanswered withdrawal is retried: after 5
+seconds, then 10, 20, 40, and every 60 seconds after that, for as long as the process lives.
+Retrying does not stop while the SMF still believes the trigger is installed, because a retry
+that gives up is the same failure arriving later.
+
+This matters most in the case it was built for. When a session is *released*, the trigger's
+detection criterion is that session's identity and can no longer match a packet, so a UPF
+that keeps the trigger produces nothing from it. When a **warrant is withdrawn while its
+sessions are still live**, the criterion still matches every packet the subject sends: a UPF
+that keeps that trigger keeps duplicating the subject's traffic to the mediation function,
+correctly labelled, under a warrant that no longer authorises it. Nothing downstream reveals
+that — the product is well-formed and attributable, and only the element that failed to
+withdraw the trigger is in a position to say so.
+
+**What an operator sees.** Two conditions arrive on the X1 fault channel, and they are
+deliberately different:
+
+| Condition | When | What it means |
+|---|---|---|
+| `taskingWithdrawalFailed` | The first failed attempt | A UPF did not acknowledge a withdrawal. The SMF is retrying and still holds the trigger; nothing is lost yet |
+| `taskingWithdrawalStuck` | Once an attempt has been outstanding for 5 minutes | Authority was removed five minutes ago and content is probably still being intercepted. This is the one to act on |
+
+Both name the element and nothing else — no warrant, no target. Which interception it was is
+not something this channel carries; the LIPF knows what it withdrew.
+
+**What the fail-safe does and does not reclaim.** A triggered UPF purges all of its tasking
+if its triggering function stops sending keepalives, which is what stops interception
+outliving an SMF that has died. So the SMF keeps a UPF alive only while it believes that UPF
+holds tasking it installed — never merely because the UPF is configured. Three consequences
+follow, and the third is a limit rather than a feature:
+
+- An SMF holding no content tasking at all sends no keepalives, and each UPF purges after its
+  own window. That is correct: there is nothing to keep, and it means a UPF's interception
+  state converges to empty whenever the SMF's does.
+- A restarted SMF sends a UPF nothing until it has established what that UPF holds. Until
+  then it could not name that tasking and so could never withdraw it, and staying silent lets
+  the UPF's fail-safe reclaim it. If the UPF's X1 stays unreachable, interception lapses —
+  which is the direction this has to fail in.
+- **The fail-safe cannot reclaim one orphaned trigger from a UPF that also holds valid
+  tasking.** It operates on the whole relationship between a triggering function and a UPF,
+  so it purges everything or nothing, and the valid tasking's keepalives preserve the orphan
+  alongside it. Durable withdrawal — the retry above — is the remedy for a single failed
+  withdrawal; the keepalive behaviour only ensures the backstop is reachable at all.
+
+**A purge is reported only when nobody asked for it.** A UPF raises `taskingPurged` when its
+triggering function has gone quiet and the fail-safe has acted. An ordinary `DeactivateTask`,
+a `ModifyTask` and a bulk deactivation all tear the interception down exactly as thoroughly
+and raise nothing: the `DeactivateTaskResponse` is the acknowledgement that they happened.
+An element that reported every withdrawal as a fail-safe purge would teach its operator to
+ignore the one channel that says a controlling function has stopped answering.
 
 #### Fields accepted and disregarded
 
@@ -510,7 +571,10 @@ recovery path is built out of the messages in this section. In order:
    that match nobody.
 2. **It withdraws what its previous life left elsewhere.** A restarted SMF removes tasking
    it had triggered at a CC-POI, which no other party could ever remove — the UPF would
-   otherwise keep duplicating for a warrant nothing holds.
+   otherwise keep duplicating for a warrant nothing holds. A UPF that is not up yet is
+   retried rather than abandoned, and until it answers the SMF sends it no keepalives, so
+   tasking it still holds lapses under its own fail-safe instead of being preserved by an
+   SMF that cannot name it.
 3. **The ADMF interrogates to find out where it stands.** `GetNEStatus` for the element's
    own state, `ListAllDetails` for the identifiers it holds, `GetAllTaskDetails` or
    `GetAllDetails` for the detail. An element holding nothing answers all of them
@@ -948,9 +1012,11 @@ the rest of that host's firewall is persisted.
   dropped rather than delivered — the CC-POI refuses to ship what it cannot
   attribute — so nothing unauthorised reaches an MDF, but the duplication persists
   for the life of that session unless `trigger_keepalive` is set on the UPF, in
-  which case the fail-safe clears it when the triggering function stops calling.
-  Setting `trigger_keepalive` is the mitigation; draining sessions before replacing
-  the SMF avoids it entirely.
+  which case the fail-safe clears it when the triggering function stops calling —
+  and it only stops calling while the replacement SMF holds nothing else at that
+  UPF, since the fail-safe purges a whole connection's tasking or none of it (see
+  *When a withdrawal cannot be delivered*). Setting `trigger_keepalive` is the
+  mitigation; draining sessions before replacing the SMF avoids it entirely.
 
 ## Testing
 

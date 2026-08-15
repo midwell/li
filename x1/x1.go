@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -99,12 +100,15 @@ func marshalResponse(resp *X1Response) ([]byte, error) {
 // the ADMF is configured to use (e.g. "/X1/NE"). It logs nothing about task
 // content, to keep interception undetectable.
 type Server struct {
-	store        *store.Store
-	neID         string
-	admfID       string // responsible ADMF; empty disables the "expected ADMF" check
-	now          func() time.Time
-	onActivate   func(types.InterceptTask)
-	onDeactivate func(types.InterceptTask)
+	store  *store.Store
+	neID   string
+	admfID string // responsible ADMF; empty disables the "expected ADMF" check
+	now    func() time.Time
+	// onTaskChange is this element's one lifecycle callback. See OnTaskChange for
+	// why one event carrying both sides beats two events under one XID.
+	onTaskChange func(prev, next *types.InterceptTask)
+	// onPurge names why tasking went, after it has gone. See OnPurge.
+	onPurge func(types.InterceptTask, PurgeReason)
 	// onAuthFailure is told the X1 error code when a peer fails clause 8.2.4
 	// authentication. Nil leaves such failures unreported, which is the earlier
 	// behaviour: refused and invisible.
@@ -187,21 +191,62 @@ func (d heldDestination) endpoints() []types.DeliveryEndpoint {
 // Option customises a Server.
 type Option func(*Server)
 
-// OnActivate registers a callback run after a task is successfully activated
-// (an ActivateTaskRequest — not a modify or deactivate). A POI uses it to apply
-// interception to state that already exists when the warrant arrives, e.g. the
-// AMF scanning already-registered UEs to emit StartOfInterception records. The
-// callback runs synchronously on the X1 request goroutine, so it must not block.
-func OnActivate(fn func(types.InterceptTask)) Option {
-	return func(s *Server) { s.onActivate = fn }
+// PurgeReason says why tasking was removed. It exists because the removals differ
+// in what they mean to an operator, not in what they do to the element.
+type PurgeReason int
+
+const (
+	// PurgeWithdrawal: an explicit DeactivateTask. The expected end of an
+	// interception.
+	PurgeWithdrawal PurgeReason = iota
+	// PurgeBulkDeactivate: DeactivateAllTasks. Expected too — a provisioning
+	// function clearing this element deliberately.
+	PurgeBulkDeactivate
+	// PurgeKeepaliveLapse: the fail-safe, because the controlling function stopped
+	// answering. Nothing asked for this, and it is the only one of the three an
+	// operator must investigate.
+	PurgeKeepaliveLapse
+)
+
+// OnTaskChange registers the lifecycle callback: one event per transition of this
+// element's tasking, carrying the task as it was and as it becomes.
+//
+//	(nil, task)  activation
+//	(prev, next) modification, or an activation replacing an XID already held
+//	(task, nil)  removal — deactivation, bulk deactivation, or fail-safe purge
+//
+// It supersedes OnActivate/OnDeactivate and is preferred when set. The pair could
+// not express a modification: a ModifyTask keeps the XID, so "the old task" and
+// "the new task" are the same key, and a POI receiving them as two events had to
+// infer an ordering the provisioning interface never stated. Where the POI's
+// response was to install state for the new task and remove state for the old,
+// under that shared key, the removal could reclaim what the installation had just
+// created.
+//
+// The POI decides what changed. This package no longer guesses from the target
+// identifiers alone — a task's products can change with its targets untouched, and
+// every guess of that kind is another field somebody forgot.
+//
+// An exact replay is not a transition and fires nothing: re-provisioning is how a
+// provisioning function restores tasking after a restart, and it must not re-emit
+// records that report the beginning of an interception that never stopped.
+//
+// The callback runs synchronously on the X1 request goroutine, so it must not
+// block. Both pointers are to values owned by the caller for the duration of the
+// call; a POI keeping either must copy it.
+func OnTaskChange(fn func(prev, next *types.InterceptTask)) Option {
+	return func(s *Server) { s.onTaskChange = fn }
 }
 
-// OnDeactivate registers a callback run after a task is successfully deactivated,
-// with the task as it was before removal. A POI uses it to undo interception it
-// applied to existing state (e.g. the SMF clearing mid-session CC duplication).
-// It runs synchronously on the X1 request goroutine, so it must not block.
-func OnDeactivate(fn func(types.InterceptTask)) Option {
-	return func(s *Server) { s.onDeactivate = fn }
+// OnPurge registers a callback run after tasking has been removed, naming why.
+//
+// It carries no instruction — the removal itself travels on OnTaskChange, and has
+// already happened by the time this runs. It exists so that an element reporting
+// "my tasking was purged" can say whether anybody asked for it. An element that
+// reports every withdrawal as a fail-safe purge teaches its operator to ignore the
+// channel, and the report that matters then arrives into that habit.
+func OnPurge(fn func(types.InterceptTask, PurgeReason)) Option {
+	return func(s *Server) { s.onPurge = fn }
 }
 
 // CanApply registers a check run before a task is stored or acknowledged. An
@@ -581,7 +626,7 @@ func (s *Server) purgeIfLapsed(timeout time.Duration) {
 	if idle <= timeout {
 		return
 	}
-	s.purgeAllTasking()
+	s.purgeAllTasking(PurgeKeepaliveLapse)
 }
 
 // purgeAllTasking removes every task and runs the per-task teardown over what was there.
@@ -594,20 +639,61 @@ func (s *Server) purgeIfLapsed(timeout time.Duration) {
 //
 // Both the keepalive fail-safe and DeactivateAllTasks arrive here, which is what stops a bulk
 // deactivation becoming a second, subtly different implementation of the same thing.
-func (s *Server) purgeAllTasking() {
+func (s *Server) purgeAllTasking(reason PurgeReason) {
 	tasks := s.store.Snapshot()
 	s.store.DeactivateAll()
-	if s.onDeactivate != nil {
-		for _, t := range tasks {
-			s.onDeactivate(t)
-		}
+	for _, t := range tasks {
+		s.notifyRemoved(t, reason)
 	}
 }
 
 // deactivateAll performs the bulk deactivation TS 103 221-1 requires every implementation to
 // support: "If enabled, the DeactivateAllTasks command shall perform a 'DeactivateTask' command
 // for all Tasks on the NE."
-func (s *Server) deactivateAll() { s.purgeAllTasking() }
+func (s *Server) deactivateAll() { s.purgeAllTasking(PurgeBulkDeactivate) }
+
+// notifyChanged reports a successful activation or modification as the one
+// transition it is.
+//
+// An exact replay fires nothing. An ADMF re-sending tasking it already sent — its
+// restart-recovery path — must not make this element re-emit records that report
+// the beginning of an interception, because none began, and must not tear down and
+// rebuild state that was already correct.
+//
+// What changed is the POI's to work out. Deciding here, from the target
+// identifiers alone, is what made a change of products invisible: adding CC never
+// began content interception for a target's existing sessions, and removing it
+// left that interception running after the authority for it was gone.
+func (s *Server) notifyChanged(prevTask types.InterceptTask, hadPrev bool, task types.InterceptTask) {
+	if s.onTaskChange == nil || (hadPrev && sameTask(prevTask, task)) {
+		return
+	}
+
+	var prev *types.InterceptTask
+	if hadPrev {
+		prev = &prevTask
+	}
+	s.onTaskChange(prev, &task)
+}
+
+// sameTask reports whether two tasks are the same in every field a POI could act
+// on. Used only to recognise a replay; anything else is a transition and is the
+// POI's to interpret.
+func sameTask(a, b types.InterceptTask) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+// notifyRemoved runs a removal's teardown and then names why it happened. The
+// order is the contract: what is being reported is that interception stopped, so
+// it must have stopped.
+func (s *Server) notifyRemoved(task types.InterceptTask, reason PurgeReason) {
+	if s.onTaskChange != nil {
+		s.onTaskChange(&task, nil)
+	}
+	if s.onPurge != nil {
+		s.onPurge(task, reason)
+	}
+}
 
 // destinationsInUse counts the destinations some task still references.
 //
@@ -661,21 +747,22 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	var code int // TS 103 221-1 error code; 0 means "pick the generic one"
 	switch localType(m.Type) {
 	case "ActivateTaskRequest", "ModifyTaskRequest":
-		// StartOfInterception fires on a fresh activation, and on a modify that
-		// retargets to a *different* identifier (the new target's already-present
-		// state needs a scan too) — but not on a modify that leaves the target
-		// unchanged, which would re-emit for UEs already covered.
-		//
 		// An activation naming an XID this element already holds replaces it rather
 		// than being refused, which is deliberate: re-provisioning is how an ADMF
 		// restores tasking after an element restarts, and refusing it
 		// would break the recovery path the fault reporting exists to trigger.
 		// Modifying tasking that is *not* held has no such reading and is refused
 		// below.
+		//
+		// The task already held is read for both, so that a replacement carries what
+		// it replaces to the POI: an activation over a held XID changes this
+		// element's tasking exactly as a modification does, and a POI told only
+		// about the new task has no way to take down the state it applied for the
+		// old one.
 		isModify := localType(m.Type) == "ModifyTaskRequest"
 		var prevTask types.InterceptTask
 		var hadPrev bool
-		if isModify && m.TaskDetails != nil {
+		if m.TaskDetails != nil {
 			prevTask, hadPrev = s.store.Get(types.XID(m.TaskDetails.XID))
 		}
 		// Two questions answered before the switch, because each one picks a case, and
@@ -733,16 +820,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 				code = taskFailureCode(isModify)
 			}
 			if err == nil {
-				retargeted := isModify && hadPrev && !slices.Equal(task.Targets, prevTask.Targets)
-				if s.onActivate != nil && (!isModify || retargeted) {
-					s.onActivate(task)
-				}
-				// A retarget must undo product/state applied for the old target (e.g.
-				// clear the SMF's CC duplication on the old target's sessions), which
-				// re-evaluates against the now-updated task set.
-				if retargeted && s.onDeactivate != nil {
-					s.onDeactivate(prevTask)
-				}
+				s.notifyChanged(prevTask, hadPrev, task)
 			}
 		}
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)
@@ -919,9 +997,7 @@ func (s *Server) deactivate(xid string) (int, error) {
 		return errCodeNoSuchTask, fmt.Errorf("no such task")
 	}
 	s.store.Deactivate(types.XID(xid))
-	if s.onDeactivate != nil {
-		s.onDeactivate(task)
-	}
+	s.notifyRemoved(task, PurgeWithdrawal)
 
 	return 0, nil
 }
@@ -1098,7 +1174,13 @@ func (s *Server) activate(m X1RequestMessage) (types.InterceptTask, error) {
 	if !s.store.Activate(task) {
 		return types.InterceptTask{}, fmt.Errorf("invalid task")
 	}
-	return task, nil
+	// Answer with the task as this element now holds it, not as it was built. The
+	// store stamps the task state, so a caller comparing this against what it held
+	// before — which is how a replay is told from a change — must be comparing two
+	// values of the same provenance.
+	stored, _ := s.store.Get(task.XID)
+
+	return stored, nil
 }
 
 // taskFromDetails maps X1 TaskDetails onto an interception task, resolving the
