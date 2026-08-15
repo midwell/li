@@ -123,6 +123,10 @@ more expensive than one read here.
 | | `RemoveAllDestinations`, **disabled by default** | Answered with the specification's error when disabled (8020); when enabled, refused while any destination is referenced by a task (8010) |
 | | `CreateDestination` | DID → endpoint; the `dId` is validated as the UUID the schema defines, and re-creating one is refused with 2030 (clause 6.3.1.1) |
 | | Identifiers validated where they enter | `dId`, `xId` and `productID` are all `etsi103280:UUID` in the schema; a value outside that format is refused with 1010 rather than stored and acted on |
+| | **A target identifier populating more than one arm is refused** | `targetIdentifier` is an `xs:choice`, so two populated arms cannot occur and no reading of such a message is authoritative — 1010, as the schema error it is. Selecting one would mean this element deciding the scope of an interception your ADMF ordered. It does **not** restrict a task to one identifier: a `targetIdentifiers` *list* naming several is normal and they are combined as alternatives |
+| | Every criterion of a nested LI_T3 list is applied | `UPFLIT3TargetIdentifier` is a sequence of choices, so a list of several is what it is for; one that cannot be mapped refuses the whole task, naming which member of how many |
+| | An unparseable request is answered with `TopLevelError` | Clause 6.1's four-field response, at HTTP 200 — clause 7.2.2.2 reserves HTTP error codes for HTTP-level errors |
+| | **Every X1 response this element receives is bound to the request that produced it** | Response type, `x1TransactionId`, both element identities and the version. A well-formed acknowledgement from an endpoint naming a different NE is refused, and reported as `x1ResponseUnattributable` — distinct from the POI refusing, because the operator action is the opposite one. See *[Standards](#standards)* for what this does and does not defend against |
 | | `DeactivateTask` refuses what it cannot honour | Table 6.2.3-2: "it is an error if the XID is not already present at the NE" — 2020, where an unheld deactivation used to be acknowledged. See *[A deactivation is not always a success](#a-deactivation-is-not-always-a-success)* |
 | **Delivery destinations** | **A task's product goes to the destinations the task named** | `listOfDIDs`, for X2 as for X3. TS 33.128 marks it mandatory in every ActivateTask table it defines — see *[Where a task's product goes](#where-a-tasks-product-goes)* for the three sources and their precedence |
 | | Destinations **provisioned over X1** with `CreateDestination` | Source 1, and the one that wins |
@@ -156,7 +160,8 @@ more expensive than one read here.
 | **Security** | Mutual TLS on X1, X2 and X3, from an X0-provisioned LI PKI | |
 | | Undetectability: nothing in any general operator log | No target, warrant, ADMF/MDF address or LI configuration |
 | | Unauthorised peers refused silently, reported only to the ADMF | |
-| | Per-warrant delivery isolation | Several agencies' warrants concurrently |
+| | Per-warrant delivery isolation | Unconditional: no agency's product reaches another's endpoint, for any product type and any delivery path |
+| | Concurrent warrants from several agencies, **for IRI** | Each matching task produces its own xIRI, separately numbered, to its own destinations. For content the answer is different — see the gaps table |
 | | Subscriber traffic and usage accounting unchanged | Measured exactly once despite duplication |
 | **Operational** | UPF restart: interception continues, with no operator action | The destination is re-provisioned and the POI re-triggered |
 | | SMF/AMF restart: tasking is lost, the ADMF is told, and it can interrogate the element to reconcile | The whole sequence in one place: *[What happens after a restart](#what-happens-after-a-restart-and-what-the-admf-does-about-it)* |
@@ -178,6 +183,7 @@ more expensive than one read here.
 | | Any `taskDetailsExtensions` or `destinationDetailsExtensions` other than the one below | **Refused**. An extension exists in order to change the meaning of the message carrying it, so an unknown one cannot be ignored. This includes `TaskDetailsExtensions/HeaderReporting`, which TS 33.128 tables 6.2.3-0A and 6.2.3-9 mark C and M respectively — packet header information reporting is not implemented, so a task asking for it is refused rather than acknowledged and ignored |
 | | Mediation details (`listOfMediationDetails`) | **Accepted and disregarded**, deliberately — see *[Fields accepted and disregarded](#fields-accepted-and-disregarded)* |
 | | `implicitDeactivationAllowed` | **Accepted and disregarded**, likewise |
+| **CC (X3)** | Content for **more than one warrant covering the same session** | **Declared, not deferred.** Where several tasks' detection criteria cover one PFCP session, the CC-POI delivers that session's content under exactly one of them — the lowest XID, chosen stably so the session's packets are never divided among the covering warrants — and the others receive none of it. The element reports the overlap (`contentTaskOverlap`, network-element level, throttled to one report per 30 s), and **that report does not satisfy the unserved warrants**: it says an overlap exists, not which warrants it concerns, because which warrants overlap is the ADMF's to know and not this element's to say. Implementing it would need one logically identical X3 PDU per covering task, each with its own XID, correlation context, sequence numbering and destinations — per-packet fan-out proportional to the overlapping warrants, at the one point of interception whose cost is per packet rather than per event. Worth revisiting for a deployment that runs concurrent warrants from different agencies against one subscriber. IRI is unaffected: several tasks matching one subject each produce their own xIRI |
 | **Provisioning** | More than one ADMF per network element | One responsible ADMF; a second identity is refused |
 | **State** | Warrants persisted across a restart | Deliberate. Interception must not outlive contact with the function that authorised it, so the failure direction is "stopped" — which means a planned upgrade needs re-provisioning in the runbook. What the ADMF is told, and what it asks next, is in *[What happens after a restart](#what-happens-after-a-restart-and-what-the-admf-does-about-it)* |
 | **Scope** | HI1/HI2/HI3 and delivery to the LEMF | The mediation function's role, not a POI's |
@@ -458,6 +464,23 @@ predict:
   possible — a criterion selecting one direction is settled by the tag alone — and
   from the packet only for a transport port the rules do not constrain. A copy that
   did not match is not lost content and is not reported as a delivery fault.
+
+**Duplication is re-derived, not remembered.** Every point that could change the
+answer — a task activated, modified or withdrawn, a session established, a session
+modified — recomputes what the live tasking implies for the session's current rules,
+rather than replaying a set of decisions taken earlier. A remembered set is one more
+thing to drift out of step with the datapath, and its drifting would be silent.
+
+One consequence is visible in the logs: **a re-derivation may run twice around a
+session establishment or modification.** A session becomes visible to a re-derivation
+only once the PFCP handler has stored it, which is after the datapath has been
+programmed. So a re-derivation already running when a session is programmed cannot
+have accounted for it, and the element asks for one more once the session is stored.
+That second pass is not churn and not a retry of a failed one; it is the element
+confirming that what it programmed for a session it has just installed still matches
+tasking that may have changed while it was installing it. It is asked for only where
+the session is being duplicated or has just stopped being, so an element holding no
+tasking never performs it.
 
 So exactness depends on the rule structure the SMF installed, and precision is
 restored by filtering rather than by finer duplication. The residual limitation:
@@ -1038,15 +1061,21 @@ records are not exercised, because a handover needs two RAN nodes. See
 - 3GPP TS 33.127 — LI architecture; 3GPP TS 33.128 — stage-3 procedures / xIRI records
 - ETSI TS 104 000 — X0 (credential pre-provisioning)
 
-**Two conformance dispositions record what is and is not implemented on the other two wire
-formats, and they are the honest answer rather than this table:**
+**Three conformance dispositions record what is and is not implemented on each wire format,
+and they are the honest answer rather than this table. `CONFORMANCE.md` indexes them and
+lists the open gaps across all three in one place — start there.**
 
+- `x1/CONFORMANCE.md` — TS 103 221-1 message by message, against V1.21.1: what is
+  implemented, what is refused and with which code, and where a deliberate decision diverges
+  from the prose. Also the two dispositions that belong to this element as an X1 *client*, on
+  the LI_T3 triggering path.
 - `x2x3/CONFORMANCE.md` — every TS 103 221-2 header field, PDU type, conditional attribute
-  and payload format, against V1.10.1. One gap is recorded there and it is not subtle:
-  **the clause 6.2.4 keepalive mechanism is not implemented**, so this element sends no
-  Keepalive PDU and applies no TIME_P2 disconnect. The emitted Version field is deliberately
-  held at 5 rather than the 6 that V1.10.1 defines, because raising it would claim a
-  conformance this element does not yet have.
+  and payload format, against V1.10.1. One gap is recorded there and it is blocked
+  externally: the emitted Version field is 5 where V1.10.1 defines 6, held there because the
+  only available interoperability peer refuses 0.6. The clause 6.2.4 keepalive mechanism
+  **is** implemented, on X2 and X3, though its acknowledgement path has never been exercised
+  against an independent implementation — the reference declares the PDU types and
+  references them nowhere.
 
   **The six conditional attributes TS 33.128 requires are emitted**, and an integrator can
   expect them without reading the code: the Network Function ID (the element's own `neId`) and
@@ -1063,9 +1092,12 @@ formats, and they are the honest answer rather than this table:**
 - `iri/CONFORMANCE.md` — the TS 33.128 records, bounded to those this project emits, with the
   M/C/O verdict for every field the published ASN.1 module defines and we do not populate.
 
-Both are readings rather than checks where the specification is prose, and each says which
-it is. `iri/asn1_drift_test.go` makes the record half mechanical: it fails when the module
-defines a field no record models and nothing declares it absent.
+All three are readings rather than checks where the specification is prose, and each says
+which it is. Two mechanical checks sit beside them: `iri/asn1_drift_test.go` fails when the
+module defines a field no record models and nothing declares it absent, and
+`x1/schema_drift_test.go` fails when the X1 schema defines an element no struct declares.
+Neither can notice that a "shall" in the prose has no code behind it, which is what the
+dispositions are for.
 
 The published X1 schemas are vendored under `x1/testdata/schemas/`, pinned by digest, with
 their source URLs and versions beside them. Every X1 message this element sends is
