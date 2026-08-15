@@ -256,6 +256,11 @@ func TestShadowingAReferencedDIDIsRefused(t *testing.T) {
 	if got := m.ErrorInformation.ErrorCode; got != errCodeCreateDestFailed {
 		t.Errorf("error code = %d, want %d — the ADMF reads the code before the text", got, errCodeCreateDestFailed)
 	}
+	// And says which identifier, because 6000 is the generic destination-creation
+	// failure: an ADMF provisioning several in one pass cannot act on the code alone.
+	if d := m.ErrorInformation.ErrorDescription; !strings.Contains(d, didAgencyA) {
+		t.Errorf("error description = %q, want it to name %s", d, didAgencyA)
+	}
 
 	// The element must not be able to report a destination it is not using: the answer
 	// to GetDestinationDetails and what the task delivers to have to be the same address.
