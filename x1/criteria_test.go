@@ -257,6 +257,41 @@ func TestCanApplyRefusesBeforeAcknowledging(t *testing.T) {
 	}
 }
 
+// TestARefusedModificationFromCanApplyCarriesTheModifyCode covers the other arm of
+// the code the refusal resolves to. The two are picked by one condition, and a test
+// for the first proves nothing about the second — which is how a two-setting helper
+// has hidden a defect in this project before.
+//
+// 3001 is "Generic ModifyTask failure" where 3000 is the activation's. An ADMF reads
+// the code before the text, and one that names the wrong operation is as unhelpful as
+// one that names nothing.
+func TestARefusedModificationFromCanApplyCarriesTheModifyCode(t *testing.T) {
+	st := store.New()
+	// Approves the activation so there is tasking to modify, then refuses.
+	var asked int
+	srv := NewServer(st, "neID", CanApply(func(types.InterceptTask) error {
+		asked++
+		if asked == 1 {
+			return nil
+		}
+
+		return fmt.Errorf("this datapath holds no state for that criterion")
+	}))
+
+	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
+		t.Fatalf("Process (activate): %v", err)
+	}
+
+	body := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
+	resp, err := srv.Process([]byte(body), admfPeer(t))
+	if err != nil {
+		t.Fatalf("Process (modify): %v", err)
+	}
+	if got := resp.Messages[0].ErrorInformation; got == nil || got.ErrorCode != errCodeModifyFailed {
+		t.Fatalf("got %+v, want error %d", got, errCodeModifyFailed)
+	}
+}
+
 // TestCanApplyApprovalStores checks the other half: an approving check does not
 // change what an acknowledged activation does.
 func TestCanApplyApprovalStores(t *testing.T) {
