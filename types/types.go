@@ -143,6 +143,24 @@ const (
 type DeliveryEndpoint struct {
 	Type    DeliveryType
 	Address string // host:port of the MDF (X2 → MDF2, X3 → MDF3)
+	// DID is the destination identifier the provisioning function assigned to this
+	// endpoint, where the endpoint came from a provisioned destination. Empty for an
+	// endpoint this element resolved from its own configuration, which the ADMF has
+	// no identifier for.
+	//
+	// It is carried rather than looked up when needed because the alternative is a
+	// second structure — an address-to-DID map — that has to agree with the
+	// destination store and is updated on a different path. Disagreement between two
+	// such structures is silent by nature and is the defect class this module has
+	// spent several changes closing.
+	//
+	// **It is not part of delivery.** Endpoints are deduplicated by address, so two
+	// DIDs naming one address deliver one copy, and a second copy of a subject's
+	// traffic is the failure that deduplication exists to prevent. What the DID is
+	// for is saying *which destination* when this element reports a fault about one:
+	// the provisioning function's unit of action is the destination it created, and
+	// ETSI TS 103 221-1 clause 6.5.3 scopes a report to it.
+	DID string
 }
 
 // TaskState is the lifecycle state of an interception task.
@@ -316,6 +334,31 @@ func (t InterceptTask) DeliveryAddresses(dt DeliveryType) []string {
 			continue
 		}
 		out = append(out, d.Address)
+	}
+
+	return out
+}
+
+// DeliveryDIDs returns the destination identifiers this task provisioned onto one
+// address, for the given interface.
+//
+// It is the reporting counterpart of DeliveryAddresses and the two deduplicate on
+// purpose-built keys rather than on the same one. Delivery deduplicates by
+// *address*, because two identifiers naming one endpoint must yield one copy.
+// Reporting enumerates by *identifier*, because a provisioning function's unit of
+// action is the destination it created and telling it "the endpoint behind two of
+// your destinations is unreachable" would require it to know how this element
+// resolves them.
+//
+// An endpoint this element resolved from its own configuration has no identifier
+// and contributes none: the ADMF did not create it and has nothing to act on.
+func (t InterceptTask) DeliveryDIDs(dt DeliveryType, address string) []string {
+	var out []string
+	for _, d := range t.Deliveries {
+		if d.Type != dt || d.Address != address || d.DID == "" || slices.Contains(out, d.DID) {
+			continue
+		}
+		out = append(out, d.DID)
 	}
 
 	return out

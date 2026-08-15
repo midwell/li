@@ -92,6 +92,29 @@ func (p *Pool) For(addr string) Sender {
 //
 // It performs no I/O and answers from state each client already holds, so it is safe to call
 // from a fault probe on the X1 request goroutine.
+// UnreachableAt answers for one address what UnreachableAmong counts over many: is
+// this destination currently unreachable.
+//
+// An address nothing has been sent to answers false, on the same reasoning
+// UnreachableAmong applies — an element that has delivered nothing has not found a
+// mediation function unreachable, it has not looked.
+//
+// It exists because a destination-scoped fault report names one destination, so the
+// question the counting form answers ("how many") is not the one being asked. Both
+// read the same state and neither performs I/O.
+func (p *Pool) UnreachableAt(addr string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	s, ok := p.senders[addr]
+	if !ok {
+		return false
+	}
+	r, ok := s.(Reachability)
+
+	return ok && r.Unreachable()
+}
+
 func (p *Pool) UnreachableAmong(addrs []string) (unreachable, inUse int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -41,17 +41,15 @@ named with enough detail that a reader can tell whether it matters to them.
 
 ### X1
 
-4. **`ReportDestinationIssue` is not implemented** (clause 6.5.3). Issues relating to a
-   particular DID — an unreachable mediation function — are reported at network-element level
-   instead. The information reaches the ADMF; the scoping does not. **Not yet routed to a
-   change.**
+**None open.**
 
-Four X1 gaps were found by writing that disposition and have since been closed: an X1 response
+Six X1 gaps were found by writing that disposition and have since been closed: an X1 response
 was not bound to the request that produced it, a nested LI_T3 criteria list was narrowed to its
 first member, a target identifier populating more than one arm of the schema's choice was
-accepted rather than refused, and `TopLevelError` was unimplemented. Each is recorded there
-with what the behaviour was, because a closed gap is evidence about how this implementation is
-audited and not merely history.
+accepted rather than refused, `TopLevelError` was unimplemented, an issue relating to one
+delivery destination was reported at network-element scope, and no fault was ever reported as
+cleared. Each is recorded there with what the behaviour was, because a closed gap is evidence
+about how this implementation is audited and not merely history.
 
 ## Capabilities declared unsupported, which are not gaps
 

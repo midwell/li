@@ -564,6 +564,23 @@ func TestOriginatedRequestsValidate(t *testing.T) {
 			t.Fatalf("ReportTaskIssue: %v", err)
 		}
 		report(t, "ReportTaskIssue", validateAgainstSchema(t, []byte(body)))
+
+		// The destination-scoped report, and its clearing counterpart. Both are new
+		// message shapes on a channel whose whole value is that a validating ADMF
+		// accepts them, and AllClear is an enumeration value this element had declared
+		// for a long time and never emitted — so nothing had ever checked that emitting
+		// it produces a valid message.
+		if err := rep.ReportDestinationIssue(didAgencyA, TaskReportNonTerminatingFault,
+			"mdfUnreachable: delivery destination is unreachable"); err != nil {
+			t.Fatalf("ReportDestinationIssue: %v", err)
+		}
+		report(t, "ReportDestinationIssue", validateAgainstSchema(t, []byte(body)))
+
+		if err := rep.ReportDestinationIssue(didAgencyA, TaskReportAllClear,
+			"mdfUnreachable: resolved"); err != nil {
+			t.Fatalf("ReportDestinationIssue(AllClear): %v", err)
+		}
+		report(t, "ReportDestinationIssue/AllClear", validateAgainstSchema(t, []byte(body)))
 	})
 }
 

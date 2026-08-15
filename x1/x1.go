@@ -169,16 +169,23 @@ type heldDestination struct {
 }
 
 // endpoints expands a destination into the delivery endpoints it serves.
-func (d heldDestination) endpoints() []types.DeliveryEndpoint {
+//
+// did is the identifier the destination was resolved by, and it is carried onto
+// every endpoint. It used to be dropped here, which left the element unable to say
+// *which* destination a delivery fault concerned — the identifier was discarded at
+// the boundary between provisioning and delivery, so it was absent from the domain
+// model every point of interception works in, not merely from the sites that
+// notice a fault.
+func (d heldDestination) endpoints(did string) []types.DeliveryEndpoint {
 	switch d.DeliveryType {
 	case deliveryX2Only:
-		return []types.DeliveryEndpoint{{Type: types.DeliveryX2, Address: d.Address}}
+		return []types.DeliveryEndpoint{{Type: types.DeliveryX2, Address: d.Address, DID: did}}
 	case deliveryX3Only:
-		return []types.DeliveryEndpoint{{Type: types.DeliveryX3, Address: d.Address}}
+		return []types.DeliveryEndpoint{{Type: types.DeliveryX3, Address: d.Address, DID: did}}
 	case deliveryX2andX3:
 		return []types.DeliveryEndpoint{
-			{Type: types.DeliveryX2, Address: d.Address},
-			{Type: types.DeliveryX3, Address: d.Address},
+			{Type: types.DeliveryX2, Address: d.Address, DID: did},
+			{Type: types.DeliveryX3, Address: d.Address, DID: did},
 		}
 	default:
 		// Unreachable: a destination is only stored once deliveryProducts has accepted
@@ -1213,7 +1220,7 @@ func (s *Server) resolveDIDs(dids []string) []types.DeliveryEndpoint {
 	var out []types.DeliveryEndpoint
 	for _, did := range dids {
 		if dest, ok := s.resolveLocked(did); ok {
-			out = append(out, dest.endpoints()...)
+			out = append(out, dest.endpoints(did)...)
 		}
 	}
 	return out

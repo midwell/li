@@ -34,7 +34,7 @@ const reportThrottle = 30 * time.Second
 // discards real faults on a timer nobody can justify, or none at all, which makes an
 // element permanently faulty. Both end with the answer no longer being read.
 //
-//	mdfUnreachable      state  probe  the mediation function is reachable or it is not
+//	mdfUnreachable      state  both   the mediation function is reachable or it is not
 //	x3EgressDown        state  probe  the datapath egress socket is up or it is not
 //	x3PuntLost          event  push   a copy the datapath could not hand over
 //	x3FramingLost       event  push   a copy this element could not frame in time
@@ -50,6 +50,15 @@ const reportThrottle = 30 * time.Second
 //	taskingAbsent       state  push   observable, deliberately not a probe (below)
 //	x1ListenFailed      state  push   observable, but unaskable (below)
 //	invalidConfig       state  push   observable, but unaskable (below)
+//
+// mdfUnreachable is the one condition carried by *both*, and it is not an exception to
+// the rule above but the rule followed all the way. A state has an ending as well as a
+// beginning, and TS 103 221-1 clause 5.3 requires both to be reported — "The NE shall
+// also indicate that a fault has been cleared". So the probe answers it when asked, and
+// DestinationWatcher pushes each transition, naming the destination the transition
+// concerns (clause 6.5.3). The two carry the same fact to different questions: "how much
+// is wrong" and "what just changed". Nothing else here has an ending anybody could
+// observe, which is why nothing else is in both columns.
 //
 // The last three are re-observable and still do not belong in a status answer, which is
 // the part of this that cannot be recovered from the code:
@@ -271,8 +280,97 @@ type Reporter struct {
 	client  *http.Client
 	now     func() time.Time
 
-	mu       sync.Mutex
-	lastSent map[string]time.Time // per issue type, for throttling
+	mu sync.Mutex
+	// lastSent throttles a repeat of the same report, keyed by reportKey rather than
+	// by issue type alone.
+	//
+	// The type alone was the right key while every report was network-element
+	// scoped, and becomes wrong the moment one names a destination: two destinations
+	// failing inside one window would be one report, and which survived would be
+	// whichever failed first.
+	lastSent map[reportKey]time.Time
+	// reported is what this element has told the provisioning function is wrong and
+	// has not yet told it is right again. It is what makes a clearing report
+	// possible: knowing a fault *cleared* requires knowing it was previously set,
+	// which no amount of re-observing the present can supply.
+	//
+	// **It is not, and must not become, the answer to a status request.** That answer
+	// is determined from what the element can observe when it is asked, and is
+	// deliberately not a history of what was reported — see WithFaultProbes, and the
+	// reasoning there for why an accumulating status answer ends up unread. These are
+	// the standard's own two mechanisms and they answer different questions: "what
+	// changed" and "what holds now". This is the first.
+	reported map[reportKey]bool
+}
+
+// reportScope is which of the three scopes clause 6.5.1 defines a report carries.
+type reportScope int
+
+const (
+	scopeElement reportScope = iota
+	scopeTask
+	scopeDestination
+)
+
+// reportKey identifies one condition at one scope, which is the unit a throttle
+// and a clearing report both act on.
+type reportKey struct {
+	scope reportScope
+	// id is the XID or DID the report concerns, empty at element scope.
+	id string
+	// condition is the issue type or the reason, so two different faults about one
+	// destination stay distinguishable.
+	condition string
+}
+
+// admit reports whether a report of this condition should be sent now, and records
+// that it was. It is the throttle, keyed per condition per scope rather than per
+// issue type.
+func (r *Reporter) admit(k reportKey) bool {
+	if r == nil {
+		return false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if last, ok := r.lastSent[k]; ok && r.now().Sub(last) < reportThrottle {
+		return false
+	}
+	r.lastSent[k] = r.now()
+	r.reported[k] = true
+
+	return true
+}
+
+// clearing reports whether a fault this element has reported at this key is now
+// being retracted, and forgets it.
+//
+// It answers false for a fault that was never reported, which is what stops a
+// watcher starting up on a healthy element from announcing recoveries from faults
+// nobody was told about.
+//
+// It deliberately does not consult the throttle. A fault beginning and that same
+// fault clearing are two events and not a repetition, and an element that throttled
+// the second against the first would report a fault it never retracts — which is
+// worse than reporting neither, because the ADMF acts on the first.
+func (r *Reporter) clearing(k reportKey) bool {
+	if r == nil {
+		return false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.reported[k] {
+		return false
+	}
+	delete(r.reported, k)
+	// The throttle is forgotten with it, so the same fault recurring immediately is
+	// reported rather than suppressed as a repeat of the one just retracted.
+	delete(r.lastSent, k)
+
+	return true
 }
 
 // NewReporter returns a Reporter that POSTs to the ADMF's X1 endpoint admfURL
@@ -287,7 +385,8 @@ func NewReporter(admfURL, admfID, neID string, tlsConfig *tls.Config) *Reporter 
 			Timeout:   10 * time.Second,
 		},
 		now:      func() time.Time { return time.Now().UTC() },
-		lastSent: make(map[string]time.Time),
+		lastSent: make(map[reportKey]time.Time),
+		reported: make(map[reportKey]bool),
 	}
 }
 
@@ -316,7 +415,17 @@ var reportTemplate = template.Must(template.New("x1report").Funcs(template.FuncM
 // enumeration). A Triggering Function uses these to tell the LIPF what became of
 // an interception it was asked to arrange.
 const (
-	// TaskReportAllClear: a previously reported fault has cleared.
+	// TaskReportAllClear: a fault previously reported at this scope has cleared.
+	//
+	// The task- and destination-scoped counterpart of FaultCleared, which is the
+	// network-element one. Clause 5.3 requires both — "The NE shall also indicate
+	// that a fault has been cleared (see clauses 6.5.2 and 6.5.3) unless otherwise
+	// configured" — and clauses 6.5.2 and 6.5.3 each repeat it for their own message.
+	//
+	// It was declared here and emitted by nothing until 2026-08-15, as FaultCleared
+	// was: an element that reports every beginning and no ending leaves a
+	// provisioning function holding a list that only grows, and one that cannot tell
+	// a current fault from a historical one treats all of them as historical.
 	TaskReportAllClear = "AllClear"
 	// TaskReportWarning: something is wrong but the interception continues.
 	TaskReportWarning = "Warning"
@@ -416,6 +525,109 @@ func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
 	return nil
 }
 
+// reportDestinationTemplate emits an X1Request carrying a
+// ReportDestinationIssueRequest. Element order follows its xs:sequence: dId,
+// destinationReportType, then the optional error code and details.
+var reportDestinationTemplate = template.Must(template.New("x1destissue").Funcs(template.FuncMap{
+	"esc": escapeXML,
+}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:x1RequestMessage xsi:type="ns1:ReportDestinationIssueRequest">
+    <ns1:admfIdentifier>{{esc .AdmfID}}</ns1:admfIdentifier>
+    <ns1:neIdentifier>{{esc .NeID}}</ns1:neIdentifier>
+    <ns1:messageTimestamp>{{esc .Timestamp}}</ns1:messageTimestamp>
+    <ns1:version>v1.6.1</ns1:version>
+    <ns1:x1TransactionId>{{esc .TxID}}</ns1:x1TransactionId>
+    <ns1:dId>{{esc .DID}}</ns1:dId>
+    <ns1:destinationReportType>{{esc .ReportType}}</ns1:destinationReportType>
+{{- if .Details}}
+    <ns1:destinationIssueDetails>{{esc .Details}}</ns1:destinationIssueDetails>
+{{- end}}
+  </ns1:x1RequestMessage>
+</ns1:X1Request>`))
+
+// NotifyDestinationFault reports that a delivery destination is at fault, once per
+// throttle window, and records that it has been reported so the fault can later be
+// retracted.
+//
+// (TS 103 221-1 clause 6.5.3): "The NE shall send a ReportDestinationIssue request
+// when it becomes aware of an issue (warning or fault) relating specifically to a
+// particular DID."
+//
+// Clause 6.5.1 scopes an issue three ways — to a task, to a delivery destination,
+// or to the whole element — and the scope is what tells a provisioning function
+// where to act. An unreachable mediation function reported at element scope is the
+// truth at the wrong scope: a function that provisioned several destinations learns
+// one of them is unreachable and cannot learn which, so the only action available
+// to it concerns all of them.
+//
+// **Naming the DID is not a widening of what this channel discloses.** It is the
+// provisioning function's own identifier for an endpoint it created; it names
+// neither a target nor a warrant, and the rule that a report names neither is
+// unchanged. details is human-readable text under the same rule.
+//
+// Fire-and-forget, like Notify: a failed report has nowhere to go, and this is the
+// form the network functions call.
+func (r *Reporter) NotifyDestinationFault(did, condition, details string) {
+	if r == nil {
+		return
+	}
+	if !r.admit(reportKey{scope: scopeDestination, id: did, condition: condition}) {
+		return
+	}
+	//nolint:errcheck // fire-and-forget by design; see Notify
+	_ = r.ReportDestinationIssue(did, TaskReportNonTerminatingFault, condition+": "+details)
+}
+
+// NotifyDestinationClear retracts a fault previously reported for a destination,
+// and does nothing if none was.
+//
+// Clause 5.3: "The NE shall also indicate that a fault has been cleared." The
+// retraction is not throttled against the report that announced it — see clearing —
+// because the two are a state change and not a repetition.
+func (r *Reporter) NotifyDestinationClear(did, condition string) {
+	if r == nil {
+		return
+	}
+	if !r.clearing(reportKey{scope: scopeDestination, id: did, condition: condition}) {
+		return
+	}
+	//nolint:errcheck // fire-and-forget by design; see Notify
+	_ = r.ReportDestinationIssue(did, TaskReportAllClear, condition+": resolved")
+}
+
+// ReportDestinationIssue POSTs a ReportDestinationIssueRequest to the ADMF
+// (TS 103 221-1 clause 6.5.3). Prefer NotifyDestinationFault and
+// NotifyDestinationClear, which carry the throttling and the record of what has
+// been reported; this is the message on its own.
+func (r *Reporter) ReportDestinationIssue(did, reportType, details string) error {
+	var body bytes.Buffer
+	if err := reportDestinationTemplate.Execute(&body, struct {
+		AdmfID, NeID, Timestamp, TxID, DID, ReportType, Details string
+	}{
+		AdmfID:     r.admfID,
+		NeID:       r.neID,
+		Timestamp:  x1Timestamp(r.now()),
+		TxID:       newUUID(),
+		DID:        did,
+		ReportType: reportType,
+		Details:    details,
+	}); err != nil {
+		return err
+	}
+
+	resp, err := r.postXML(r.admfURL, &body)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("x1: ADMF returned status %d for destination issue report", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // ReportNEIssue POSTs a ReportNEIssueRequest to the ADMF. issueType is a
 // TS 103 221-1 typeOfNeIssueMessage (see the NEIssue* constants); description is
 // human-readable NE-level text that MUST NOT contain a target or warrant
@@ -423,13 +635,9 @@ func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
 func (r *Reporter) ReportNEIssue(issueType, description string) error {
 	// Throttle repeats of the same issue type so a persistent fault does not
 	// flood the ADMF; safe to call on every failed event.
-	r.mu.Lock()
-	if last, ok := r.lastSent[issueType]; ok && r.now().Sub(last) < reportThrottle {
-		r.mu.Unlock()
+	if !r.admit(reportKey{scope: scopeElement, condition: issueType}) {
 		return nil
 	}
-	r.lastSent[issueType] = r.now()
-	r.mu.Unlock()
 
 	// The condition leads the description because that is the only field on this
 	// message where it may legitimately appear, and an ADMF still needs to tell one

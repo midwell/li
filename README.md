@@ -134,7 +134,8 @@ more expensive than one read here.
 | | A **configured default endpoint** (`mdf2`) | Source 3, for a task that names no destination this element can resolve |
 | | An `X2andX3` destination serves both interfaces | One destination, two endpoints |
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
-| | NE-initiated fault reporting | `ReportNEIssue`, `ReportTaskIssue`, with schema-valid message types and issue codes |
+| | NE-initiated fault reporting, at the scope the fault has | `ReportNEIssue`, `ReportTaskIssue` and `ReportDestinationIssue`, with schema-valid message types and issue codes. An issue relating to one delivery destination names that destination's DID (clause 6.5.3), rather than being reported as a fault of the whole element — an ADMF that provisioned several otherwise cannot tell which one failed. Where one endpoint serves several DIDs, each is reported |
+| | **A fault that ends is reported as having ended** | Clause 5.3: `AllClear` at task and destination scope, `FaultCleared` at element scope. An element that reports every beginning and no ending leaves an ADMF holding a list that only grows. Rate limiting is per condition and never applies across a state change, so a destination that fails and recovers inside one window still produces both reports |
 | | The element answers for the conditions it can currently observe | `GetNEStatus` reports `mdfUnreachable` while delivery is failing and `x3EgressDown` while the datapath egress is down, and stops reporting each when it stops holding — see *Asking an element how it is* below |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
 | | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the ninth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction, PDR; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |

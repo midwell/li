@@ -201,7 +201,7 @@ against what it believes it sent.
 | Message | Disposition |
 |---|---|
 | `ReportTaskIssue` (6.5.2) | Implemented, with the closed `TaskReportType` enumeration and the clause 6.7 issue codes |
-| `ReportDestinationIssue` (6.5.3) | **Not implemented.** See the gaps below |
+| `ReportDestinationIssue` (6.5.3) | Implemented, naming the DID. See *Scope, and the ending of a fault* |
 | `ReportNEIssue` (6.5.4) | Implemented, with the closed `TypeOfNEIssueMessage` enumeration — `Warning`, `FaultCleared`, `FaultReport`, `Alert` — and issue codes from table 6.7-3 |
 | `TopLevelError` (6.1) | Implemented: an unparseable request is answered with `X1TopLevelErrorResponse` and its four fields, at HTTP 200 per clause 7.2.2.2 |
 
@@ -215,6 +215,63 @@ condition occurred and not a count of occurrences.
 channel but this one, so a report that cannot be delivered is discarded rather than logged.
 That is deliberate — writing the error anywhere general would be the disclosure this plane
 exists to avoid — and it means the fault channel is best-effort by construction.
+
+### Scope, and the ending of a fault
+
+Clause 6.5.1 scopes an issue three ways — to a task, to a delivery destination, or to the
+whole network element — and **the scope is what tells a provisioning function where to act**.
+Until 2026-08-15 this element collapsed the middle case into the third: every site that
+noticed an unreachable mediation function reported `mdfUnreachable` at element scope, so an
+ADMF that had provisioned several destinations learned one of them was unreachable and could
+not learn which.
+
+A destination-scoped fault is now reported as one, naming the DID. **Naming it is not a
+widening of what this channel discloses**: it is the provisioning function's own identifier
+for an endpoint it created, and it names neither a target nor a warrant. Where one endpoint
+serves several provisioned identifiers, the fault is reported for each — the provisioning
+function's unit of action is the destination it created, and reporting per endpoint would
+require it to know how this element resolves them.
+
+**A fault that ends is reported as having ended**, per clause 5.3 — "The NE shall also
+indicate that a fault has been cleared (see clauses 6.5.2 and 6.5.3) unless otherwise
+configured" — as `AllClear` at task and destination scope and `FaultCleared` at element
+scope. Both values were declared in this package from the beginning and emitted by nothing,
+so an ADMF told a fault began was never told it ended.
+
+Three properties of how that is done, because each is a place the obvious implementation is
+wrong:
+
+- **One party owns both edges.** Reachability is re-observable — every supplier answers from
+  state its senders already hold — so an ending is detectable, which is what makes the
+  clearing report possible at all. Nothing in the delivery layer signals recovery, and adding
+  a recovery callback beside the failure one would have put edge detection at five sites
+  across three network functions, each free to disagree about what "recovered" means. An
+  element where one party announces and another retracts eventually announces something
+  nobody retracts.
+- **The report is no later than it was.** Moving it off the delivery path would otherwise
+  have delayed first notice by up to one sampling interval; the sites that used to report now
+  ask the watcher to sample immediately, so the decision moved and the promptness did not.
+- **A fault that cannot be re-observed gets no clearing report.** A destination that could
+  not be *prepared* is a credential or configuration fault rather than a reachability one,
+  and a fault that cannot be observed to hold cannot be observed to end. Those are still
+  reported where they are noticed, at element scope. This is the existing
+  event-versus-condition rule applied, not a second mechanism.
+
+**Clause 5.3 also says "The NE shall remember which of the XIDs are in fault and whether the
+NE itself is in a fault situation", and that does not conflict with this element's status
+answer being recomputed.** What is remembered is *what has been said to the provisioning
+function*, which is the only thing a clearing report can be derived from — knowing a fault
+cleared requires knowing it was previously set, and no amount of re-observing the present
+supplies that. The status answer remains determined from what is observable when it is asked
+and remains not a history of what was reported. These are the standard's own two mechanisms,
+answering "what changed" and "what holds now", and each is insufficient alone.
+
+**Report rate limiting is scoped to the condition, not to the message type.** One issue type
+was the right key while every report was element-scoped; it becomes wrong the moment a report
+names a destination, because two destinations failing inside one window would be one report
+and whichever failed first would hide the other. The limit also does not apply across a state
+change: a fault beginning and that same fault clearing are two events, not a repetition, and
+throttling the second against the first would report a fault this element never retracts.
 
 ### The withdrawal-durability surface
 
@@ -404,19 +461,19 @@ plainly, so nobody mistakes its scope for a clean bill of health:
 
 ## Known gaps, in order of consequence
 
-1. **`ReportDestinationIssue` is not implemented (clause 6.5.3).** The NE "shall send a
-   ReportDestinationIssue request when it becomes aware of an issue … relating specifically to
-   a particular DID". An unreachable mediation function is exactly that, and this element
-   reports it as an **NE**-level `mdfUnreachable` naming the destination in free text. The
-   information reaches the ADMF; the scoping clause 6.5.1 draws — XID, DID, whole NE — does
-   not. Mandatory when the condition arises, found by writing this disposition, and **not yet
-   routed to a change**: it is an emitter rather than a correction to any of the open ones,
-   and widening one of them to carry it is exactly what task 2.4 of
-   `declare-li-implemented-subset` exists to prevent.
+None open.
 
-**Closed since this disposition was written**, in order. All four were found by writing it,
+**Closed since this disposition was written**, in order. All six were found by writing it,
 and none could have been found by the schema checks — that is the class this document exists
 for:
+
+- **`ReportDestinationIssue` was not implemented (clause 6.5.3)**, so an issue relating
+  specifically to one DID was reported at network-element scope instead. The information
+  reached the ADMF; the scoping clause 6.5.1 draws did not. See *Scope, and the ending of a
+  fault*.
+- **No fault was ever reported as cleared (clause 5.3).** `AllClear` and `FaultCleared` were
+  both declared and emitted by nothing, for task issues as well as destination ones, so an
+  ADMF told a fault began was never told it ended. Same section.
 
 - **An X1 response was not bound to the request that produced it.** A well-formed
   acknowledgement from the wrong element was accepted, so a triggering function could record
