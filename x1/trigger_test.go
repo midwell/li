@@ -5,6 +5,7 @@ package x1
 
 import (
 	"bytes"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,50 @@ func testTrigger() Trigger {
 		SEIDAddress:   "10.0.1.5",
 		DIDs:          []string{"33333333-3333-4333-8333-333333333333"},
 	}
+}
+
+// conformantResponse answers requestBody the way a conformant peer does: the
+// response type derived from the request type, and the envelope fields of the
+// schema's X1ResponseMessage base type — echoed where the peer echoes them,
+// stated where it states them. payload is the type-specific body.
+//
+// It exists because the stubs here used to answer with a bare `<oK>` and nothing
+// else, which is not a response any conformant NE sends. Building the requester's
+// response validation against such a stub would have been building it against a
+// fiction, and the stub would have gone on passing while a real peer's answer was
+// refused.
+func conformantResponse(t *testing.T, requestBody []byte, payload string) string {
+	t.Helper()
+
+	var in X1Request
+	if err := xml.Unmarshal(requestBody, &in); err != nil {
+		t.Fatalf("stub could not parse the request it is answering: %v", err)
+	}
+	if len(in.Messages) != 1 {
+		t.Fatalf("stub received %d request messages, want 1", len(in.Messages))
+	}
+	m := in.Messages[0]
+
+	return `<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+		`<x1ResponseMessage xsi:type="` + responseTypeFor(localType(m.Type)) + `">` +
+		`<admfIdentifier>` + m.AdmfIdentifier + `</admfIdentifier>` +
+		`<neIdentifier>` + m.NeIdentifier + `</neIdentifier>` +
+		`<messageTimestamp>` + m.MessageTimestamp + `</messageTimestamp>` +
+		`<version>` + m.Version + `</version>` +
+		`<x1TransactionId>` + m.X1TransactionID + `</x1TransactionId>` +
+		payload +
+		`</x1ResponseMessage></X1Response>`
+}
+
+// acknowledging is the stub every happy-path test wants: a conformant envelope
+// carrying an acknowledgement.
+func acknowledging(t *testing.T) http.Handler {
+	t.Helper()
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)                                                            //nolint:errcheck // test handler
+		_, _ = w.Write([]byte(conformantResponse(t, body, `<oK>AcknowledgedAndCompleted</oK>`))) //nolint:errcheck // test handler
+	})
 }
 
 // requesterTo returns a Requester pointed at h, plus a pointer to the last body
@@ -47,9 +92,7 @@ func requesterTo(t *testing.T, h http.Handler) (*Requester, *string) {
 // the details a round-trip through our own codec cannot police — the same gap
 // that let a set of wrong field tags survive.
 func TestTriggerWireForm(t *testing.T) {
-	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><oK>AcknowledgedAndCompleted</oK></x1ResponseMessage></X1Response>`)) //nolint:errcheck // test handler
-	})
+	okHandler := acknowledging(t)
 	req, body := requesterTo(t, okHandler)
 	if err := req.ActivateTask(testTrigger()); err != nil {
 		t.Fatalf("ActivateTask: %v", err)
@@ -157,9 +200,7 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 // and checks that the address lands in the right TS 103 280 arm — the delivery
 // address is mandatory, so an NE that cannot parse it has nowhere to send product.
 func TestCreateDestinationWireForm(t *testing.T) {
-	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><oK>AcknowledgedAndCompleted</oK></x1ResponseMessage></X1Response>`)) //nolint:errcheck // test handler
-	})
+	okHandler := acknowledging(t)
 
 	t.Run("ipv4", func(t *testing.T) {
 		req, body := requesterTo(t, okHandler)
@@ -339,7 +380,10 @@ func TestTriggerRejectsUnattributableTask(t *testing.T) {
 func TestTriggerSurfacesErrorCode(t *testing.T) {
 	t.Run("error response", func(t *testing.T) {
 		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage><errorInformation><errorCode>1030</errorCode><errorDescription>identity mismatch</errorDescription></errorInformation></x1ResponseMessage></X1Response>`)) //nolint:errcheck // test handler
+			body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
+			//nolint:errcheck // test handler
+			_, _ = w.Write([]byte(conformantResponse(t, body,
+				`<errorInformation><errorCode>1030</errorCode><errorDescription>identity mismatch</errorDescription></errorInformation>`)))
 		})
 		req, _ := requesterTo(t, h)
 		err := req.ActivateTask(testTrigger())
@@ -354,7 +398,8 @@ func TestTriggerSurfacesErrorCode(t *testing.T) {
 
 	t.Run("empty acknowledgement", func(t *testing.T) {
 		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`<?xml version="1.0"?><X1Response xmlns="http://uri.etsi.org/03221/X1/2017/10"><x1ResponseMessage/></X1Response>`)) //nolint:errcheck // test handler
+			body, _ := io.ReadAll(r.Body)                           //nolint:errcheck // test handler
+			_, _ = w.Write([]byte(conformantResponse(t, body, ``))) //nolint:errcheck // test handler
 		})
 		req, _ := requesterTo(t, h)
 		if err := req.ActivateTask(testTrigger()); err == nil {

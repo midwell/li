@@ -257,7 +257,11 @@ type TargetIdentifierExtension struct {
 }
 
 // UPFLIT3Extensions holds the LI_T3 packet-detection criteria for a triggered
-// CC-POI in a UPF. The schema allows several; we send and match on one.
+// CC-POI in a UPF. The schema allows several and **every one of them is a
+// criterion**: this is a SEQUENCE OF CHOICE, so a list is what the structure is
+// for, and a CC-POI is already required to intercept traffic matching any
+// criterion a task carries. This element sends one, because a session is
+// identified by its F-SEID; it accepts as many as a provisioning function sends.
 type UPFLIT3Extensions struct {
 	Identifiers []UPFLIT3Identifier `xml:"urn:3GPP:ns:li:3GPPX1Extensions:r18:v6 UPFLIT3TargetIdentifier"`
 }

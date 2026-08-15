@@ -95,6 +95,29 @@ func certBinds(cert *x509.Certificate, role, identifier string) bool {
 	return false
 }
 
+// certUID returns the UID relative distinguished name a peer's certificate
+// carries, or "" if it carries none.
+//
+// certBinds answers "does this certificate bind *this* identifier", which is the
+// question authentication asks. This answers "who does it say it is", which is
+// the question clause 6.1 asks when a request could not be parsed and the ADMF
+// identifier has to come from somewhere other than the message.
+func certUID(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	for _, n := range cert.Subject.Names {
+		if !n.Type.Equal(oidUID) {
+			continue
+		}
+		if v, ok := n.Value.(string); ok {
+			return v
+		}
+	}
+
+	return ""
+}
+
 // authenticate applies TS 103 221-1 clause 8.2.4 to one request message: a valid
 // TLS handshake is not on its own sufficient authentication, because every peer
 // holding any certificate from the LI CA would then be able to task this network

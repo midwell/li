@@ -379,8 +379,14 @@ func TestReportedIdentifiersRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the reported identifier does not parse back: %v\n%s", err, out)
 			}
-			if got != id {
-				t.Errorf("reported %+v, want %+v\n%s", got, id, out)
+			// One identifier in, one criterion out. mapTarget returns a slice because
+			// the LI_T3 extension arm is a list, but each case here activates a single
+			// criterion, so a second would mean the round trip invented one.
+			if len(got) != 1 {
+				t.Fatalf("one identifier parsed back as %d criteria\n%s", len(got), out)
+			}
+			if got[0] != id {
+				t.Errorf("reported %+v, want %+v\n%s", got[0], id, out)
 			}
 		})
 	}

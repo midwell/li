@@ -9,8 +9,10 @@ import (
 	"crypto/tls"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"text/template"
 	"time"
 
@@ -96,6 +98,180 @@ type RequestError struct {
 
 func (e *RequestError) Error() string {
 	return fmt.Sprintf("x1: request refused with code %d: %s", e.Code, e.Description)
+}
+
+// ResponseError is an answer that could not be bound to the request that produced
+// it. It is deliberately a different type from RequestError, because the two say
+// different things and call for different responses.
+//
+// A *RequestError means the peer received the request, understood it, and refused
+// it with a reason. That is a task-level condition: the triggering function knows
+// which warrant it concerns and can report it as such.
+//
+// A *ResponseError means the answer cannot be attributed at all — which task it
+// concerned is exactly what has not been established. That is an element-level
+// condition, and the operator action differs: a refusal is something to take up
+// with the point of interception, an unattributable answer is a configuration or
+// routing fault on this side. `reconcileTriggers` already draws the same
+// distinction for the same reason.
+type ResponseError struct {
+	// Field names what did not match — "neIdentifier", "x1TransactionId", the
+	// response type. It is the operator's first clue and is safe to log on the LI
+	// fault channel: it names a header field, never a target or a warrant.
+	Field string
+	// Want and Got carry the two values. Both are X1 identifiers or message types,
+	// never interception detail.
+	Want, Got string
+}
+
+func (e *ResponseError) Error() string {
+	return fmt.Sprintf("x1: response could not be attributed to the request that produced it: %s = %q, want %q",
+		e.Field, e.Got, e.Want)
+}
+
+// responseTypeFor is the response a request type calls for. The naming is
+// systematic in the schema — every FooRequest is answered by a FooResponse — so
+// this is a suffix swap rather than a table, and a table would be one more thing
+// to forget to extend.
+func responseTypeFor(requestType string) string {
+	return strings.TrimSuffix(requestType, "Request") + "Response"
+}
+
+// validate binds a decoded response to the request that produced it.
+//
+// This is the client-side half of a property the server has had all along. The
+// server checks every inbound message against a configured peer identity
+// (clause 8.2.4) precisely because mutual TLS establishes that a peer is in the LI
+// domain and not *which* element it is. The requester inherited none of that and
+// trusted the transport alone, so any endpoint a misroute or a stale DNS record
+// put in the path could answer OK — and the triggering function would record
+// content interception as installed at a point of interception that never
+// received the trigger. Nothing downstream reveals that, because the product that
+// would be missing was never produced.
+//
+// What it does not defend against, said plainly: three of the four fields are
+// echoes a conformant peer copies straight off the request, so any endpoint that
+// *received* the request can return them correctly. Only neIdentifier is the
+// peer's own assertion of who it is, and an endpoint that wants to be believed
+// states whatever the requester expects. These checks catch a *wrong* element, not
+// a lying one; mutual TLS and the certificate binding are what bound the lying
+// case, and this does not extend them.
+//
+// Every field checked here is a member of the schema's X1ResponseMessage base
+// type, so every response type carries all of them and each check can be
+// required. Deliberately absent is the acknowledgement: `oK` is *not* on the base
+// type — a GetAllDetailsResponse carries none — so requiring one would refuse
+// every details answer, permanently. That is the check callers apply for
+// themselves where their own response type defines one.
+func (r *Requester) validate(h header, out X1Response) (X1ResponseMessage, error) {
+	if len(out.Messages) == 0 {
+		return X1ResponseMessage{}, &ResponseError{Field: "message count", Want: "1", Got: "0"}
+	}
+	if len(out.Messages) > 1 {
+		// Every request this element sends asks one question, so a container carrying
+		// several answers cannot be attributed to it — and clause 6.1 agrees: a
+		// ResponseContainer holds "all the responses to the requests in the container".
+		// Taking the first would be choosing which answer to believe.
+		return X1ResponseMessage{}, &ResponseError{
+			Field: "message count", Want: "1", Got: strconv.Itoa(len(out.Messages)),
+		}
+	}
+
+	m := out.Messages[0]
+
+	// An ErrorResponse is a legitimate answer to any request, so the type check
+	// admits it and the caller turns it into a *RequestError below. What is refused
+	// is an answer to a different question.
+	if got := localType(m.Type); got != responseTypeFor(h.Type) && got != errorResponse {
+		return X1ResponseMessage{}, &ResponseError{Field: "response type", Want: responseTypeFor(h.Type), Got: got}
+	}
+	if m.X1TransactionID != h.TxID {
+		// Sound as an equality check only because this requester always generates a TS
+		// 103 280 UUID: a conformant server that receives a non-conformant identifier
+		// is *required* to answer with a different one. Pinned by
+		// TestTheRequesterAlwaysGeneratesAConformantTransactionIdentifier, so that
+		// property cannot quietly stop holding.
+		return X1ResponseMessage{}, &ResponseError{Field: "x1TransactionId", Want: h.TxID, Got: m.X1TransactionID}
+	}
+	if m.NeIdentifier != h.NeID {
+		// The one check that can detect a misroute, because it is the only field the
+		// peer states about itself rather than copies from the request.
+		return X1ResponseMessage{}, &ResponseError{Field: "neIdentifier", Want: h.NeID, Got: m.NeIdentifier}
+	}
+	if m.AdmfIdentifier != h.OurID {
+		return X1ResponseMessage{}, &ResponseError{Field: "admfIdentifier", Want: h.OurID, Got: m.AdmfIdentifier}
+	}
+	if m.Version != supportedVersion {
+		// Equality rather than "any version we could parse", because a conformant
+		// server *echoes* the request's version (echoVersion), and this requester
+		// sends supportedVersion. So an answer carrying anything else is not an echo,
+		// whatever else it might be. Clause 4.5 makes minor increments backwards
+		// compatible, so a peer stating its own newer version would be readable — but
+		// it would also not be answering in the version it was asked in, and accepting
+		// that is parsing optimistically rather than checking.
+		return X1ResponseMessage{}, &ResponseError{Field: "version", Want: supportedVersion, Got: m.Version}
+	}
+
+	return m, nil
+}
+
+// readResponse is every step between an HTTP response and a message this element
+// is entitled to act on: status, decode, and the binding above.
+//
+// One function so that a new request type cannot reach a response without passing
+// it. The two readers this replaces had drifted apart — one checked that a message
+// carried an acknowledgement and the other did not — which is what a second
+// hand-written path costs.
+func (r *Requester) readResponse(h header, resp *http.Response) (X1ResponseMessage, error) {
+	if resp.StatusCode != http.StatusOK {
+		// Clause 7.2.2.2: HTTP error codes indicate HTTP-level errors only, and an
+		// X1-level error "shall be … returned as a HTTP 200 OK response". So a non-200
+		// is a transport fault, not a refusal, and must not be read as one.
+		return X1ResponseMessage{}, fmt.Errorf("x1: NE returned status %d", resp.StatusCode)
+	}
+
+	// Bounded by the same limit the server applies to a request. The body has to be
+	// buffered rather than streamed, because a TopLevelError is a different root
+	// element and telling one from a malformed response means looking at the bytes
+	// again — and buffering without a limit would let a peer inside the LI domain
+	// hold this element's memory as well as its connection.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRequestBytes))
+	if err != nil {
+		return X1ResponseMessage{}, fmt.Errorf("x1: reading response: %w", err)
+	}
+
+	var out X1Response
+	if err := xml.Unmarshal(body, &out); err != nil {
+		// A TopLevelErrorResponse is a different root element, so it lands here rather
+		// than decoding into an empty X1Response. It means the peer could not parse
+		// what we sent (clause 6.1) — an element-level condition, and one whose cause
+		// is on this side.
+		if isTopLevelError(body) {
+			return X1ResponseMessage{}, &ResponseError{
+				Field: "request", Want: "a parseable X1 request", Got: "TopLevelError",
+			}
+		}
+
+		return X1ResponseMessage{}, fmt.Errorf("x1: malformed response: %w", err)
+	}
+
+	return r.validate(h, out)
+}
+
+// isTopLevelError reports whether a body is the clause 6.1 answer to a request the
+// peer could not parse. Matched on the root element name rather than by decoding,
+// since the point is that it is not an X1Response.
+func isTopLevelError(body []byte) bool {
+	dec := xml.NewDecoder(bytes.NewReader(body))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			return start.Name.Local == "X1TopLevelErrorResponse"
+		}
+	}
 }
 
 // header is the set of fields common to every X1 request message.
@@ -232,7 +408,9 @@ func (r *Requester) CreateDestination(d Destination) error {
 	if isIPv6(d.Address) {
 		element = "IPv6Address"
 	}
-	return r.send(destinationTemplate, struct {
+	h := r.header("CreateDestinationRequest")
+
+	return r.send(destinationTemplate, h, struct {
 		Header         header
 		DID            string
 		FriendlyName   string
@@ -241,7 +419,7 @@ func (r *Requester) CreateDestination(d Destination) error {
 		AddressElement string
 		Port           uint16
 	}{
-		Header:         r.header("CreateDestinationRequest"),
+		Header:         h,
 		DID:            d.DID,
 		FriendlyName:   d.FriendlyName,
 		DeliveryType:   d.DeliveryType,
@@ -279,7 +457,9 @@ func (r *Requester) task(msgType string, t Trigger) error {
 	case len(t.DIDs) == 0:
 		return fmt.Errorf("x1: trigger needs at least one destination")
 	}
-	return r.send(taskTemplate, struct {
+	h := r.header(msgType)
+
+	return r.send(taskTemplate, h, struct {
 		Header        header
 		XID           string
 		ProductID     string
@@ -288,7 +468,7 @@ func (r *Requester) task(msgType string, t Trigger) error {
 		SEIDAddress   string
 		DIDs          []string
 	}{
-		Header:        r.header(msgType),
+		Header:        h,
 		XID:           string(t.XID),
 		ProductID:     string(t.ProductID),
 		CorrelationID: strconv.FormatUint(t.CorrelationID, 10),
@@ -357,8 +537,10 @@ func (r *Requester) TaskXIDs() ([]types.XID, error) {
 // a task whose provisioning failed, or which carries an unresolved fault, is
 // content interception that is not happening while everyone believes it is.
 func (r *Requester) ReportedTasks() ([]TaskResponseDetails, error) {
+	h := r.header("GetAllDetailsRequest")
+
 	var body bytes.Buffer
-	if err := detailsTemplate.Execute(&body, struct{ Header header }{Header: r.header("GetAllDetailsRequest")}); err != nil {
+	if err := detailsTemplate.Execute(&body, struct{ Header header }{Header: h}); err != nil {
 		return nil, err
 	}
 
@@ -368,22 +550,17 @@ func (r *Requester) ReportedTasks() ([]TaskResponseDetails, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("x1: NE returned status %d", resp.StatusCode)
+	m, err := r.readResponse(h, resp)
+	if err != nil {
+		return nil, err
 	}
-
-	var out X1Response
-	if err := xml.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("x1: malformed response: %w", err)
-	}
-	if len(out.Messages) == 0 {
-		return nil, fmt.Errorf("x1: response carried no message")
-	}
-
-	m := out.Messages[0]
 	if m.ErrorInformation != nil {
 		return nil, &RequestError{Code: m.ErrorInformation.ErrorCode, Description: m.ErrorInformation.ErrorDescription}
 	}
+	// No acknowledgement is checked for, and that is not an omission: `oK` is not a
+	// member of the schema's X1ResponseMessage base type, and GetAllDetailsResponse
+	// does not extend it with one. Requiring it here would refuse every details
+	// answer this element ever receives.
 
 	return m.ReportedTasks(), nil
 }
@@ -396,7 +573,9 @@ func (r *Requester) ReportedTasks() ([]TaskResponseDetails, error) {
 // distinguished from one that has died. Tasking that outlives the party
 // responsible for it is the failure this pair prevents.
 func (r *Requester) Keepalive() error {
-	return r.send(keepaliveTemplate, struct{ Header header }{Header: r.header("KeepaliveRequest")})
+	h := r.header("KeepaliveRequest")
+
+	return r.send(keepaliveTemplate, h, struct{ Header header }{Header: h})
 }
 
 // DeactivateTask removes a trigger, ending interception at the POI. A Triggering
@@ -406,17 +585,19 @@ func (r *Requester) DeactivateTask(xid types.XID) error {
 	if xid == "" {
 		return fmt.Errorf("x1: deactivate needs an XID")
 	}
-	return r.send(deactivateTemplate, struct {
+	h := r.header("DeactivateTaskRequest")
+
+	return r.send(deactivateTemplate, h, struct {
 		Header header
 		XID    string
-	}{Header: r.header("DeactivateTaskRequest"), XID: string(xid)})
+	}{Header: h, XID: string(xid)})
 }
 
 // send renders a request, POSTs it, and interprets the response. A response
 // carrying errorInformation is returned as a *RequestError; anything the NE
 // answers other than an acknowledgement is an error, so a caller cannot mistake
 // a refusal for a successful tasking.
-func (r *Requester) send(tmpl *template.Template, data any) error {
+func (r *Requester) send(tmpl *template.Template, h header, data any) error {
 	var body bytes.Buffer
 	if err := tmpl.Execute(&body, data); err != nil {
 		return err
@@ -426,23 +607,18 @@ func (r *Requester) send(tmpl *template.Template, data any) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("x1: NE returned status %d", resp.StatusCode)
+
+	m, err := r.readResponse(h, resp)
+	if err != nil {
+		return err
 	}
-	var out X1Response
-	if err := xml.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return fmt.Errorf("x1: malformed response: %w", err)
-	}
-	if len(out.Messages) == 0 {
-		return fmt.Errorf("x1: response carried no message")
-	}
-	m := out.Messages[0]
 	if m.ErrorInformation != nil {
 		return &RequestError{Code: m.ErrorInformation.ErrorCode, Description: m.ErrorInformation.ErrorDescription}
 	}
 	if m.OK == "" {
 		return fmt.Errorf("x1: response %q carried neither acknowledgement nor error", localType(m.Type))
 	}
+
 	return nil
 }
 

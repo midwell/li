@@ -506,7 +506,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.Process(body, peer)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// TS 103 221-1 clause 6.1: "If the X1 Request could not be parsed, then the
+		// response shall be constructed with an ADMF and NE Identifier …,
+		// MessageTimestamp and Version, and a 'TopLevelError' flag but no other
+		// information." The schema defines the element for it, so a conformant ADMF
+		// has a structured answer to expect.
+		//
+		// Clause 7.2.2.2 settles the status code and it is the opposite of what stood
+		// here: "HTTP error codes shall only be used to indicate HTTP-level errors, and
+		// shall not be used to indicate errors with the X1 responses themselves." A
+		// request that arrived intact and could not be parsed is an X1-level error, so
+		// it is a 200 carrying the defined response — where this answered 400 with the
+		// decoder's own message as the body, which is neither the defined answer nor a
+		// thing an LI interface should be putting on the wire.
+		w.Header().Set("Content-Type", "application/xml")
+		//nolint:errcheck // a peer that hung up mid-response is not actionable, and must not be logged
+		_, _ = w.Write(s.topLevelError(peer))
+
 		return
 	}
 	out, err := marshalResponse(resp)
@@ -517,6 +533,53 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml")
 	//nolint:errcheck // a peer that hung up mid-response is not actionable, and must not be logged
 	_, _ = w.Write(out)
+}
+
+// topLevelErrorTemplate is the clause 6.1 answer to a request that could not be
+// parsed. It is a different root element from X1Response — the schema declares
+// X1TopLevelErrorResponse separately — and carries exactly four fields. Notably it
+// has no x1TransactionId: table 6.1-1 makes that field conditional and says it
+// "shall be omitted for 'TopLevelError' situations", which is consistent, since
+// the identifier would have had to come from the request nobody could read.
+var topLevelErrorTemplate = template.Must(template.New("x1tle").Funcs(template.FuncMap{
+	"esc": escapeXML,
+}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+<ns1:X1TopLevelErrorResponse xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10">
+  <ns1:admfIdentifier>{{esc .AdmfID}}</ns1:admfIdentifier>
+  <ns1:neIdentifier>{{esc .NeID}}</ns1:neIdentifier>
+  <ns1:messageTimestamp>{{esc .Timestamp}}</ns1:messageTimestamp>
+  <ns1:version>{{esc .Version}}</ns1:version>
+</ns1:X1TopLevelErrorResponse>`))
+
+// topLevelError renders the clause 6.1 response.
+//
+// The ADMF identifier cannot come from the request, so it comes from
+// configuration — or, where this element has no configured ADMF, from the peer's
+// certificate, which is what clause 6.1's "extracting the identifier of the
+// Requester from the X.509 certificate if necessary" provides for. An empty value
+// would not validate against the schema, and answering a peer we cannot name at
+// all with a malformed message would compound the fault rather than report it.
+func (s *Server) topLevelError(peer *x509.Certificate) []byte {
+	admf := s.admfID
+	if admf == "" {
+		admf = certUID(peer)
+	}
+
+	var body bytes.Buffer
+	if err := topLevelErrorTemplate.Execute(&body, struct {
+		AdmfID, NeID, Timestamp, Version string
+	}{
+		AdmfID:    admf,
+		NeID:      s.neID,
+		Timestamp: x1Timestamp(s.now()),
+		Version:   supportedVersion,
+	}); err != nil {
+		// Executing a template over four strings cannot fail; returning an empty body
+		// is still better than panicking on the provisioning path.
+		return nil
+	}
+
+	return body.Bytes()
 }
 
 // Process parses an X1 request body, applies each message to the store, and
@@ -1197,11 +1260,11 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 	// interception below what was ordered while answering that it had been applied.
 	targets := make([]types.TargetIdentifier, 0, len(td.TargetIdentifiers))
 	for _, ti := range td.TargetIdentifiers {
-		target, err := mapTarget(ti)
+		mapped, err := mapTarget(ti)
 		if err != nil {
 			return types.InterceptTask{}, err
 		}
-		targets = append(targets, target)
+		targets = append(targets, mapped...)
 	}
 	products, err := deliveryProducts(td.DeliveryType)
 	if err != nil {
@@ -1326,56 +1389,100 @@ func hasDelivery(endpoints []types.DeliveryEndpoint, t types.DeliveryType) bool 
 	return false
 }
 
-func mapTarget(t TargetIdentifier) (types.TargetIdentifier, error) {
+// mapTarget maps one X1 target identifier onto the criteria it names. It returns
+// a slice because one arm — the LI_T3 extension — is itself a list, and every
+// member of that list is a criterion the task ordered.
+func mapTarget(t TargetIdentifier) ([]types.TargetIdentifier, error) {
 	switch {
 	case t.SUPIIMSI != "":
-		return types.TargetIdentifier{Type: types.TargetSUPI, Value: t.SUPIIMSI}, nil
+		return one(types.TargetSUPI, t.SUPIIMSI), nil
 	case t.IMSI != "":
-		return types.TargetIdentifier{Type: types.TargetSUPI, Value: t.IMSI}, nil
+		return one(types.TargetSUPI, t.IMSI), nil
 	case t.SUPINAI != "":
-		return types.TargetIdentifier{Type: types.TargetSUPI, Value: t.SUPINAI}, nil
+		return one(types.TargetSUPI, t.SUPINAI), nil
 	case t.PEIIMEI != "":
-		return types.TargetIdentifier{Type: types.TargetPEI, Value: t.PEIIMEI}, nil
+		return one(types.TargetPEI, t.PEIIMEI), nil
 	case t.PEIIMEISV != "":
-		return types.TargetIdentifier{Type: types.TargetPEI, Value: t.PEIIMEISV}, nil
+		return one(types.TargetPEI, t.PEIIMEISV), nil
 	case t.GPSIMSISDN != "":
-		return types.TargetIdentifier{Type: types.TargetGPSI, Value: t.GPSIMSISDN}, nil
+		return one(types.TargetGPSI, t.GPSIMSISDN), nil
 	case t.E164Number != "":
-		return types.TargetIdentifier{Type: types.TargetGPSI, Value: t.E164Number}, nil
+		return one(types.TargetGPSI, t.E164Number), nil
 	// The plain TS 103 221-1 criteria of table 6.2.3-7. These come after the
 	// subscriber identifiers deliberately: a task carrying both is targeting a
 	// subscriber, and the subscriber identifier is the one an IRI-POI can act on.
+	//
+	// That precedence governs a task's `targetIdentifiers` **list**, where a
+	// subscriber identifier and a packet criterion are separate, legitimate entries
+	// combined as alternatives. It does not govern the arms *within* one
+	// targetIdentifier: the schema defines that as an xs:choice, so two populated
+	// arms cannot occur, and malformedTaskIdentifiers refuses the message before
+	// this is reached rather than letting the order below decide. The two rules are
+	// about different levels of the structure — this switch is not what settles a
+	// multi-arm message, and reading it as though it were is what left the
+	// cardinality unchecked.
 	case t.GTPUTunnelID != "":
-		return types.TargetIdentifier{Type: types.TargetFTEID, Value: t.GTPUTunnelID}, nil
+		return one(types.TargetFTEID, t.GTPUTunnelID), nil
 	case t.IPv4Address != "":
-		return types.TargetIdentifier{Type: types.TargetUEIPv4, Value: t.IPv4Address}, nil
+		return one(types.TargetUEIPv4, t.IPv4Address), nil
 	case t.IPv6Address != "":
-		return types.TargetIdentifier{Type: types.TargetUEIPv6, Value: t.IPv6Address}, nil
+		return one(types.TargetUEIPv6, t.IPv6Address), nil
 	case t.TCPPort != "":
-		return types.TargetIdentifier{Type: types.TargetTCPPort, Value: t.TCPPort}, nil
+		return one(types.TargetTCPPort, t.TCPPort), nil
 	case t.UDPPort != "":
-		return types.TargetIdentifier{Type: types.TargetUDPPort, Value: t.UDPPort}, nil
+		return one(types.TargetUDPPort, t.UDPPort), nil
 	case t.Extension != nil:
 		return mapExtensionTarget(t.Extension)
 	}
-	return types.TargetIdentifier{}, fmt.Errorf("unsupported target identifier")
+
+	return nil, fmt.Errorf("unsupported target identifier")
+}
+
+// one is the single-criterion result every plain arm produces.
+func one(kind types.TargetIdentifierType, value string) []types.TargetIdentifier {
+	return []types.TargetIdentifier{{Type: kind, Value: value}}
 }
 
 // mapExtensionTarget maps the 3GPP LI_T3 packet-detection criteria of TS 33.128
-// table 6.2.3-7 onto a target identifier. Clause 6.2.3 requires a CC-POI to support
+// table 6.2.3-7 onto target identifiers. Clause 6.2.3 requires a CC-POI to support
 // "at least the identifier types given in table 6.2.3-7", so all of them are
 // accepted here: the three plain TS 103 221-1 arms are handled in mapTarget, and
 // the seven extension arms in mapUPFLIT3Identifier.
+//
+// **Every member of the list becomes a criterion.** UPFLIT3TargetIdentifier is a
+// SEQUENCE OF CHOICE, so a list of several is exactly what the structure is for,
+// and `A task carrying several criteria` already requires a CC-POI to intercept
+// traffic matching any of them. This mapped `Identifiers[0]` and dropped the rest,
+// which acknowledged a task while running an interception narrower than the one
+// ordered — invisible to every party, since the triggering function was told the
+// task was accepted and the mediation function receives well-formed product for
+// the criterion that survived.
+//
+// A member that cannot be mapped refuses the **whole task**, which is the rule
+// taskFromDetails already applies to the outer list, applied one level deeper
+// where it was not. The OR semantics need nothing here: widening the output feeds
+// the existing machinery more criteria and does not change how they combine, and
+// the no-duplicate-delivery rule is enforced at the shipper.
 //
 // Accepting a criterion at this layer means it can be *provisioned*. Whether the
 // CC-POI can then evaluate it against its own session state is a separate question
 // answered further in — and a criterion it cannot evaluate is still refused there
 // rather than accepted and ignored.
-func mapExtensionTarget(ext *TargetIdentifierExtension) (types.TargetIdentifier, error) {
+func mapExtensionTarget(ext *TargetIdentifierExtension) ([]types.TargetIdentifier, error) {
 	if ext.UPFT3 == nil || len(ext.UPFT3.Identifiers) == 0 {
-		return types.TargetIdentifier{}, fmt.Errorf("unsupported target identifier extension")
+		return nil, fmt.Errorf("unsupported target identifier extension")
 	}
-	return mapUPFLIT3Identifier(ext.UPFT3.Identifiers[0])
+
+	out := make([]types.TargetIdentifier, 0, len(ext.UPFT3.Identifiers))
+	for i, id := range ext.UPFT3.Identifiers {
+		target, err := mapUPFLIT3Identifier(id)
+		if err != nil {
+			return nil, fmt.Errorf("LI_T3 detection criterion %d of %d: %w", i+1, len(ext.UPFT3.Identifiers), err)
+		}
+		out = append(out, target)
+	}
+
+	return out, nil
 }
 
 // mapUPFLIT3Identifier maps one arm of the UPFLIT3TargetIdentifier choice. Each arm
@@ -1475,8 +1582,91 @@ func malformedTaskIdentifiers(td TaskDetails) error {
 			return err
 		}
 	}
+	for _, ti := range td.TargetIdentifiers {
+		if n := populatedArms(ti); n > 1 {
+			// The schema defines TargetIdentifier as an xs:choice, so a message
+			// populating two arms is invalid against it and no reading of it is
+			// authoritative. Selecting one would mean the *element* deciding the scope
+			// of an interception that the provisioning function ordered.
+			//
+			// Refused here rather than in unhonourableTaskFields, and the distinction is
+			// the one the ordering at the call site already draws: this is a message that
+			// violates its own format, not a well-formed task carrying something this
+			// element cannot honour. Asking whether we could honour its contents presumes
+			// something that has not been established.
+			return refuse(errCodeSchemaError,
+				"targetIdentifier populates %d arms of a choice; exactly one is valid", n)
+		}
+		// The same rule one level deeper. UPFLIT3TargetIdentifier is a *sequence of*
+		// choices, so several members are valid and several arms of one member are
+		// not — and the reason is unchanged: a member with two arms has no
+		// authoritative reading, so selecting one narrows or widens an interception by
+		// this element's decision rather than the provisioning function's. Checking
+		// the outer choice and not this one would have left the same defect at the one
+		// level where a CC-POI actually reads its detection criteria.
+		if ti.Extension == nil || ti.Extension.UPFT3 == nil {
+			continue
+		}
+		for i, id := range ti.Extension.UPFT3.Identifiers {
+			if n := populatedLIT3Arms(id); n > 1 {
+				return refuse(errCodeSchemaError,
+					"LI_T3 detection criterion %d of %d populates %d arms of a choice; exactly one is valid",
+					i+1, len(ti.Extension.UPFT3.Identifiers), n)
+			}
+		}
+	}
 
 	return nil
+}
+
+// populatedArms counts how many arms of the TargetIdentifier choice carry a value.
+//
+// It is deliberately a count over every arm rather than a check of the two that
+// mapTarget happens to reach first: the defect being closed is that the switch's
+// order decided the answer, so a guard sharing that order would inherit it. A new
+// arm added to the struct and not added here would be silently exempt, which is
+// the same class of omission — hence one place, listing all of them, beside the
+// declaration they mirror.
+func populatedArms(t TargetIdentifier) int {
+	n := 0
+	for _, v := range []string{
+		t.IMSI, t.SUPIIMSI, t.SUPINAI,
+		t.PEIIMEI, t.PEIIMEISV,
+		t.GPSIMSISDN, t.E164Number,
+		t.GTPUTunnelID, t.IPv4Address, t.IPv6Address,
+		t.TCPPort, t.UDPPort,
+	} {
+		if v != "" {
+			n++
+		}
+	}
+	if t.Extension != nil {
+		n++
+	}
+
+	return n
+}
+
+// populatedLIT3Arms is populatedArms for the inner choice: how many arms of one
+// LI_T3 detection criterion carry a value. Listed in full, for the same reason —
+// a criterion added to the struct and not added here would be silently exempt.
+func populatedLIT3Arms(id UPFLIT3Identifier) int {
+	n := 0
+	for _, set := range []bool{
+		id.FSEID != nil,
+		id.PDRID != nil,
+		id.QERID != nil,
+		id.FTEID != nil,
+		id.NetworkInstance != "",
+		id.GTPTunnelDirection != "",
+		id.PDR != "",
+	} {
+		if set {
+			n++
+		}
+	}
+
+	return n
 }
 
 // unhonourableTaskFields returns a refusal for the first field of td this element can

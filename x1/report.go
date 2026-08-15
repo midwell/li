@@ -154,6 +154,23 @@ const (
 	// somebody inside the LI trust domain is attempting to task or untask network
 	// elements, and this channel is the only place that can be said.
 	NEIssueX1AuthFailed = "x1AuthFailed"
+	// NEIssueX1ResponseUnattributable: this element sent an X1 request and received
+	// an answer it could not bind to it — the wrong response type, an unfamiliar
+	// transaction identifier, or an element naming itself as something other than
+	// the one addressed.
+	//
+	// Distinct from a peer's refusal, which is a task-level condition the element
+	// can attribute to a warrant: which task an unattributable answer concerned is
+	// exactly what has not been established, so this is network-element level.
+	//
+	// Distinct too from taskingWithdrawalFailed, and the distinction is what makes
+	// this worth its own condition. Both can hold at once, and the operator action
+	// is opposite: taskingWithdrawalFailed against a POI that never answered means
+	// go and look at the POI, whereas a withdrawal failing because *this* element is
+	// refusing a well-formed answer is a configuration or routing fault to correct
+	// here. Without the distinction, a systematic mismatch presents as a POI at
+	// fault while the POI is answering perfectly well.
+	NEIssueX1ResponseUnattributable = "x1ResponseUnattributable"
 )
 
 // TS 103 221-1 table 6.5.4-1: TypeOfNEIssueMessage is a closed enumeration, not
@@ -209,6 +226,11 @@ var neIssueEncodings = map[string]neIssueEncoding{
 	// registry means: this element cannot end an interception it was told to end,
 	// and no further attempt of its own is going to change that.
 	NEIssueTaskingWithdrawalStuck: {neIssueFaultReport, issueCodeTerminatingFault},
+	// An answer this element cannot attribute is a fault it is working on — the
+	// request is retried where the caller retries — but it is not one further
+	// attempts will resolve if the cause is a mismatch in configuration, which is
+	// why it is reported rather than only retried.
+	NEIssueX1ResponseUnattributable: {neIssueFaultReport, issueCodeNonTerminatingFault},
 	// Nothing has broken — every packet is delivered under some warrant — so this is
 	// a Warning rather than a FaultReport. What it warns of is that one warrant's
 	// product is complete at the cost of another's being empty.
