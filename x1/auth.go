@@ -43,6 +43,11 @@ const (
 	errCodeActivateFailed = 3000 // Generic ActivateTask failure
 	errCodeModifyFailed   = 3001 // Generic ModifyTask failure
 	errCodeBadServiceType = 3050 // Unsupported ServiceType
+	// 6000 is the destination equivalent of 3000: "details of why the Destination cannot
+	// be created". Table 6.7-3 offers nothing narrower for a DID this element will not
+	// redefine, and 7010 "Destination in use" belongs to RemoveDestination — a code from
+	// the wrong operation's group is as unhelpful to an ADMF as an invented one.
+	errCodeCreateDestFailed = 6000 // Generic CreateDestination failure
 	// 6020 is the destination counterpart: a deliveryAddress given as a URI, an E.164
 	// number or an email address rather than an IP address and port.
 	errCodeBadAddressType = 6020 // Unsupported DeliveryAddress type

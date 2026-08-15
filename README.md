@@ -146,6 +146,8 @@ more expensive than one read here.
 | | Duplication survives the SMF's own session modifications | Re-derived from the tasking wherever rules change; the SMF's `DUPL` bit is never overwritten |
 | | Criteria apply to sessions established after the task | No re-tasking when a subscriber attaches later |
 | | Copies the duplication over-collected are dropped before delivery | See *the coverage model* below |
+| | Every X3 destination a task names receives that task's content | Each copy carries the same sequence number at every destination, and one unreachable mediation function does not deny the others |
+| | Tasking that does not require Content of Communication is **refused** | A UPF produces xCC and nothing else, so a trigger whose `deliveryType` is `X2Only` is refused with 3000/3001 rather than acknowledged. Accepting it would tell the triggering function an interception is running that will deliver nothing, and would have the datapath duplicate a subject's traffic so every copy could be discarded |
 | | LI_T3 triggering interface, with the SMF as triggering function | TS 33.128 clause 6.2.3.3 |
 | | Correlation joining X2 and X3 | The session's real F-SEID |
 | | `ProductID` → X2/X3 XID labelling | TS 103 221-1 clause 6.2.1.2, as a general rule |
@@ -229,6 +231,15 @@ provisioned over X1, superseding a configured entry for this DID
 An ADMF's own `friendlyName`, where it gave one, leads and the note is appended in
 parentheses. It is the only free-text field a reported destination has, and precedence
 resolved invisibly is the one thing a three-source design must not do.
+
+**One case is refused rather than resolved: creating a destination under a DID that
+configuration declares *and* an active task already references.** A task's endpoints are
+resolved once, at activation, and copied into the task — so provisioning over such a DID
+would change what the element answers about it while every task activated beforehand kept
+delivering to the configured address, leaving an ADMF able to read the new destination back
+from an element still sending a live warrant's product to the old one. The refusal carries
+6000 and names the DID. Creating under a configured DID nothing references still succeeds,
+which is how an operator's static declaration gets superseded before use.
 
 **If your ADMF provisions destinations and your product moves**, that is this change:
 before it, everything arrived at `mdf2`. Configuring a DID→endpoint mapping (source 2)

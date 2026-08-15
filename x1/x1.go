@@ -721,8 +721,17 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			task, err = s.activate(m)
 			// A refusal from the activate path may name its own code — a malformed
 			// identifier is a schema error, not a generic failure — so it travels
-			// rather than being flattened to 1000 below.
+			// rather than being flattened below.
 			code = errorCode(err)
+			if err != nil && code == 0 {
+				// What is left is a refusal whose reason is in the description: a POI's
+				// CanApply saying it cannot carry out this task, or a field of the task
+				// details this element will not accept. 3000/3001 are the registry's own
+				// "details of why the Task cannot be activated/modified", which is what
+				// that is; 1000 says only that something went wrong, and an ADMF reads
+				// the code before the text.
+				code = taskFailureCode(isModify)
+			}
 			if err == nil {
 				retargeted := isModify && hadPrev && !slices.Equal(task.Targets, prevTask.Targets)
 				if s.onActivate != nil && (!isModify || retargeted) {
@@ -957,6 +966,10 @@ func (s *Server) createDestination(d *DestinationDetails) (int, error) {
 		return 0, err
 	}
 
+	// Whether a task references the DID is answered from the task store, which has its
+	// own lock, so it is asked before s.mu is taken.
+	referenced := s.didReferenced(d.DID)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.destinations[d.DID]; exists {
@@ -965,8 +978,33 @@ func (s *Server) createDestination(d *DestinationDetails) (int, error) {
 		// so it stays as it is now that the code says the same thing.
 		return errCodeDIDExists, fmt.Errorf("destination already present")
 	}
+	if _, declared := s.configured[d.DID]; declared && referenced {
+		// A provisioned destination wins over a configured one (see resolveLocked), but
+		// a task's endpoints are resolved once at activation and copied into the task.
+		// Creating this would therefore change what the element *answers* about the DID
+		// while every task activated before this moment kept delivering to the
+		// configured address — so a provisioning function could read the new destination
+		// back from an element still sending a live warrant's product to the old one.
+		//
+		// Refused only where both hold. Creating under a configured DID nothing
+		// references is how an operator's static declaration gets replaced before use,
+		// and that stays available.
+		return errCodeCreateDestFailed, fmt.Errorf(
+			"dId %s is declared in this element's configuration and referenced by an active task", d.DID)
+	}
 	s.destinations[d.DID] = dest
 	return 0, nil
+}
+
+// didReferenced reports whether any task this element holds names the DID.
+func (s *Server) didReferenced(did string) bool {
+	for _, t := range s.store.Snapshot() {
+		if slices.Contains(t.DIDs, did) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // destinationFrom maps provisioned destination details onto the destination this element

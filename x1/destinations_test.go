@@ -229,6 +229,53 @@ func TestProvisionedDestinationSupersedesTheConfiguredOne(t *testing.T) {
 	}
 }
 
+// TestShadowingAReferencedDIDIsRefused: a DID's meaning must not change under a live
+// warrant.
+//
+// A provisioned destination beats a configured one, but a task's endpoints are resolved
+// once at activation and copied into the task. So creating one under a DID configuration
+// declares changes what the element *answers* about that DID while every task activated
+// before that moment keeps delivering to the configured address — and the provisioning
+// function can then read the new destination back from an element still sending a live
+// warrant's product to the old one.
+func TestShadowingAReferencedDIDIsRefused(t *testing.T) {
+	const configuredAddr = "10.0.60.200:42069"
+
+	st := store.New()
+	srv := NewServer(st, "neID", WithConfiguredDestinations(
+		ConfiguredDestination{DID: didAgencyA, DeliveryType: deliveryX2Only, Address: configuredAddr},
+		ConfiguredDestination{DID: didAgencyB, DeliveryType: deliveryX2Only, Address: "10.0.60.201:42069"},
+	))
+
+	mustAck(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyA), ""))
+
+	m := serve(t, srv, createDestinationXML(didAgencyA, deliveryX2Only, "10.0.60.122", tcpPort("42069"), ""))
+	if m.ErrorInformation == nil {
+		t.Fatal("a DID an active task depends on was redefined beneath it")
+	}
+	if got := m.ErrorInformation.ErrorCode; got != errCodeCreateDestFailed {
+		t.Errorf("error code = %d, want %d — the ADMF reads the code before the text", got, errCodeCreateDestFailed)
+	}
+
+	// The element must not be able to report a destination it is not using: the answer
+	// to GetDestinationDetails and what the task delivers to have to be the same address.
+	if got := endpointsOf(t, st, testXID, types.DeliveryX2); len(got) != 1 || got[0] != configuredAddr {
+		t.Errorf("the active task delivers to %v, want [%s]", got, configuredAddr)
+	}
+	reported := serve(t, srv, string(request("GetDestinationDetailsRequest",
+		"\n    <ns1:dId>"+didAgencyA+"</ns1:dId>")))
+	if len(reported.Destinations) != 1 {
+		t.Fatalf("GetDestinationDetails reported %d destinations, want 1", len(reported.Destinations))
+	}
+	if got := reported.Destinations[0].Address; got != configuredAddr {
+		t.Errorf("the element reports %q while the task delivers to %q", got, configuredAddr)
+	}
+
+	// The legitimate case stays open: a configured DID nothing references may still be
+	// replaced, which is how an operator's static declaration gets superseded before use.
+	mustAck(t, srv, createDestinationXML(didAgencyB, deliveryX2Only, "10.0.60.122", tcpPort("42069"), ""))
+}
+
 // Precedence resolved silently is the risk the three-source design carries. An operator
 // whose configured entry is not the one in force has to be able to see that, and the only
 // place an element can say it is in what it reports about its destinations.

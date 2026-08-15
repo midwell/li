@@ -168,7 +168,7 @@ func TestRefuseCriteriaOutsideTheTable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Process: %v", err)
 			}
-			assertRejected(t, resp, st, errCodeGeneric)
+			assertRejected(t, resp, st, errCodeActivateFailed)
 			if _, ok := st.Get(testXID); ok {
 				t.Error("task was stored despite the criterion being refused")
 			}
@@ -218,7 +218,7 @@ func TestOneBadCriterionRefusesTheTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	assertRejected(t, resp, st, errCodeGeneric)
+	assertRejected(t, resp, st, errCodeActivateFailed)
 	if _, ok := st.Get(testXID); ok {
 		t.Error("task stored with one criterion dropped")
 	}
@@ -244,7 +244,7 @@ func TestCanApplyRefusesBeforeAcknowledging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	assertRejected(t, resp, st, errCodeGeneric)
+	assertRejected(t, resp, st, errCodeActivateFailed)
 	if len(asked) != 1 || asked[0] != testXID {
 		t.Errorf("CanApply asked about %v, want just %q", asked, testXID)
 	}
