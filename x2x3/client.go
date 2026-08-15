@@ -6,12 +6,17 @@ package x2x3
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// errNilPDU is what SendBatch reports for a nil entry: nothing was delivered for
+// it, which is the same loss a PDU that fails to marshal represents.
+var errNilPDU = errors.New("x2x3: nil PDU in batch")
 
 // Client delivers X2 (xIRI) and X3 (xCC) PDUs to a Mediation & Delivery
 // Function over a single TLS-secured TCP connection (ETSI TS 103 221-2). It
@@ -205,6 +210,11 @@ func (c *Client) Close() error {
 // around it, but the failure is returned once the rest has been sent: intercept
 // product was lost, and losing it quietly is the one outcome this plane may not
 // have. A delivery failure takes precedence, being the larger loss.
+//
+// A nil entry is treated the same way, and for the same reason it is worth a
+// branch at all: this is exported, it dereferences a slice the caller owns, and a
+// nil there would fault the network function carrying the delivery rather than
+// the mediation function it is delivering to.
 func (c *Client) SendBatch(pdus []*PDU) error {
 	if len(pdus) == 0 {
 		return nil
@@ -216,6 +226,14 @@ func (c *Client) SendBatch(pdus []*PDU) error {
 	)
 
 	for _, pdu := range pdus {
+		if pdu == nil {
+			if marshalErr == nil {
+				marshalErr = errNilPDU
+			}
+
+			continue
+		}
+
 		b, err := pdu.Marshal()
 		if err != nil {
 			if marshalErr == nil {

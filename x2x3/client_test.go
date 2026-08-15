@@ -187,6 +187,51 @@ func TestSendBatchReportsMarshalFailure(t *testing.T) {
 	}
 }
 
+// TestSendBatchReportsANilPDU: a nil entry is treated as the loss it is, not as a
+// reason to fault the network function. SendBatch is exported and dereferences a
+// slice its caller owns, so this is the defence in depth behind the AsyncSender fix
+// that stopped a nil being put there in the first place.
+func TestSendBatchReportsANilPDU(t *testing.T) {
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{selfSignedServer(t)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	received := make(chan *PDU, 4)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			p, err := readPDU(conn)
+			if err != nil {
+				return
+			}
+			received <- p
+		}
+	}()
+
+	client := NewClient(ln.Addr().String(), &tls.Config{InsecureSkipVerify: true}, KeepaliveConfig{Disabled: true})
+	defer client.Close()
+
+	good := &PDU{Type: PDUTypeX3, PayloadFormat: PayloadFormatIPv4, Payload: []byte{0x45, 0x00}}
+
+	if err := client.SendBatch([]*PDU{good, nil, good}); err == nil {
+		t.Fatal("SendBatch dropped a nil PDU without reporting it")
+	}
+
+	for i := range 2 {
+		select {
+		case <-received:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timeout waiting for deliverable PDU %d of 2", i+1)
+		}
+	}
+}
+
 // TestUnreachableFollowsTheLastAttempt covers the state a POI's fault probe reports, on
 // both edges — which are not symmetric in how they are noticed. Stuck off means an element
 // that cannot deliver answers healthy, which is invisible and the reason the status answer

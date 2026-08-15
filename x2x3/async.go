@@ -47,6 +47,14 @@ type AsyncSender struct {
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 
+	// closeMu guards closed, and is held for reading across Send's check-and-
+	// enqueue so a Close cannot land between the two. An atomic flag would leave
+	// exactly that window open, which is the send-on-closed-channel panic. Send
+	// takes it for reading and never blocks under it, so concurrent offers still
+	// do not serialise on each other; the only writer is Close, once.
+	closeMu sync.RWMutex
+	closed  bool
+
 	// batch is reused by the delivery worker so coalescing costs no allocation.
 	// Only the worker touches it.
 	batch []*PDU
@@ -98,9 +106,17 @@ func (a *AsyncSender) run() {
 		// light load the drain finds nothing queued and this is exactly the old
 		// behaviour.
 		batch := append(a.batch[:0], pdu)
+	drain:
 		for len(batch) < cap(a.batch) {
 			select {
-			case next := <-a.queue:
+			case next, ok := <-a.queue:
+				// A closed channel is immediately readable and yields the zero
+				// value, so without this the batch collects a nil *PDU that the
+				// delivery client then dereferences. Closed and empty means this
+				// batch is the last one; the range above ends it.
+				if !ok {
+					break drain
+				}
 				batch = append(batch, next)
 			default:
 			}
@@ -121,15 +137,41 @@ func (a *AsyncSender) run() {
 // blocks; a full buffer drops the PDU and invokes onDrop. The caller must not
 // mutate pdu after Send (the worker reads it later). The returned error is always
 // nil — delivery happens on the worker — and exists only to satisfy Sender.
+//
+// A sender that has been closed drops too, and reports the drop the same way. The
+// events that close a sender — a purge, a reconfiguration, an element shutting
+// down — are exactly the events during which product is still being offered, and
+// the caller is a signalling or data-plane goroutine that delivery may neither
+// block nor fault.
 func (a *AsyncSender) Send(pdu *PDU) error {
+	if a.enqueue(pdu) {
+		return nil
+	}
+
+	if a.onDrop != nil {
+		a.onDrop()
+	}
+
+	return nil
+}
+
+// enqueue offers pdu to the queue and reports whether it was accepted. onDrop is
+// left to the caller so it never runs under closeMu: it is supplied by the POI and
+// nothing here should decide what it may touch.
+func (a *AsyncSender) enqueue(pdu *PDU) bool {
+	a.closeMu.RLock()
+	defer a.closeMu.RUnlock()
+
+	if a.closed {
+		return false
+	}
+
 	select {
 	case a.queue <- pdu:
+		return true
 	default:
-		if a.onDrop != nil {
-			a.onDrop()
-		}
+		return false
 	}
-	return nil
 }
 
 // Unreachable reports whether the sender behind the queue currently cannot reach its
@@ -162,7 +204,12 @@ func (a *AsyncSender) Unreachable() bool {
 // Close stops accepting new PDUs, drains those already queued, waits for the
 // worker to finish, and closes the inner Sender. Safe to call more than once.
 func (a *AsyncSender) Close() error {
-	a.closeOnce.Do(func() { close(a.queue) })
+	a.closeOnce.Do(func() {
+		a.closeMu.Lock()
+		a.closed = true
+		close(a.queue)
+		a.closeMu.Unlock()
+	})
 	a.wg.Wait()
 	return a.inner.Close()
 }
