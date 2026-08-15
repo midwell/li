@@ -579,6 +579,45 @@ func (r *Reporter) NotifyDestinationFault(did, condition, details string) {
 	_ = r.ReportDestinationIssue(did, TaskReportNonTerminatingFault, condition+": "+details)
 }
 
+// NotifyElementFault reports a condition at network-element scope, once per
+// throttle window, and records it so it can later be retracted.
+//
+// The same message Notify sends, and the same conditions — what it adds is the
+// record, so a condition the element can re-observe can also be reported as
+// cleared. Notify remains the form for an *event*, which happened once and has no
+// ending anybody could observe.
+func (r *Reporter) NotifyElementFault(condition, description string) {
+	if r == nil {
+		return
+	}
+	if !r.admit(reportKey{scope: scopeElement, condition: condition}) {
+		return
+	}
+	// reportNEIssueAs and not ReportNEIssue: that one consults the throttle itself,
+	// and admitting twice on one key means the second call suppresses the message
+	// the first just allowed.
+	encoding := encodeNEIssue(condition)
+	//nolint:errcheck // fire-and-forget by design; see Notify
+	_ = r.reportNEIssueAs(condition, encoding.kind, encoding.code, description)
+}
+
+// NotifyElementClear retracts a network-element-level fault previously reported,
+// and does nothing if none was.
+//
+// Clause 5.3 again, at the third scope: FaultCleared is the TypeOfNeIssueMessage
+// for it, as AllClear is the TaskReportType at the other two. Like them it was
+// declared here and emitted by nothing.
+func (r *Reporter) NotifyElementClear(condition string) {
+	if r == nil {
+		return
+	}
+	if !r.clearing(reportKey{scope: scopeElement, condition: condition}) {
+		return
+	}
+	//nolint:errcheck // fire-and-forget by design; see Notify
+	_ = r.reportNEIssueAs(condition, neIssueFaultCleared, 0, condition+": resolved")
+}
+
 // NotifyDestinationClear retracts a fault previously reported for a destination,
 // and does nothing if none was.
 //
@@ -643,6 +682,23 @@ func (r *Reporter) ReportNEIssue(issueType, description string) error {
 	// message where it may legitimately appear, and an ADMF still needs to tell one
 	// fault from another.
 	encoding := encodeNEIssue(issueType)
+
+	return r.reportNEIssueAs(issueType, encoding.kind, encoding.code, description)
+}
+
+// reportNEIssueAs renders and sends a ReportNEIssue with the message kind stated
+// rather than derived.
+//
+// It exists because a condition and its retraction are the same condition and
+// different messages: the registry maps a condition to the kind that *announces*
+// it, and there is no second entry for the kind that ends it. Deriving the kind
+// would make FaultCleared unreachable, which is how it came to be declared and
+// never sent.
+//
+// It does not consult the throttle. Its callers have already decided that this
+// message is a state change rather than a repetition.
+func (r *Reporter) reportNEIssueAs(issueType, kind string, code int, description string) error {
+	encoding := neIssueEncoding{kind: kind, code: code}
 
 	var body bytes.Buffer
 	if err := reportTemplate.Execute(&body, struct {

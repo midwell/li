@@ -428,8 +428,14 @@ func TestAConfiguredEndpointIsNotReportedAtDestinationScope(t *testing.T) {
 	}
 	NewDestinationWatcher(health, r, time.Millisecond).sample()
 
-	if n := len(admf.reports()); n != 0 {
+	if n := admf.counting("ReportDestinationIssueRequest")["ReportDestinationIssueRequest"]; n != 0 {
 		t.Errorf("an endpoint with no provisioned identifier produced %d destination-scoped reports, want 0", n)
+	}
+	// It is reported, at the scope that can be named — see
+	// TestAnEndpointWithNoIdentifierIsStillReported, which is the regression the
+	// end-to-end suite caught when this asserted no report at all.
+	if n := len(admf.reports()); n != 1 {
+		t.Errorf("it produced %d reports in all, want 1 at element scope", n)
 	}
 }
 
@@ -493,5 +499,66 @@ func TestTheStatusAnswerStillNamesNoDestination(t *testing.T) {
 	}
 	if !strings.Contains(fault.ErrorDescription, "1 of 2") {
 		t.Errorf("the status answer no longer says how many: %s", fault.ErrorDescription)
+	}
+}
+
+// TestAnEndpointWithNoIdentifierIsStillReported is the regression the end-to-end
+// suite caught and the unit tests did not, which is why it is here now.
+//
+// The first version of the watcher skipped an endpoint with no provisioned
+// identifier, reasoning that there is nothing destination-scoped to say about one
+// the ADMF did not create. True, and it does not follow that the element should say
+// *nothing*: a delivery it cannot make is exactly what the network-element-level
+// condition has always been for, and every task delivering to this element's
+// configured default endpoint has no DID. Retiring the sites that used to push that
+// report therefore lost it outright for the commonest configuration there is.
+//
+// The scope changes with what can be named. Whether the fault is reported at all
+// does not.
+func TestAnEndpointWithNoIdentifierIsStillReported(t *testing.T) {
+	admf := newCollectingADMF(t)
+	r := NewReporter(admf.srv.URL, "admfID", "neID", nil)
+
+	dests := newReachability(endpointA)
+	health := func() []DestinationHealth {
+		unreachable, _ := dests.count()
+
+		// No DID: the endpoint came from configuration, as a task naming no
+		// destination is delivered to.
+		return []DestinationHealth{{Address: endpointA, Unreachable: unreachable > 0}}
+	}
+	w := NewDestinationWatcher(health, r, time.Millisecond)
+
+	dests.set(endpointA, true)
+	w.sample()
+
+	reports := admf.reports()
+	if len(reports) != 1 {
+		t.Fatalf("an unreachable configured endpoint produced %d reports, want 1 — the fault is reported by nobody", len(reports))
+	}
+	for _, want := range []string{
+		`xsi:type="ns1:ReportNEIssueRequest"`,
+		"<ns1:typeOfNeIssueMessage>" + neIssueFaultReport + "</ns1:typeOfNeIssueMessage>",
+		NEIssueMDFUnreachable,
+	} {
+		if !strings.Contains(reports[0], want) {
+			t.Errorf("the element-level report is missing %q\n%s", want, reports[0])
+		}
+	}
+	// And it names no destination, because there is none to name.
+	if strings.Contains(reports[0], "dId") {
+		t.Errorf("an endpoint with no provisioned identifier was reported with one\n%s", reports[0])
+	}
+
+	// The ending too, at the same scope.
+	dests.set(endpointA, false)
+	w.sample()
+
+	reports = admf.reports()
+	if len(reports) != 2 {
+		t.Fatalf("recovery produced %d reports in all, want 2", len(reports))
+	}
+	if !strings.Contains(reports[1], "<ns1:typeOfNeIssueMessage>"+neIssueFaultCleared+"</ns1:typeOfNeIssueMessage>") {
+		t.Errorf("the clearing report is not a FaultCleared\n%s", reports[1])
 	}
 }

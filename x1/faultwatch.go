@@ -167,10 +167,23 @@ func (w *DestinationWatcher) Watch(stop <-chan struct{}) {
 // recovers without ever having been reported produces nothing.
 func (w *DestinationWatcher) sample() {
 	for _, h := range w.health() {
+		// An endpoint this element resolved from its own configuration has no
+		// identifier the provisioning function assigned, so there is nothing
+		// *destination-scoped* to say about it — but there is still something to
+		// say. It is a delivery this element cannot make, which is what the
+		// network-element-level condition has always been for, and saying nothing
+		// would lose a report that was being made before this watcher existed.
+		//
+		// Both edges either way. The scope changes with what can be named; whether
+		// the fault is reported at all does not.
 		if h.DID == "" {
-			// An endpoint this element resolved from configuration. The provisioning
-			// function did not create it and has no identifier to act on, so there is
-			// nothing destination-scoped to say about it.
+			if h.Unreachable {
+				w.reporter.NotifyElementFault(w.condition, "a delivery destination is unreachable")
+
+				continue
+			}
+			w.reporter.NotifyElementClear(w.condition)
+
 			continue
 		}
 		if h.Unreachable {
