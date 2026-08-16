@@ -38,6 +38,16 @@ func (s *Store) Activate(task types.InterceptTask) bool {
 	if task.XID == "" {
 		return false
 	}
+	// Cloned on the way in as well as on the way out. The read path has cloned since
+	// it was written, for a reason its own comment gives — a caller mutating the
+	// store's backing arrays outside the lock is a data race and cross-warrant
+	// corruption — and storing the caller's slices makes the store share arrays with
+	// whoever handed the task over, which is the same hazard entered from the other
+	// side. Today's caller builds each task from a parsed request and drops it, so
+	// nothing is currently harmed; that is a property of the caller, not of the
+	// store, and it is not what the read path relies on.
+	task = cloneTask(task)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.unindex(task.XID) // drop any prior indexing for this XID
