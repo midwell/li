@@ -271,6 +271,29 @@ func (t InterceptTask) TargetsAny(ids []TargetIdentifier) bool {
 	return false
 }
 
+// NamesAnyType reports whether the task names at least one identifier of the
+// given kinds — the kinds the element asking is able to resolve.
+//
+// It answers the question an element must settle before acknowledging tasking:
+// TargetsAny asks whether a warrant matches a subject the element is holding right
+// now, which is a fact about this moment, whereas this asks whether the warrant is
+// of a shape the element could ever match. A warrant naming only identifiers an
+// element never resolves matches nothing at every moment, and acknowledging it
+// tells the provisioning function an interception is running that cannot be.
+//
+// Here rather than in each POI for the same reason TargetsAny is: the rule belongs
+// in one place. What differs between elements is which kinds they pass, not how
+// the question is decided.
+func (t InterceptTask) NamesAnyType(kinds ...TargetIdentifierType) bool {
+	for _, want := range t.Targets {
+		if slices.Contains(kinds, want.Type) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // SplitTargets divides the identities a network function holds for one subject into
 // the ones this task matched and the rest, which is the distinction ETSI
 // TS 103 221-2 clauses 5.3.18 and 5.3.19 draw between the Matched and Other Target
