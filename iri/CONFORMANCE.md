@@ -9,6 +9,12 @@ SPDX-License-Identifier: Apache-2.0
 published with it. Both are cited below; where they disagree, that disagreement is itself
 recorded, because one of the findings here lives exactly in the gap between them.
 
+**This disposition was last reviewed 2026-08-14.** The specification revision above says
+what was read; this says when. Any count quoted from here — in `../CONFORMANCE.md`, or on a
+public compliance page — is a count as of that date, and carrying the date in the document
+the count came from is what lets a reader check it from this end rather than only from the
+end that quotes it.
+
 ## Why decoding is not enough
 
 Every record this project emits is decoded against the published ASN.1 module by the

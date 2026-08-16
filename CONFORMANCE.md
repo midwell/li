@@ -7,9 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 
 This project implements a **subset** of the Lawful Interception standards it names. Three
 dispositions record which subset, one per wire format, each stamped with the specification
-revision it was made against. This page is the index and the list of open gaps; it does not
-restate what the dispositions say, because an index that duplicates goes stale, which is the
-failure it exists to stop one level up.
+revision it was made against **and with the date it was last reviewed**. This page is the
+index and the list of open gaps; it does not restate what the dispositions say, because an
+index that duplicates goes stale, which is the failure it exists to stop one level up.
+
+The review dates matter wherever a count travels. A gap below stated as a number is a number
+as of the disposition it came from, and the two dates differ — so anything quoting a count,
+here or on a public page, names the disposition and its date rather than a single date for
+all three. **This index was last reviewed 2026-08-15.**
 
 | Interface | Disposition | Made against | What it covers |
 |---|---|---|---|
@@ -27,7 +32,9 @@ named with enough detail that a reader can tell whether it matters to them.
 1. **30 known conditional-field defects**, of 146 conditions judged: **26 MET** — the network
    function holds the datum and the record does not report it — and **4 BLOCKED**, where the
    codec cannot express the value. A further **9 are UNTRACED**, which that disposition labels
-   "an admission, not a conclusion".
+   "an admission, not a conclusion". These counts are as of the IRI disposition of
+   **2026-08-14**; `iri/CONFORMANCE.md` carries the same date, so a reader arriving there can
+   tell whether the numbers quoted here are still its own.
 
 ### X2/X3
 

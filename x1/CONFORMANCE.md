@@ -13,6 +13,10 @@ disagree, the prose is normative for behaviour and the schema still decides what
 `testdata/schemas/README.md` carries that tension, and `SOURCES.md` carries the quoted
 statements the provisioning decisions rest on.
 
+**This disposition was last reviewed 2026-08-15.** The revisions above say what was read;
+this says when, so that a statement quoted from here can be checked against the revision of
+this document it was taken from.
+
 When a newer revision is published, this document is what tells you whether the code
 disagrees with the specification or merely predates it. That distinction is the reason the
 versions are stated at the top rather than left implied.

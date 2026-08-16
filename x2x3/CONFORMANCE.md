@@ -10,6 +10,10 @@ refers to that revision. When a newer revision is published, this document is wh
 whether the code disagrees with the specification or merely predates it — that distinction
 is the reason the version is stated at the top rather than left implied.
 
+**This disposition was last reviewed 2026-08-15.** The revision above says what was read;
+this says when, so that a statement quoted from here can be checked against the revision of
+this document it was taken from.
+
 ## What this is, and what it is not
 
 This is a **reading**, not a check. ETSI publishes no machine-readable definition of the
