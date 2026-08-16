@@ -1589,6 +1589,16 @@ func malformedTaskIdentifiers(td TaskDetails) error {
 			return err
 		}
 	}
+	// The same check the two identifiers above get, for the same reason. A dId the
+	// schema cannot type is one no destination can be found under, so the task is
+	// accepted and then delivers to nothing — the failure RequireResolvableDIDs
+	// exists to prevent, arriving by the one route that skips it. It was this
+	// element's own malformed dId that made the case for validating xId at all.
+	for _, did := range td.ListOfDIDs {
+		if err := validIdentifier("dId", did); err != nil {
+			return err
+		}
+	}
 	for _, ti := range td.TargetIdentifiers {
 		if n := populatedArms(ti); n > 1 {
 			// The schema defines TargetIdentifier as an xs:choice, so a message
