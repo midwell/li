@@ -38,15 +38,34 @@ type DestinationHealth struct {
 // but both answer the same question about an address, so what varies is one
 // function argument.
 //
+// destinations SHALL be the same resolution the element's delivery path uses, and
+// is passed in rather than taken as t.DeliveryAddresses(dt) for a reason that cost a
+// lost fault report to learn. An IRI-POI delivers a task naming no DID to its own
+// configured endpoint, which provisioning never resolved — so the task carries no
+// delivery record at all, and a join reading the task alone sees nothing to watch
+// and reports nothing about the commonest configuration there is. Asking the caller
+// for the addresses it actually delivers to makes the two impossible to disagree.
+//
 // Deduplicated by (identifier, address): a destination named by several tasks is one
 // destination, and reporting it once per task would tell the provisioning function
 // about its own tasking rather than about its endpoint.
-func DestinationHealthOf(tasks []types.InterceptTask, dt types.DeliveryType, unreachable func(addr string) bool) []DestinationHealth {
+func DestinationHealthOf(tasks []types.InterceptTask, dt types.DeliveryType,
+	destinations func(types.InterceptTask) []string,
+	unreachable func(addr string) bool,
+) []DestinationHealth {
 	var out []DestinationHealth
 
 	for _, t := range tasks {
-		for _, addr := range t.DeliveryAddresses(dt) {
-			for _, did := range t.DeliveryDIDs(dt, addr) {
+		for _, addr := range destinations(t) {
+			dids := t.DeliveryDIDs(dt, addr)
+			if len(dids) == 0 {
+				// An address this element delivers to that provisioning did not name:
+				// its own configured endpoint. There is nothing destination-scoped to
+				// say about it, and still something to say — reported at element scope
+				// by the empty identifier, which is what the watcher keys the scope on.
+				dids = []string{""}
+			}
+			for _, did := range dids {
 				if slices.ContainsFunc(out, func(h DestinationHealth) bool {
 					return h.DID == did && h.Address == addr
 				}) {

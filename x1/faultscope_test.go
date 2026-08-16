@@ -405,6 +405,7 @@ func TestOneEndpointUnderTwoIdentifiersReportsBoth(t *testing.T) {
 	}
 	health := func() []DestinationHealth {
 		return DestinationHealthOf([]types.InterceptTask{task}, types.DeliveryX3,
+			func(t types.InterceptTask) []string { return t.DeliveryAddresses(types.DeliveryX3) },
 			func(string) bool { return true })
 	}
 	NewDestinationWatcher(health, r, time.Millisecond).sample()
@@ -423,8 +424,11 @@ func TestAConfiguredEndpointIsNotReportedAtDestinationScope(t *testing.T) {
 	admf := newCollectingADMF(t)
 	r := NewReporter(admf.srv.URL, "admfID", "neID", nil)
 
+	// Through the join, for the reason given in TestAnEndpointWithNoIdentifierIsStillReported.
 	health := func() []DestinationHealth {
-		return []DestinationHealth{{Address: endpointA, Unreachable: true}}
+		return DestinationHealthOf([]types.InterceptTask{{XID: testXID}}, types.DeliveryX2,
+			func(types.InterceptTask) []string { return []string{endpointA} },
+			func(string) bool { return true })
 	}
 	NewDestinationWatcher(health, r, time.Millisecond).sample()
 
@@ -439,6 +443,28 @@ func TestAConfiguredEndpointIsNotReportedAtDestinationScope(t *testing.T) {
 	}
 }
 
+// TestTheJoinKeepsAnAddressProvisioningNeverNamed is the unit that was missing when
+// the end-to-end suite caught the lost report, and again when only the watcher was
+// fixed. The join enumerates identifiers; an address the element delivers to that
+// has none must still come back, or every layer above it is watching an empty list.
+func TestTheJoinKeepsAnAddressProvisioningNeverNamed(t *testing.T) {
+	// No Deliveries: this is what a task naming no DID looks like once resolveDIDs
+	// has found nothing to resolve.
+	got := DestinationHealthOf([]types.InterceptTask{{XID: testXID}}, types.DeliveryX2,
+		func(types.InterceptTask) []string { return []string{endpointA} },
+		func(string) bool { return true })
+
+	if len(got) != 1 {
+		t.Fatalf("an address with no provisioned identifier yielded %d entries, want 1: %+v", len(got), got)
+	}
+	if got[0].DID != "" {
+		t.Errorf("it was given the identifier %q; there is none to give it", got[0].DID)
+	}
+	if got[0].Address != endpointA || !got[0].Unreachable {
+		t.Errorf("got %+v, want the configured endpoint reported unreachable", got[0])
+	}
+}
+
 // TestADestinationNamedByTwoTasksIsOneDestination. Reporting it once per task would
 // tell the provisioning function about its own tasking rather than about its
 // endpoint.
@@ -447,7 +473,9 @@ func TestADestinationNamedByTwoTasksIsOneDestination(t *testing.T) {
 	got := DestinationHealthOf([]types.InterceptTask{
 		{XID: "11111111-1111-4111-8111-111111111111", Deliveries: []types.DeliveryEndpoint{shared}},
 		{XID: "22222222-2222-4222-8222-222222222222", Deliveries: []types.DeliveryEndpoint{shared}},
-	}, types.DeliveryX3, func(string) bool { return true })
+	}, types.DeliveryX3,
+		func(t types.InterceptTask) []string { return t.DeliveryAddresses(types.DeliveryX3) },
+		func(string) bool { return true })
 
 	if len(got) != 1 {
 		t.Errorf("one destination named by two tasks yielded %d entries, want 1: %+v", len(got), got)
@@ -520,12 +548,20 @@ func TestAnEndpointWithNoIdentifierIsStillReported(t *testing.T) {
 	r := NewReporter(admf.srv.URL, "admfID", "neID", nil)
 
 	dests := newReachability(endpointA)
+	// Built through DestinationHealthOf rather than by hand, and that is the whole
+	// point of this version. The first one returned the DID-less entry itself, so it
+	// pinned the watcher's branch while the join upstream of it was dropping the
+	// endpoint entirely — the branch was right and unreachable, and the test could
+	// not tell. A task naming no destination resolves no delivery record at all, so
+	// what stands in for production here is a task with no Deliveries and a resolver
+	// that returns the element's configured endpoint, which is what delivery does.
+	task := types.InterceptTask{XID: testXID}
 	health := func() []DestinationHealth {
 		unreachable, _ := dests.count()
 
-		// No DID: the endpoint came from configuration, as a task naming no
-		// destination is delivered to.
-		return []DestinationHealth{{Address: endpointA, Unreachable: unreachable > 0}}
+		return DestinationHealthOf([]types.InterceptTask{task}, types.DeliveryX2,
+			func(types.InterceptTask) []string { return []string{endpointA} },
+			func(string) bool { return unreachable > 0 })
 	}
 	w := NewDestinationWatcher(health, r, time.Millisecond)
 
