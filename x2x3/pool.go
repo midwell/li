@@ -29,6 +29,10 @@ type Pool struct {
 
 	mu      sync.Mutex
 	senders map[string]Sender
+	// closed stops For building a sender after Close has run. Close empties the map
+	// rather than marking the pool, so without this a late delivery is indistinguishable
+	// from a first one.
+	closed bool
 }
 
 // NewPool returns a pool that dials with tlsConfig, running the clause 6.2.4 keepalive
@@ -62,6 +66,14 @@ func (p *Pool) For(addr string) Sender {
 
 	if s, ok := p.senders[addr]; ok {
 		return s
+	}
+	// A closed pool builds nothing. Close empties the map, so a delivery racing it
+	// would otherwise miss the cache, construct a fresh sender with a worker
+	// goroutine behind it, and store it in a pool nobody will close again — a worker
+	// running past the shutdown that was supposed to end it, holding a connection to
+	// a mediation function this element no longer answers for.
+	if p.closed {
+		return nil
 	}
 
 	s := NewAsyncSender(NewClient(addr, p.tlsConfig, p.keepalive), 0, p.onError, p.onDrop)
@@ -146,6 +158,7 @@ func (p *Pool) Close() error {
 	p.mu.Lock()
 	senders := p.senders
 	p.senders = make(map[string]Sender)
+	p.closed = true
 	p.mu.Unlock()
 
 	var firstErr error
