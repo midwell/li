@@ -40,6 +40,12 @@ func (ctx *Context) encodeBool(value reflect.Value) ([]byte, error) {
 func (ctx *Context) decodeBool(data []byte, value reflect.Value) error {
 	// TODO check value type
 	if !ctx.der.decoding {
+		// X.690 clause 8.2.1: a BOOLEAN's contents octets are one octet. Zero of them
+		// is not a shorter encoding of false, it is not an encoding at all — and
+		// reading it as one would index a byte that is not there.
+		if len(data) == 0 {
+			return parseError("boolean with no content octets")
+		}
 		boolValue := parseBigInt(data).Cmp(big.NewInt(0)) != 0
 		value.SetBool(boolValue)
 		return nil
@@ -92,6 +98,13 @@ func (ctx *Context) decodeBigInt(data []byte, value reflect.Value) error {
 	if err != nil {
 		return err
 	}
+	// X.690 clause 8.3.1: an INTEGER's contents octets are one or more. checkInt
+	// does not cover this — it only runs when decoding DER, and only inspects
+	// encodings of two octets or more, so a zero-length INTEGER reaches here
+	// unexamined in either mode.
+	if len(data) == 0 {
+		return parseError("integer with no content octets")
+	}
 	i := parseBigInt(data)
 	value.Set(reflect.ValueOf(i))
 	return nil
@@ -121,6 +134,12 @@ func (ctx *Context) decodeInt(data []byte, value reflect.Value) error {
 	}
 	if len(data) > 8 {
 		return parseError("integer too large for Go type '%s'", value.Type())
+	}
+	// X.690 clause 8.3.1: one or more contents octets. Without this the sign
+	// extension below fills the whole width from a default and the value decodes
+	// as a confident zero — no panic and no error, which is worse than either.
+	if len(data) == 0 {
+		return parseError("integer with no content octets")
 	}
 	// Sign extend the value
 	extensionByte := byte(0x00)
@@ -166,6 +185,11 @@ func (ctx *Context) decodeUint(data []byte, value reflect.Value) error {
 	}
 	if len(data) > 8 {
 		return parseError("integer too large for Go type '%s'", value.Type())
+	}
+	// As decodeInt: an unsigned integer with no contents octets is malformed, not
+	// zero.
+	if len(data) == 0 {
+		return parseError("integer with no content octets")
 	}
 	if len(data) > 0 && data[0]&0x80 != 0 {
 		return parseError("negative integer can't be assigned to Go type '%s'", value.Type())
@@ -404,6 +428,14 @@ func checkInt(ctx *Context, data []byte) error {
 }
 
 func parseBigInt(data []byte) *big.Int {
+	// Callers reject empty contents before reaching here, because an empty INTEGER
+	// or BOOLEAN is malformed rather than zero. Guarded again here because this is
+	// the function that indexes: a decoder that crashes the element on input a
+	// conformant peer never sends is one that crashes it on input a non-conformant
+	// peer does send, and which callers exist is a property of today's wiring.
+	if len(data) == 0 {
+		return big.NewInt(0)
+	}
 	data = append([]byte{}, data...)
 	neg := false
 	if data[0]&0x80 != 0 {
