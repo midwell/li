@@ -203,7 +203,7 @@ func TestADetailsAnswerIsNotRefusedForCarryingNoAcknowledgement(t *testing.T) {
 func TestAnUnparseableRequestIsAnsweredWithATopLevelError(t *testing.T) {
 	srv := NewServer(store.New(), "upf-1", WithADMF("smf-1"))
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/X1/NE",
+	srv.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/X1/NE",
 		strings.NewReader("this is not XML at all")))
 
 	if rec.Code != http.StatusOK {
