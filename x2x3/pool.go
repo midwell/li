@@ -59,7 +59,27 @@ func NewPool(tlsConfig *tls.Config, keepalive KeepaliveConfig, onError func(erro
 	}
 }
 
+// discardSender is what a closed pool hands out: product offered to it is dropped,
+// and nothing is dialled, queued or reported.
+//
+// Dropping silently is right here and nowhere else. A closed pool belongs to an
+// element that is shutting down or has been reconfigured, so there is no ADMF
+// exchange left to carry a report and no operator action a report would prompt —
+// where a *full queue* on a live sender is lost product that must be reported, and
+// is, by the sender that dropped it.
+//
+// It reports itself reachable, because Unreachable answers what the last exchange
+// with a destination established and this has had none. Answering true would put a
+// closed pool's phantom destinations into an element's fault status.
+type discardSender struct{}
+
+func (discardSender) Send(*PDU) error   { return nil }
+func (discardSender) Close() error      { return nil }
+func (discardSender) Unreachable() bool { return false }
+
 // For returns the delivery client for addr ("host:port"), creating it on first use.
+//
+// It never returns nil: see the closed case below.
 func (p *Pool) For(addr string) Sender {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -72,8 +92,15 @@ func (p *Pool) For(addr string) Sender {
 	// goroutine behind it, and store it in a pool nobody will close again — a worker
 	// running past the shutdown that was supposed to end it, holding a connection to
 	// a mediation function this element no longer answers for.
+	//
+	// It returns a sender that discards rather than a nil one. Both callers check for
+	// nil today, so nothing is broken; what the check costs is that the *next* caller
+	// must know to make it, and the failure if it does not is a nil-interface panic on
+	// a delivery path — which is a signalling or data-plane path whose contract is that
+	// delivery can neither block it nor fault it. A discarding sender keeps that
+	// contract without asking anything of the caller.
 	if p.closed {
-		return nil
+		return discardSender{}
 	}
 
 	s := NewAsyncSender(NewClient(addr, p.tlsConfig, p.keepalive), 0, p.onError, p.onDrop)

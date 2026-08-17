@@ -718,3 +718,65 @@ func TestKeepaliveExpiryReachesTheFaultProbe(t *testing.T) {
 		t.Error("the expiry set the probe's answer but pushed no report; clause 6.2.4 requires both")
 	}
 }
+
+// TestProtocolErrorReachesTheFaultProbe is the third route to the same conclusion.
+//
+// A destination becomes unreachable by a failed delivery, by a TIME_P2 expiry with no
+// acknowledgement — and by a peer sending bytes no X2/X3 implementation should send.
+// The first two set the flag the status probe answers from; the third pushed a fault
+// and did not, so an ADMF that received the report and then asked the element for its
+// status was told the destination was fine. The two mechanisms are meant to answer
+// different questions ("what just went wrong" and "what is wrong now"), not to
+// contradict each other about one destination, and an element whose answers disagree is
+// one whose status answer stops being read.
+func TestProtocolErrorReachesTheFaultProbe(t *testing.T) {
+	m := startMDF(t, nil)
+
+	faults := make(chan error, 8)
+	p := NewPool(&tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test transport
+		KeepaliveConfig{TimeP1: time.Hour, TimeP2: time.Hour},
+		func(err error) {
+			select {
+			case faults <- err:
+			default:
+			}
+		}, nil)
+	defer p.Close()
+
+	s := p.For(m.addr)
+	if err := s.Send(product()); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	eventually(t, "the delivery to arrive", func() bool { return m.count(PDUTypeX2) >= 1 })
+
+	// Delivered, so nothing is faulty yet — this is the state the assertion below has
+	// to move away from, or it would pass against a client that reports everything
+	// unreachable.
+	if unreachable, _ := p.UnreachableAmong([]string{m.addr}); unreachable != 0 {
+		t.Fatalf("%d destinations unreachable after a successful delivery, want 0", unreachable)
+	}
+
+	// A PDU type that has no business arriving on a delivery connection.
+	b, err := product().Marshal()
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if _, err := m.firstConn(t).Write(b); err != nil {
+		t.Fatalf("write to the element: %v", err)
+	}
+
+	eventually(t, "the probe to report the destination unreachable", func() bool {
+		unreachable, inUse := p.UnreachableAmong([]string{m.addr})
+
+		return unreachable == 1 && inUse == 1
+	})
+
+	select {
+	case err := <-faults:
+		if !strings.Contains(err.Error(), "PDU type") {
+			t.Errorf("fault = %v, want the unexpected-type refusal", err)
+		}
+	case <-time.After(time.Second):
+		t.Error("the protocol error set the probe's answer but pushed no report; both are owed")
+	}
+}

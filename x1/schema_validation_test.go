@@ -538,6 +538,32 @@ func TestOriginatedRequestsValidate(t *testing.T) {
 		}
 	})
 
+	// The IPv6 arm of the same two addresses. Unreachable in this deployment — there
+	// are no IPv6 PDU sessions to intercept — which is exactly why it needs a
+	// validator rather than a reviewer: the trigger rendered an IPv6 literal into the
+	// IPv4Address element and nothing that ever ran would have said so.
+	t.Run("trigger and destination with IPv6 addresses", func(t *testing.T) {
+		req, body := requesterTo(t, ok)
+		req.now = func() time.Time { return zeroTailInstant }
+		tr := testTrigger()
+		tr.XID = "44444444-4444-4444-8444-444444444444"
+		tr.DIDs = []string{"55555555-5555-4555-8555-555555555555"}
+		tr.SEIDAddress = "2001:db8::5"
+
+		if err := req.CreateDestination(Destination{
+			DID: tr.DIDs[0], DeliveryType: deliveryX3Only,
+			Address: "2001:db8::7b", Port: 42069,
+		}); err != nil {
+			t.Fatalf("CreateDestination: %v", err)
+		}
+		report(t, "CreateDestination/IPv6", validateAgainstSchema(t, []byte(*body)))
+
+		if err := req.ActivateTask(tr); err != nil {
+			t.Fatalf("ActivateTask: %v", err)
+		}
+		report(t, "ActivateTask/IPv6", validateAgainstSchema(t, []byte(*body)))
+	})
+
 	t.Run("fault reports to the ADMF", func(t *testing.T) {
 		var body string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

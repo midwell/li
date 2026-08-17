@@ -229,7 +229,14 @@ func TestCreateDestinationWireForm(t *testing.T) {
 		}
 	})
 
-	t.Run("ipv6 picks the other arm", func(t *testing.T) {
+	// This case asserted `<c:IPv6Address>2001:db8::1</c:IPv6Address>` until 2026-08-17,
+	// which is the arm right and the value wrong: TS 103 280 types an IPv6Address as
+	// `([0-9a-f]{4}:){7}([0-9a-f]{4})`, so the compressed literal Go hands back from
+	// net.IP.String is the one form the schema refuses. The test passed because it
+	// checked what the code produced rather than what the schema accepts, which is how
+	// a wrong value survives beside a right one — the arm selection here was correct all
+	// along and the address next to it was not.
+	t.Run("ipv6 picks the other arm, expanded as the schema types it", func(t *testing.T) {
 		req, body := requesterTo(t, okHandler)
 		if err := req.CreateDestination(Destination{
 			DID:          "33333333-3333-4333-8333-333333333333",
@@ -239,8 +246,8 @@ func TestCreateDestinationWireForm(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CreateDestination: %v", err)
 		}
-		if !strings.Contains(*body, `<c:IPv6Address>2001:db8::1</c:IPv6Address>`) {
-			t.Errorf("IPv6 address did not use the IPv6Address arm\ngot:\n%s", *body)
+		if !strings.Contains(*body, `<c:IPv6Address>2001:0db8:0000:0000:0000:0000:0000:0001</c:IPv6Address>`) {
+			t.Errorf("IPv6 address did not use the IPv6Address arm in its expanded form\ngot:\n%s", *body)
 		}
 	})
 
@@ -499,5 +506,73 @@ func TestTaskXIDsReportsWhatThePOIHolds(t *testing.T) {
 	}
 	if st.Len() != 0 {
 		t.Errorf("store holds %d tasks after withdrawing the reported XID, want 0", st.Len())
+	}
+}
+
+// TestTriggerAddressArmFollowsTheAddress pins the FSEID's address to the element
+// its own family names, and to the form that element's type accepts.
+//
+// Two defects, one of which was invisible behind the other. The two paths in this
+// file answer the same question — a TS 103 280 address is a choice of an IPv4 and
+// an IPv6 element — and only one of them used to ask it: CreateDestination selected
+// the arm, the trigger hard-coded IPv4Address. Selecting the right arm then exposed
+// the second, which the vendored schema caught and no reviewer had: TS 103 280 types
+// an IPv6Address as `([0-9a-f]{4}:){7}([0-9a-f]{4})`, so the "::" compression and
+// dropped leading zeros that Go's net.IP.String produces are both refused. The
+// expanded literals below are the assertion — writing "2001:db8::5" here would pin
+// the defect rather than the fix.
+//
+// Asserted on the rendered request rather than through the schema, so the case is
+// pinned on a machine with no xmllint as well; TestOriginatedRequestsValidate
+// carries the schema half.
+func TestTriggerAddressArmFollowsTheAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		address string
+		want    string
+		notWant string
+	}{
+		{"IPv4", "10.0.1.5", "<ext:IPv4Address>10.0.1.5</ext:IPv4Address>", "IPv6Address"},
+		{
+			"IPv6 compressed is expanded", "2001:db8::5",
+			"<ext:IPv6Address>2001:0db8:0000:0000:0000:0000:0000:0005</ext:IPv6Address>", "IPv4Address",
+		},
+		{
+			"IPv6 already expanded is unchanged", "2001:0db8:0000:0000:0000:0000:0000:0005",
+			"<ext:IPv6Address>2001:0db8:0000:0000:0000:0000:0000:0005</ext:IPv6Address>", "IPv4Address",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, body := requesterTo(t, acknowledging(t))
+			tr := testTrigger()
+			tr.SEIDAddress = tc.address
+
+			if err := req.ActivateTask(tr); err != nil {
+				t.Fatalf("ActivateTask: %v", err)
+			}
+			if !strings.Contains(*body, tc.want) {
+				t.Errorf("trigger for %s does not carry %s\n%s", tc.address, tc.want, *body)
+			}
+			if strings.Contains(*body, tc.notWant) {
+				t.Errorf("trigger for %s carries a %s element, which is the wrong arm of the choice\n%s",
+					tc.address, tc.notWant, *body)
+			}
+		})
+	}
+}
+
+// TestTriggerWithNoAddressCarriesNeitherArm keeps the optionality: the address is
+// minOccurs="0" in the schema, and a trigger without one must emit no element at
+// all rather than an empty one.
+func TestTriggerWithNoAddressCarriesNeitherArm(t *testing.T) {
+	req, body := requesterTo(t, acknowledging(t))
+	tr := testTrigger()
+	tr.SEIDAddress = ""
+
+	if err := req.ActivateTask(tr); err != nil {
+		t.Fatalf("ActivateTask: %v", err)
+	}
+	if strings.Contains(*body, "IPv4Address") || strings.Contains(*body, "IPv6Address") {
+		t.Errorf("trigger with no SEIDAddress carries an address element\n%s", *body)
 	}
 }

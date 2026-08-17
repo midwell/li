@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -319,7 +320,7 @@ var taskTemplate = template.Must(template.New("x1task").Funcs(template.FuncMap{
                 <ext:FSEID>
                   <ext:SEID>{{.SEID}}</ext:SEID>
 {{- if .SEIDAddress}}
-                  <ext:IPv4Address>{{esc .SEIDAddress}}</ext:IPv4Address>
+                  <ext:{{.SEIDAddressElement}}>{{esc .SEIDAddress}}</ext:{{.SEIDAddressElement}}>
 {{- end}}
                 </ext:FSEID>
               </ext:UPFLIT3TargetIdentifier>
@@ -404,10 +405,7 @@ func (r *Requester) CreateDestination(d Destination) error {
 	if _, err := deliveryProducts(d.DeliveryType); err != nil {
 		return fmt.Errorf("x1: destination: %w", err)
 	}
-	element := "IPv4Address"
-	if isIPv6(d.Address) {
-		element = "IPv6Address"
-	}
+	element, address := addressArm(d.Address)
 	h := r.header("CreateDestinationRequest")
 
 	return r.send(destinationTemplate, h, struct {
@@ -423,7 +421,7 @@ func (r *Requester) CreateDestination(d Destination) error {
 		DID:            d.DID,
 		FriendlyName:   d.FriendlyName,
 		DeliveryType:   d.DeliveryType,
-		Address:        d.Address,
+		Address:        address,
 		AddressElement: element,
 		Port:           d.Port,
 	})
@@ -458,23 +456,32 @@ func (r *Requester) task(msgType string, t Trigger) error {
 		return fmt.Errorf("x1: trigger needs at least one destination")
 	}
 	h := r.header(msgType)
+	seidAddressElement, seidAddress := addressArm(t.SEIDAddress)
 
 	return r.send(taskTemplate, h, struct {
-		Header        header
-		XID           string
-		ProductID     string
-		CorrelationID string
-		SEID          uint64
-		SEIDAddress   string
-		DIDs          []string
+		Header             header
+		XID                string
+		ProductID          string
+		CorrelationID      string
+		SEID               uint64
+		SEIDAddress        string
+		SEIDAddressElement string
+		DIDs               []string
 	}{
 		Header:        h,
 		XID:           string(t.XID),
 		ProductID:     string(t.ProductID),
 		CorrelationID: strconv.FormatUint(t.CorrelationID, 10),
 		SEID:          t.SEID,
-		SEIDAddress:   t.SEIDAddress,
-		DIDs:          t.DIDs,
+		// The FSEID's address is a choice of two elements, exactly as a
+		// destination's is (see CreateDestination), and its IPv6 arm demands the
+		// expanded eight-group form. Rendering a Go-formatted IPv6 literal into
+		// the IPv4 element produced a trigger no validating peer accepts, and the
+		// two paths in this file disagreeing about the same question is how it went
+		// unnoticed: there is one way to answer it and both use it.
+		SEIDAddress:        seidAddress,
+		SEIDAddressElement: seidAddressElement,
+		DIDs:               t.DIDs,
 	})
 }
 
@@ -642,6 +649,66 @@ func escapeXML(s string) string {
 	//nolint:errcheck // writing to a bytes.Buffer cannot fail
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
+}
+
+// addressArm names the element an address is rendered into and renders it in the
+// form that element's type accepts. Both halves, from one place, because both are
+// properties of the schema rather than of any caller.
+//
+// The X1 schemas carry an address as a choice of an IPv4 and an IPv6 element in
+// several places — a destination's deliveryAddress, an FSEID's or an FTEID's node
+// address. Answering "which arm" in one of them and hard-coding IPv4 in another is
+// what this file did, and a deployment with no IPv6 never exercises the difference.
+//
+// The rendering half is the part that is easy to miss, and it is the same shape as
+// the six-digit timestamp rule. TS 103 280 types an IPv6Address as
+//
+//	([0-9a-f]{4}:){7}([0-9a-f]{4})
+//
+// — eight groups of exactly four lowercase hexadecimal digits. Not "an IPv6
+// address": no "::" compression and no dropped leading zeros. Go's net.IP.String
+// produces both, so an address that arrived through any Go networking API is in
+// precisely the form the schema refuses, and picking the right element for it
+// still yields a message a validating peer discards.
+//
+// An address that does not parse is passed through unchanged, on the arm the
+// colon heuristic picks. There is nothing to normalise and nothing to be gained by
+// guessing: the schema refuses it either way, which is the honest outcome.
+func addressArm(addr string) (element, value string) {
+	ip := net.ParseIP(addr)
+	switch {
+	case ip == nil:
+		return addressElement(addr), addr
+	case ip.To4() != nil:
+		return "IPv4Address", ip.To4().String()
+	default:
+		return "IPv6Address", expandIPv6(ip.To16())
+	}
+}
+
+// addressElement is addressArm's element half, for a caller that has nothing to
+// render — the details answer, which echoes a value a peer supplied.
+func addressElement(addr string) string {
+	if isIPv6(addr) {
+		return "IPv6Address"
+	}
+
+	return "IPv4Address"
+}
+
+// expandIPv6 renders 16 address octets as the schema's eight four-digit groups.
+func expandIPv6(b []byte) string {
+	var out strings.Builder
+	out.Grow(39) // 8 groups of 4 digits plus 7 separators
+
+	for i := 0; i+1 < len(b); i += 2 {
+		if i > 0 {
+			out.WriteByte(':')
+		}
+		fmt.Fprintf(&out, "%02x%02x", b[i], b[i+1])
+	}
+
+	return out.String()
 }
 
 // isIPv6 reports whether addr is an IPv6 literal, distinguishing the two

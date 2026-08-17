@@ -470,7 +470,19 @@ func (c *Client) answerKeepalive(st *connState, p *PDU) bool {
 // is *not* the errStaleConn case above. There, the connection went because this element
 // replaced it and nothing had gone wrong; here a peer sent bytes no X2/X3 implementation
 // should send, and that stays true whichever socket carried them.
+//
+// It marks the destination unreachable, as the TIME_P2 expiry and a failed delivery both
+// do. This is the same conclusion arrived at by a third route — the exchange with this
+// mediation function did not work — and leaving it out meant the two mechanisms disagreed
+// about one destination: the ADMF received a pushed fault while the status answer it could
+// ask for went on saying the destination was reachable. An element whose two answers
+// contradict each other is one whose status answer stops being read.
 func (c *Client) protocolError(st *connState, err error) {
+	// Stored before the fault is reported and before the connection is dropped, so a
+	// status request racing this cannot be answered "reachable" by an element that has
+	// just concluded otherwise — the ordering expire already uses.
+	c.unreachable.Store(true)
+
 	c.mu.Lock()
 	if c.live == st {
 		c.dropLocked()

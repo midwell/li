@@ -1362,11 +1362,13 @@ func extensionTargetArm(t types.TargetIdentifier) (string, bool) {
 		teid, addr, hasAddr := strings.Cut(t.Value, "@")
 		arm := "<ext:FTEID>" + el("TEID", teid)
 		if hasAddr {
-			name := "IPv4Address"
-			if strings.Contains(addr, ":") {
-				name = "IPv6Address"
-			}
-			arm += el(name, addr)
+			// The same arm selection and the same rendering rule the triggering
+			// path uses. This answer echoes a value a peer supplied, so a
+			// conformant peer's value round-trips untouched; normalising it here
+			// is what keeps a *non*-conformant one from making this element's own
+			// details answer invalid, which is the answer an ADMF audits with.
+			name, value := addressArm(addr)
+			arm += el(name, value)
 		}
 
 		return arm + "</ext:FTEID>", true

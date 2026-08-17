@@ -256,6 +256,26 @@ that matches what the ADMF believes it provisioned reproduces the old behaviour 
 that never arrived over X1; nothing reproduces the old behaviour for a DID that did,
 because that was the defect.
 
+##### The content path, which was fixed later
+
+The three sources above govern X3 as they govern X2, but the element that resolves them
+is not the element that delivers. A UPF is a *triggered* point of interception and holds
+no MDF3 of its own: the SMF's CC Triggering Function resolves the task's X3 destinations,
+provisions each one at that UPF with `CreateDestination`, and names them on the LI_T3
+trigger. Source 3 for X3 is therefore the SMF's `mdf3`, not anything the UPF holds.
+
+**Until 2026-08-17 the content path did not do this**, and the consequence was worse than
+on the IRI path it mirrors. A task's X3 destinations were parsed, resolved and then
+ignored; every trigger named the one endpoint in the SMF's `mdf3`. Two agencies' warrants
+therefore sent both agencies' **content** — the subscriber's own traffic, not metadata —
+to whichever address configuration happened to name. The same disclosure, on the interface
+where it costs the most, and it survived the X2 fix because that fix was made in the
+IRI-POI and the CC path resolves its destinations somewhere else entirely.
+
+The remedy for a deployment relying on the old behaviour is the same one: declare the DID
+in `destinations` pointing at the endpoint you want, or leave the task's X3 DIDs
+unresolvable so the `mdf3` fallback serves it.
+
 **The SMF and the UPF must be upgraded together.** The X1 destination address carries its
 port as the `TCPPort`/`UDPPort` child element the TS 103 280 schema defines, where it used
 to be a number in the element's text — a defect that went unnoticed because the only peer
@@ -784,10 +804,25 @@ no block present, LI is inactive. Before enabling, you need:
    receive xIRI/xCC). Note their addresses.
 3. The **LI-enabled NF images** deployed.
 
-The MDF2/MDF3 delivery endpoints come from NF configuration, not from the ADMF's
-per-task provisioning over X1 (which this release does not use): the MDF2 from
-each AMF/SMF, and the MDF3 from the SMF, which provisions it to every UPF it
-triggers — the UPF holds no MDF3 of its own.
+The `mdf2` and `mdf3` addresses configured here are **defaults**, for a task that
+names no destination the element can resolve. Where a task names its own — which
+TS 33.128 requires and which is what an ADMF that calls `CreateDestination` does —
+that is where its product goes, on X3 as on X2. See *[Where a task's product
+goes](#where-a-tasks-product-goes)* for the three sources and their precedence.
+
+The difference between the two interfaces is only *who* provisions the destination
+at the element that delivers. The AMF and SMF resolve their own X2 destinations. The
+UPF holds no MDF3 of its own and never has: it is a triggered point of interception,
+so the SMF's triggering function resolves the task's X3 destinations, provisions each
+one at that UPF with `CreateDestination`, and names them on the trigger — falling
+back to its configured `mdf3` only for a task that named nothing resolvable.
+
+> **This paragraph said the opposite until 2026-08-17**, and the code agreed with it
+> on the content path: every warrant's content went to the configured `mdf3`
+> whatever `listOfDIDs` said. With one agency that is invisible; with two, both
+> agencies' content arrived at one endpoint. If your ADMF provisions X3 destinations
+> and your content moves, that is this fix — see the same note under *Where a task's
+> product goes*, which describes the identical change made earlier on the X2 path.
 
 ### AMF and SMF
 
@@ -810,10 +845,13 @@ configuration:
     # --- SMF only: content of communication ---
     # The SMF is the CC triggering function. It tasks the interception point in
     # each UPF over that UPF's X1 endpoint, passing the warrant, the session's
-    # correlation identifier and this MDF3 address; the UPF holds none of them in
-    # its own configuration. A UPF missing from this list will duplicate traffic
-    # that nobody can attribute, which the SMF reports to the ADMF as a fault.
-    mdf3: "mdf3.li.example:9001"          # X3 delivery destination (MDF3 host:port)
+    # correlation identifier and the task's X3 destinations, which it provisions at
+    # that UPF first; the UPF holds none of them in its own configuration. A UPF
+    # missing from this list will duplicate traffic that nobody can attribute,
+    # which the SMF reports to the ADMF as a fault.
+    mdf3: "mdf3.li.example:9001"          # X3 delivery DEFAULT (MDF3 host:port), for a task
+                                          # that names no X3 destination this element can
+                                          # resolve. A task that names one goes there instead.
     upfTriggers:
       - nodeId: "upf"                     # the UPF's N4 node address — IP or DNS name (resolved as on the PFCP path)
         x1Url: "https://upf-1:8443/X1/NE" # its X1 endpoint; the host must be a name its certificate covers
@@ -909,7 +947,7 @@ The blocks above are what LI reads on disk; deployment tooling sets them for you
 | `x1Listen` | — | X1 listener bind address (ADMF → NF) | AMF/SMF: yes |
 | `mdf2` | — | xIRI (X2) delivery **default**, `host:port`. Used only for a task that names no destination this element can resolve — see *[Where a task's product goes](#where-a-tasks-product-goes)* | AMF/SMF: yes |
 | `destinations` | — | Pre-shared DID→endpoint mappings, a list of `{did, deliveryType, address}`. `did` must be a UUID, `deliveryType` one of `X2Only`/`X3Only`/`X2andX3`, `address` a `host:port`. An entry that is not all three is dropped rather than half-applied | AMF/SMF: optional |
-| `mdf3` | — | xCC (X3) delivery destination the SMF provisions at each UPF it triggers | SMF: with `upfTriggers` |
+| `mdf3` | — | xCC (X3) delivery **default**, `host:port`. The CC triggering function provisions a task's own X3 destinations at each UPF it triggers and names them on the trigger; this serves only a task that names no X3 destination this element can resolve — see *[Where a task's product goes](#where-a-tasks-product-goes)* | SMF: with `upfTriggers` |
 | `upfTriggers` | — | Per-UPF triggering endpoints (`nodeId`, `x1Url`, `neId`) | SMF: for CC |
 | — | `x1_listen` | Bind address of the triggering interface (SMF → UPF) | UPF: yes |
 | — | `tf_id` | Identifier of the element permitted to task this UPF | UPF: yes |
