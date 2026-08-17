@@ -370,10 +370,36 @@ said.
 ## This element as an X1 client
 
 The SMF acts as a CC Triggering Function over LI_T3, which makes it an X1 *requester* against
-the UPF's CC-POI. Two dispositions belong to that direction.
+the UPF's CC-POI. Three dispositions belong to that direction.
 
-**Every response is bound to the request that produced it**, in one validator both response
-readers go through. Refused unless all of the following hold:
+**The destinations a trigger names are the task's, not the triggering function's.** A CC-TF
+resolves the warrant's own X3 destinations, provisions each distinct endpoint at the POI with
+`CreateDestination`, and names those identifiers on the trigger. Its configured `mdf3` serves
+only a task that names no X3 destination the element can resolve — the same three-source
+precedence, and the same fallback, that the IRI path applies to `mdf2`.
+
+Until 2026-08-17 it did not. A task's X3 destinations were parsed, resolved, carried into the
+task and then ignored: every trigger named one endpoint, the one in the triggering function's
+own configuration. With a single agency that is invisible. With two, both agencies' **content**
+— the subscriber's own traffic, not metadata — arrived wherever configuration happened to
+point, which is the disclosure `li-security-isolation` forbids unconditionally for every
+product type and every delivery path. It survived the equivalent fix on the IRI path because
+that fix was made in the IRI-POI, and the content path resolves its destinations somewhere
+else entirely.
+
+**A change to a task's labelling reaches the triggers already installed for it.** Where a
+`ModifyTask` changes the `productID` a warrant's product is labelled with, its correlation
+value, or its X3 destinations, the CC-TF sends a `ModifyTask` to each POI holding one of that
+warrant's triggers, restating the session's own detection criterion and correlation. The
+trigger is not withdrawn and reinstalled: content the warrant still authorises is not
+interrupted to change a label. An IRI-POI reads these from the task per record and so picks
+them up at once; a triggered POI reads them from a trigger built once, and without this the
+two diverge — signalling under one warrant identifier and content under another, both
+well-formed, with nothing in either stream to show they were meant to join.
+
+**Every response is bound to the request that produced it** — the third disposition, and the
+one the two above both lean on when they fail. In one validator both response readers go
+through. Refused unless all of the following hold:
 
 | Check | Why |
 |---|---|
