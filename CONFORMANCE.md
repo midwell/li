@@ -99,6 +99,30 @@ implement is declared, not faked"*, and each is summarised in `README.md`'s feat
   would refuse tasking an ADMF may legitimately send to several elements at once, which is the
   same reasoning the recognised-extension case already follows.
 
+## Two record-shape questions settled by reading, not inference
+
+Recorded here because both were re-derived more than once, and because the answer to the
+first decides the shape of a record rather than only its content.
+
+**An `AMFDeregistration` names both accesses in one record, not one record per access.**
+TS 33.128 V18.16.0 table 6.2.2.2.3-1 makes `accessType` mandatory with cardinality 1, and
+`TS33128Payloads.asn` defines
+
+```
+AccessType ::= ENUMERATED { threeGPPAccess(1), nonThreeGPPAccess(2), threeGPPandNonThreeGPPAccess(3) }
+```
+
+so "both" is a value of the single field. Clause 6.2.2.2.3's own trigger text agrees: the
+xIRI is generated when the IRI-POI detects that a UE "has deregistered from the 5GS over
+at least one access type" — one record about a deregistration, however many accesses it
+covered. The AMF therefore reports the scope it *acted on* (the access the UE requested,
+which NAS can express as both) rather than the access the request happened to arrive over.
+
+**The identifier binding is one binding across accesses**, so `AMFIdentifierDeassociation`
+is emitted when the UE is left registered on none — not once per deregistration. A
+dual-registered UE deregistering one access keeps its SUPI↔5G-GUTI binding, and the
+element goes on producing records under it.
+
 ## How to read a disposition
 
 Each follows the same shape: what it is and what it is not, the per-clause or per-table
