@@ -89,7 +89,7 @@ func TestAnActivationRacingTheFailSafePurgeLeavesNoOrphan(t *testing.T) {
 	mu.Unlock()
 
 	switch {
-	case held && !(wasTold && lastApplied):
+	case held && (!wasTold || !lastApplied):
 		t.Fatalf("the element holds the task and the POI was not told to apply it "+
 			"(told=%v applied=%v)", wasTold, lastApplied)
 	case !held && wasTold && lastApplied:

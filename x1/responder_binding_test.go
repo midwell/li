@@ -50,9 +50,9 @@ func liCert(t *testing.T, uid, binding string) (tls.Certificate, *x509.CertPool)
 		tmpl.Subject.ExtraNames = []pkix.AttributeTypeAndValue{{Type: oidUID, Value: uid}}
 	}
 	if binding != "" {
-		u, err := url.Parse(binding)
-		if err != nil {
-			t.Fatal(err)
+		u, parseErr := url.Parse(binding)
+		if parseErr != nil {
+			t.Fatal(parseErr)
 		}
 		tmpl.URIs = []*url.URL{u}
 	}
@@ -72,10 +72,15 @@ func liCert(t *testing.T, uid, binding string) (tls.Certificate, *x509.CertPool)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, pool
 }
 
+// poiNEID is the element identifier the stub POI asserts about itself. Constant,
+// because what varies across these cases is what its *certificate* binds — the point
+// being that the assertion is the part any endpoint can make correctly.
+const poiNEID = "upf-1"
+
 // answeringPOI is a triggered POI that acknowledges whatever it is asked, over TLS,
 // presenting the given certificate. What it asserts about itself in the message is
 // always correct — the question is whether its *certificate* backs the assertion.
-func answeringPOI(t *testing.T, cert tls.Certificate, pool *x509.CertPool, neID string) (*httptest.Server, *tls.Config) {
+func answeringPOI(t *testing.T, cert tls.Certificate, pool *x509.CertPool) (*httptest.Server, *tls.Config) {
 	t.Helper()
 
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +96,7 @@ func answeringPOI(t *testing.T, cert tls.Certificate, pool *x509.CertPool, neID 
 <ns1:X1Response xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1ResponseMessage xsi:type="ns1:` + strings.Replace(reqType, "Request", "Response", 1) + `">
     <ns1:admfIdentifier>smf-1</ns1:admfIdentifier>
-    <ns1:neIdentifier>` + neID + `</ns1:neIdentifier>
+    <ns1:neIdentifier>` + poiNEID + `</ns1:neIdentifier>
     <ns1:messageTimestamp>2026-08-18T00:00:00.000000Z</ns1:messageTimestamp>
     <ns1:version>` + supportedVersion + `</ns1:version>
     <ns1:x1TransactionId>` + txID + `</ns1:x1TransactionId>
@@ -144,7 +149,7 @@ func TestAnAnswerIsRefusedUnlessTheCertificateBindsTheAddressedElement(t *testin
 
 	t.Run("bound in the NE role", func(t *testing.T) {
 		cert, pool := liCert(t, "", certBindingURNPrefix+roleNE+":"+neID)
-		srv, clientTLS := answeringPOI(t, cert, pool, neID)
+		srv, clientTLS := answeringPOI(t, cert, pool)
 
 		r := NewRequester(srv.URL, "smf-1", neID, clientTLS)
 		if err := r.ActivateTask(trigger); err != nil {
@@ -156,7 +161,7 @@ func TestAnAnswerIsRefusedUnlessTheCertificateBindsTheAddressedElement(t *testin
 		// Issued by the same CA, valid for the dialled address, and binding some other
 		// element's identifier. Everything TLS checks passes.
 		cert, pool := liCert(t, "", certBindingURNPrefix+roleNE+":upf-9")
-		srv, clientTLS := answeringPOI(t, cert, pool, neID)
+		srv, clientTLS := answeringPOI(t, cert, pool)
 
 		r := NewRequester(srv.URL, "smf-1", neID, clientTLS)
 		err := r.ActivateTask(trigger)
@@ -173,7 +178,7 @@ func TestAnAnswerIsRefusedUnlessTheCertificateBindsTheAddressedElement(t *testin
 		// The role is part of the binding: a certificate saying this identifier is an
 		// ADMF says nothing about it as a network element.
 		cert, pool := liCert(t, "", certBindingURNPrefix+roleADMF+":"+neID)
-		srv, clientTLS := answeringPOI(t, cert, pool, neID)
+		srv, clientTLS := answeringPOI(t, cert, pool)
 
 		r := NewRequester(srv.URL, "smf-1", neID, clientTLS)
 		if err := r.ActivateTask(trigger); err == nil {
@@ -184,7 +189,7 @@ func TestAnAnswerIsRefusedUnlessTheCertificateBindsTheAddressedElement(t *testin
 	t.Run("bound by Subject UID", func(t *testing.T) {
 		// The other form clause 8.2.4 admits, which must work equally.
 		cert, pool := liCert(t, neID, "")
-		srv, clientTLS := answeringPOI(t, cert, pool, neID)
+		srv, clientTLS := answeringPOI(t, cert, pool)
 
 		r := NewRequester(srv.URL, "smf-1", neID, clientTLS)
 		if err := r.ActivateTask(trigger); err != nil {
