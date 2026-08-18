@@ -104,6 +104,23 @@ const (
 	// queue toward the MDF was full. The mediation function is reachable but
 	// slower than the offered rate.
 	NEIssueX3DeliveryLost = "x3DeliveryLost"
+	// NEIssueX2DeliveryLost is the same condition on the signalling interface: a
+	// record was built and could not be delivered, because the queue toward the MDF2
+	// was full.
+	//
+	// It is its own type rather than sharing x3DeliveryLost for the reason the three
+	// content types are separate — reports are throttled per type, so sharing one
+	// lets whichever fires first hide the other — and for a sharper one: an element
+	// may deliver X2 and X3 to different mediation functions belonging to the same
+	// agency, and "which interface is losing product" is the first thing that
+	// distinguishes a slow MDF from a slow element.
+	//
+	// The condition it names is deliberately not answerable by a reachability probe:
+	// a full queue at one instant is a burst the buffer exists to absorb, not a fault
+	// (see AsyncSender.Unreachable). So it is reported as the drops occur or it is
+	// not reported at all, which is why the pool's drop hook is the only site that
+	// can raise it.
+	NEIssueX2DeliveryLost = "x2DeliveryLost"
 	// NEIssueTaskingPurged: the keepalive fail-safe removed all tasking because the
 	// party responsible for it went quiet. Interception has stopped — which is the
 	// safe direction, since tasking must not outlive the authority for it — but the
@@ -133,6 +150,18 @@ const (
 	// what the ADMF is told is that something is currently broken rather than that
 	// the tasking is over.
 	NEIssueTriggerFaulty = "triggerFaulty"
+	// NEIssueDuplicationRefused: this element's own datapath refused a rule that
+	// carries out an interception it has accepted. The task is live, the element
+	// answered the provisioning function that it would intercept, and the traffic is
+	// not being duplicated.
+	//
+	// It is reported rather than only retried because retrying may not help: the
+	// datapath refuses a rule for reasons this element cannot resolve — capacity, a
+	// rule it cannot express — and an interception that is authorised and producing
+	// nothing is a condition only the ADMF can act on. Non-terminating: the next
+	// re-derivation attempts it again, so what the ADMF is told is that something is
+	// currently broken and not that the tasking is over.
+	NEIssueDuplicationRefused = "duplicationRefused"
 	// NEIssueX3TagInvalid: the datapath delivered content whose correlation tag is
 	// unusable, so the MDF cannot join the content to the session's signalling. The
 	// interception is running but its product is not correlatable — a fault the ADMF
@@ -217,17 +246,19 @@ type neIssueEncoding struct {
 // nothing is the "database cleared" the specification lists among the reasons to
 // send this message at all (10000).
 var neIssueEncodings = map[string]neIssueEncoding{
-	NEIssueX1ListenFailed:  {neIssueFaultReport, issueCodeTerminatingFault},
-	NEIssueX3EgressDown:    {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueMDFUnreachable:  {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueInvalidConfig:   {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueContentUntasked: {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3PuntLost:      {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3FramingLost:   {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3DeliveryLost:  {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3TagInvalid:    {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueReconcileFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueTriggerFaulty:   {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX1ListenFailed:     {neIssueFaultReport, issueCodeTerminatingFault},
+	NEIssueX3EgressDown:       {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueMDFUnreachable:     {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueInvalidConfig:      {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueContentUntasked:    {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3PuntLost:         {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3FramingLost:      {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3DeliveryLost:     {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX2DeliveryLost:     {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3TagInvalid:       {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueDuplicationRefused: {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueReconcileFailed:    {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueTriggerFaulty:      {neIssueFaultReport, issueCodeNonTerminatingFault},
 	// A withdrawal that has not landed yet is a fault this element is working on:
 	// it is retrying, and the trigger is still in its bookkeeping.
 	NEIssueTaskingWithdrawalFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},
@@ -289,6 +320,14 @@ type Reporter struct {
 	// failing inside one window would be one report, and which survived would be
 	// whichever failed first.
 	lastSent map[reportKey]time.Time
+	// sending is the set of keys whose report or retraction is in flight right now.
+	//
+	// It exists because the decision to send and the record of having sent are no
+	// longer one step, and something has to hold the key in between. It is also what
+	// bounds the dispatch form in NotifyAsync: a report site driven by packet rate
+	// finds its key reserved while the previous attempt is still outstanding, so one
+	// condition costs one attempt at a time however fast the condition recurs.
+	sending map[reportKey]bool
 	// reported is what this element has told the provisioning function is wrong and
 	// has not yet told it is right again. It is what makes a clearing report
 	// possible: knowing a fault *cleared* requires knowing it was previously set,
@@ -323,10 +362,21 @@ type reportKey struct {
 	condition string
 }
 
-// admit reports whether a report of this condition should be sent now, and records
-// that it was. It is the throttle, keyed per condition per scope rather than per
-// issue type.
-func (r *Reporter) admit(k reportKey) bool {
+// reserve reports whether a report of this condition should be sent now, and holds
+// the key for the send that follows. It is the throttle, keyed per condition per
+// scope rather than per issue type.
+//
+// It is the first half of what one step used to do: deciding to send and recording
+// that a send happened were the same operation, and that made both of them wrong. A
+// report that failed to reach the ADMF was recorded as made — suppressed for a
+// throttle window the ADMF never saw, and left in reported, from where a later
+// clearing report announced the end of something nobody had been told began.
+//
+// **The reservation is held for the duration of the send, not merely across the
+// decision.** That is what bounds NotifyAsync: releasing it at the decision would let
+// a per-packet report site admit again on the very next copy, which is the
+// goroutine-per-copy shape that form exists to avoid. End it with commit or release.
+func (r *Reporter) reserve(k reportKey) bool {
 	if r == nil {
 		return false
 	}
@@ -334,17 +384,68 @@ func (r *Reporter) admit(k reportKey) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.sending[k] {
+		return false
+	}
 	if last, ok := r.lastSent[k]; ok && r.now().Sub(last) < reportThrottle {
 		return false
 	}
-	r.lastSent[k] = r.now()
-	r.reported[k] = true
+	r.sending[k] = true
 
 	return true
 }
 
+// commit records that a reserved report reached the ADMF. The throttle window starts
+// here rather than at the decision, so a window only ever suppresses repeats of
+// something that was actually delivered, and the condition becomes retractable.
+func (r *Reporter) commit(k reportKey) {
+	if r == nil {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.sending, k)
+	r.lastSent[k] = r.now()
+	r.reported[k] = true
+}
+
+// release gives back a reservation whose send did not reach the ADMF. Nothing is
+// recorded: the condition is eligible again at the next observation, and no clearing
+// report can later refer to a fault that was never delivered.
+//
+// The exposure this closes was bounded — reportThrottle is 30s and faultwatch
+// re-observes at the same cadence, so a persistent condition was retried — but the
+// two lasting halves were not: the retraction for a fault nobody received, and a
+// failed retraction forgotten while the ADMF still held the fault.
+func (r *Reporter) release(k reportKey) {
+	if r == nil {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.sending, k)
+}
+
+// settle ends a reservation according to what the send established.
+//
+// Anything that is not a delivered send is treated as not delivered, which is the
+// direction the rule chooses deliberately: over-reporting a fault costs the ADMF a
+// duplicate, under-reporting costs it the fault.
+func (r *Reporter) settle(k reportKey, err error) {
+	if err != nil {
+		r.release(k)
+
+		return
+	}
+	r.commit(k)
+}
+
 // clearing reports whether a fault this element has reported at this key is now
-// being retracted, and forgets it.
+// being retracted, and reserves the key for the retraction.
 //
 // It answers false for a fault that was never reported, which is what stops a
 // watcher starting up on a healthy element from announcing recoveries from faults
@@ -354,6 +455,11 @@ func (r *Reporter) admit(k reportKey) bool {
 // fault clearing are two events and not a repetition, and an element that throttled
 // the second against the first would report a fault it never retracts — which is
 // worse than reporting neither, because the ADMF acts on the first.
+// It no longer forgets in front of the send. A retraction that failed used to leave
+// the ADMF holding a fault this element believed it had cleared and would never
+// mention again — the mirror of the report committed before its own send, and the
+// worse direction of the two, since nothing re-observes a fault that has gone away.
+// The record now survives until commitClear, so a failed retraction can be sent again.
 func (r *Reporter) clearing(k reportKey) bool {
 	if r == nil {
 		return false
@@ -362,15 +468,42 @@ func (r *Reporter) clearing(k reportKey) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.sending[k] {
+		return false
+	}
 	if !r.reported[k] {
 		return false
 	}
+	r.sending[k] = true
+
+	return true
+}
+
+// commitClear forgets a fault whose retraction reached the ADMF.
+func (r *Reporter) commitClear(k reportKey) {
+	if r == nil {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.sending, k)
 	delete(r.reported, k)
 	// The throttle is forgotten with it, so the same fault recurring immediately is
 	// reported rather than suppressed as a repeat of the one just retracted.
 	delete(r.lastSent, k)
+}
 
-	return true
+// settleClear ends a retraction's reservation according to what the send established.
+// A retraction that did not arrive leaves the fault recorded, so it stays retractable.
+func (r *Reporter) settleClear(k reportKey, err error) {
+	if err != nil {
+		r.release(k)
+
+		return
+	}
+	r.commitClear(k)
 }
 
 // NewReporter returns a Reporter that POSTs to the ADMF's X1 endpoint admfURL
@@ -386,6 +519,7 @@ func NewReporter(admfURL, admfID, neID string, tlsConfig *tls.Config) *Reporter 
 		},
 		now:      func() time.Time { return time.Now().UTC() },
 		lastSent: make(map[reportKey]time.Time),
+		sending:  make(map[reportKey]bool),
 		reported: make(map[reportKey]bool),
 	}
 }
@@ -393,15 +527,13 @@ func NewReporter(admfURL, admfID, neID string, tlsConfig *tls.Config) *Reporter 
 // reportTemplate emits an X1Request carrying a ReportNEIssueRequest in the
 // conventional ns1/xsi wire form (Go's encoding/xml can't produce the xsi:type
 // QName cleanly), mirroring the response template.
-var reportTemplate = template.Must(template.New("x1report").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var reportTemplate = template.Must(template.New("x1report").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:ReportNEIssueRequest">
     <ns1:admfIdentifier>{{esc .AdmfID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .TxID}}</ns1:x1TransactionId>
     <ns1:typeOfNeIssueMessage>{{esc .Kind}}</ns1:typeOfNeIssueMessage>
     <ns1:description>{{esc .Description}}</ns1:description>
@@ -440,15 +572,13 @@ const (
 // reportTaskTemplate emits an X1Request carrying a ReportTaskIssueRequest. Element
 // order follows the ReportTaskIssueRequest xs:sequence: xId, taskReportType, then
 // the optional error code and details.
-var reportTaskTemplate = template.Must(template.New("x1taskissue").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var reportTaskTemplate = template.Must(template.New("x1taskissue").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:ReportTaskIssueRequest">
     <ns1:admfIdentifier>{{esc .AdmfID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .TxID}}</ns1:x1TransactionId>
     <ns1:xId>{{esc .XID}}</ns1:xId>
     <ns1:taskReportType>{{esc .ReportType}}</ns1:taskReportType>
@@ -476,6 +606,41 @@ func (r *Reporter) Notify(issueType, description string) {
 	}
 	//nolint:errcheck // fire-and-forget by design; see the doc comment
 	_ = r.ReportNEIssue(issueType, description)
+}
+
+// NotifyAsync reports an NE-level issue without blocking the caller. It is the form
+// for a path that may not wait — a data-plane loop, a signalling path, or an X1
+// request goroutine — and it is the answer to that hazard for every network function,
+// so none of them hand-rolls its own.
+//
+// **The throttle is consulted here, synchronously, and the POST is dispatched only
+// when the report is going to be sent.** That ordering is the whole design, and it is
+// why this is not `go Notify`. The shipper's report sites fire per dropped copy, so
+// spawning first would spawn a goroutine per packet, each of which takes this mutex,
+// discovers it is throttled and exits — trading a 10s stall for unbounded goroutine
+// churn on the one path that must stay cheap. With the check first, an admitted report
+// costs one goroutine per condition per throttle window and a suppressed one costs a
+// lock acquisition. The reservation is held until the send settles, so a condition
+// recurring at packet rate has at most one attempt outstanding.
+//
+// It dispatches reportNEIssueAs and not Notify or ReportNEIssue: those consult the
+// throttle themselves, so reserving here and then calling one of them reserves twice
+// on one key, and the second call suppresses the message the first just allowed —
+// which would silently turn this channel off rather than make it non-blocking.
+func (r *Reporter) NotifyAsync(issueType, description string) {
+	if r == nil {
+		return
+	}
+
+	k := reportKey{scope: scopeElement, condition: issueType}
+	if !r.reserve(k) {
+		return
+	}
+	encoding := encodeNEIssue(issueType)
+
+	go func() {
+		r.settle(k, r.reportNEIssueAs(issueType, encoding.kind, encoding.code, description))
+	}()
 }
 
 // NotifyTask reports a per-task issue and discards the outcome — the task-scoped
@@ -528,15 +693,13 @@ func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
 // reportDestinationTemplate emits an X1Request carrying a
 // ReportDestinationIssueRequest. Element order follows its xs:sequence: dId,
 // destinationReportType, then the optional error code and details.
-var reportDestinationTemplate = template.Must(template.New("x1destissue").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var reportDestinationTemplate = template.Must(template.New("x1destissue").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:ReportDestinationIssueRequest">
     <ns1:admfIdentifier>{{esc .AdmfID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .TxID}}</ns1:x1TransactionId>
     <ns1:dId>{{esc .DID}}</ns1:dId>
     <ns1:destinationReportType>{{esc .ReportType}}</ns1:destinationReportType>
@@ -572,11 +735,14 @@ func (r *Reporter) NotifyDestinationFault(did, condition, details string) {
 	if r == nil {
 		return
 	}
-	if !r.admit(reportKey{scope: scopeDestination, id: did, condition: condition}) {
+	k := reportKey{scope: scopeDestination, id: did, condition: condition}
+	if !r.reserve(k) {
 		return
 	}
-	//nolint:errcheck // fire-and-forget by design; see Notify
-	_ = r.ReportDestinationIssue(did, TaskReportNonTerminatingFault, condition+": "+details)
+	// Fire-and-forget in what it tells the caller, not in what it records: the outcome
+	// has nowhere to go but it still decides whether this element may claim to have
+	// reported the fault.
+	r.settle(k, r.ReportDestinationIssue(did, TaskReportNonTerminatingFault, condition+": "+details))
 }
 
 // NotifyElementFault reports a condition at network-element scope, once per
@@ -590,15 +756,15 @@ func (r *Reporter) NotifyElementFault(condition, description string) {
 	if r == nil {
 		return
 	}
-	if !r.admit(reportKey{scope: scopeElement, condition: condition}) {
+	k := reportKey{scope: scopeElement, condition: condition}
+	if !r.reserve(k) {
 		return
 	}
 	// reportNEIssueAs and not ReportNEIssue: that one consults the throttle itself,
-	// and admitting twice on one key means the second call suppresses the message
+	// and reserving twice on one key means the second call suppresses the message
 	// the first just allowed.
 	encoding := encodeNEIssue(condition)
-	//nolint:errcheck // fire-and-forget by design; see Notify
-	_ = r.reportNEIssueAs(condition, encoding.kind, encoding.code, description)
+	r.settle(k, r.reportNEIssueAs(condition, encoding.kind, encoding.code, description))
 }
 
 // NotifyElementClear retracts a network-element-level fault previously reported,
@@ -611,11 +777,11 @@ func (r *Reporter) NotifyElementClear(condition string) {
 	if r == nil {
 		return
 	}
-	if !r.clearing(reportKey{scope: scopeElement, condition: condition}) {
+	k := reportKey{scope: scopeElement, condition: condition}
+	if !r.clearing(k) {
 		return
 	}
-	//nolint:errcheck // fire-and-forget by design; see Notify
-	_ = r.reportNEIssueAs(condition, neIssueFaultCleared, 0, condition+": resolved")
+	r.settleClear(k, r.reportNEIssueAs(condition, neIssueFaultCleared, 0, condition+": resolved"))
 }
 
 // NotifyDestinationClear retracts a fault previously reported for a destination,
@@ -628,11 +794,11 @@ func (r *Reporter) NotifyDestinationClear(did, condition string) {
 	if r == nil {
 		return
 	}
-	if !r.clearing(reportKey{scope: scopeDestination, id: did, condition: condition}) {
+	k := reportKey{scope: scopeDestination, id: did, condition: condition}
+	if !r.clearing(k) {
 		return
 	}
-	//nolint:errcheck // fire-and-forget by design; see Notify
-	_ = r.ReportDestinationIssue(did, TaskReportAllClear, condition+": resolved")
+	r.settleClear(k, r.ReportDestinationIssue(did, TaskReportAllClear, condition+": resolved"))
 }
 
 // ReportDestinationIssue POSTs a ReportDestinationIssueRequest to the ADMF
@@ -674,7 +840,8 @@ func (r *Reporter) ReportDestinationIssue(did, reportType, details string) error
 func (r *Reporter) ReportNEIssue(issueType, description string) error {
 	// Throttle repeats of the same issue type so a persistent fault does not
 	// flood the ADMF; safe to call on every failed event.
-	if !r.admit(reportKey{scope: scopeElement, condition: issueType}) {
+	k := reportKey{scope: scopeElement, condition: issueType}
+	if !r.reserve(k) {
 		return nil
 	}
 
@@ -683,7 +850,10 @@ func (r *Reporter) ReportNEIssue(issueType, description string) error {
 	// fault from another.
 	encoding := encodeNEIssue(issueType)
 
-	return r.reportNEIssueAs(issueType, encoding.kind, encoding.code, description)
+	err := r.reportNEIssueAs(issueType, encoding.kind, encoding.code, description)
+	r.settle(k, err)
+
+	return err
 }
 
 // reportNEIssueAs renders and sends a ReportNEIssue with the message kind stated

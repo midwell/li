@@ -109,6 +109,13 @@ func (c *keepaliveCounter) issued() uint32 {
 // The specification's own timers, clause 6.2.4: "by default TIME_P1 shall be 60
 // seconds", "by default TIME_P2 shall be 180 seconds".
 const (
+	// MinKeepaliveTime is the shortest either timer may be. TS 103 221-2 clause 6.2.4
+	// gives both as an integer number of seconds, so anything below one second is not a
+	// value the interface can express — and the sub-second end is where the arithmetic
+	// around them stops behaving: a window divided to produce a tick interval reaches
+	// zero, and a timer that fires continuously is a fault rather than a fast keepalive.
+	MinKeepaliveTime = time.Second
+
 	DefaultTimeP1 = 60 * time.Second
 	DefaultTimeP2 = 180 * time.Second
 )
@@ -167,6 +174,16 @@ type KeepaliveConfig struct {
 // repositories would be three chances for one of them to drift into accepting timers
 // that disconnect every connection on schedule.
 //
+// **The constructors deliberately do not call it.** NewClient, NewPool and
+// NewAsyncSender return no error, so a constructor that validated could only clamp an
+// out-of-range value to the defaults — which is not enforcement, and would hide exactly
+// the mistake this exists to surface — or change its signature, which is an API break
+// for three network functions to guard a path none of them takes. All three call this
+// themselves before building anything (amf and smf lawfulintercept, upf pfcpiface), so
+// what a constructor check would add is a second answer for a configuration that has
+// already been refused. If a caller ever appears that does not validate, that is the
+// point to revisit this.
+//
 // The specification constrains only that each timer is at least one second. The
 // relationship between them is left implied, and the implication is not subtle:
 // TIME_P2 is the time allowed for an acknowledgement, TIME_P1 the interval between
@@ -177,6 +194,15 @@ type KeepaliveConfig struct {
 func (k KeepaliveConfig) Validate() error {
 	if k.TimeP1 < 0 || k.TimeP2 < 0 {
 		return fmt.Errorf("x2x3: keepalive timers must not be negative (TIME_P1 %s, TIME_P2 %s)", k.TimeP1, k.TimeP2)
+	}
+	// The one-second minimum this comment has always described, now enforced. Zero is
+	// not a value: it means "unset", and withDefaults supplies the specification's own
+	// timer for it — which is why the test is on a positive value below the floor
+	// rather than on anything that is not at least a second.
+	if (k.TimeP1 > 0 && k.TimeP1 < MinKeepaliveTime) || (k.TimeP2 > 0 && k.TimeP2 < MinKeepaliveTime) {
+		return fmt.Errorf(
+			"x2x3: keepalive timers must be at least %s, which is the resolution TS 103 221-2 clause 6.2.4 expresses them in (TIME_P1 %s, TIME_P2 %s)",
+			MinKeepaliveTime, k.TimeP1, k.TimeP2)
 	}
 
 	e := k.withDefaults()
@@ -335,7 +361,7 @@ func (c *Client) writeOn(st *connState, b []byte) error {
 	if c.live != st {
 		return errStaleConn
 	}
-	if err := c.writeLocked(b); err != nil {
+	if _, err := c.writeLocked(b); err != nil {
 		// Drop rather than redial here: the next delivery redials, and a keepalive
 		// has nothing to deliver that would justify dialling on its own.
 		c.dropLocked()

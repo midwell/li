@@ -498,7 +498,7 @@ func TestOriginatedRequestsValidate(t *testing.T) {
 	// fresh store per request made the last step a deactivation of something that had never
 	// existed. It passed anyway while an unheld deactivation was acknowledged; once that
 	// became the 2020 the specification requires, the test said so.
-	srv := NewServer(store.New(), "upf-1", WithADMF("smf-1"))
+	srv := NewServer(store.New(), "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
 	srv.now = func() time.Time { return zeroTailInstant }
 
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

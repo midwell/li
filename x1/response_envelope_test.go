@@ -31,7 +31,7 @@ func echoedEnvelope(t *testing.T, send func(*Requester) error) X1ResponseMessage
 	t.Helper()
 
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
 	peer := certWithUID(t, "smf-1")
 
 	var raw string
@@ -164,7 +164,7 @@ func TestEveryResponseThisElementReturnsCarriesTheFullEnvelope(t *testing.T) {
 // value has to be the one the *request* carried.
 func TestTheTransactionIdentifierIsEchoedExactly(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
 	peer := certWithUID(t, "smf-1")
 
 	var sent, echoed string
@@ -239,7 +239,7 @@ func TestTheRequesterAlwaysGeneratesAConformantTransactionIdentifier(t *testing.
 // worth asserting rather than assuming.
 func TestASingleRequestIsAnsweredWithASingleMessage(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
 	peer := certWithUID(t, "smf-1")
 
 	var counted int

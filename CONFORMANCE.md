@@ -78,6 +78,26 @@ implement is declared, not faked"*, and each is summarised in `README.md`'s feat
   several tasks matching one subject each produce their own xIRI.
 - **Service-type scoping of a task** (`listOfServiceTypes`), which is refused rather than
   acknowledged and ignored.
+- **A provisioned `correlationID` at an information point of interception** (TS 103 221-1
+  clause 6.2.1.2). Refused at the AMF and the SMF, honoured at the UPF, and this is the one
+  disposition in this list that depends on *which element is asked* rather than on the field.
+
+  A content POI stamps the provisioned value on every unit it delivers, and an LI_T3 trigger
+  carries one mandatorily, so the UPF acts on it. An IRI-POI in a 5G core cannot: the
+  correlation that joins its records to a session's content is derived from the session — the
+  SMF sends its F-SEID — and one task covers many sessions, so a single provisioned value
+  applied to all of them would join at the mediation function what the network keeps separate.
+  That is not what an ADMF asking for a correlation wants, and the element cannot ask which it
+  meant.
+
+  Until now it was parsed, stored and then ignored at both IRI-POIs, which is the case this
+  project's *"A task field that cannot be honoured is refused, not ignored"* requirement exists
+  to prevent: the ADMF was acknowledged and given an interception different from the one it
+  authorised, with no channel through which the divergence could be reported. **An ADMF that
+  provisions `correlationID` for an AMF or SMF task must stop**; the refusal carries error 3000
+  or 3001 and names the reason. Refusing it at every element was considered and rejected — it
+  would refuse tasking an ADMF may legitimately send to several elements at once, which is the
+  same reasoning the recognised-extension case already follows.
 
 ## How to read a disposition
 

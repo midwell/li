@@ -6,6 +6,7 @@ package x1
 import (
 	"crypto/x509"
 	"encoding/asn1"
+	"strings"
 )
 
 // X1 error codes (TS 103 221-1 table 6.7-3) used by peer authentication.
@@ -57,6 +58,12 @@ const (
 // certificate binding URN. TS 103 221-1 annex G (table G.2-1) defines "ADMF" and
 // "NE"; an NE checks its peer against the former, and presents the latter itself.
 const roleADMF = "ADMF"
+
+// roleNE is the other side of the same table: the role a network element presents,
+// and therefore the role a *requester* checks when it is the one being answered. A
+// triggering function tasking a triggered POI is the ADMF to that POI's NE, so the
+// answer it receives is bound in this role.
+const roleNE = "NE"
 
 // certBindingURNPrefix is the ETSI TC LI namespace prefix of a certificate
 // binding URN: urn:etsi:li:103221-1:cert-binding:{role}:{identifier}.
@@ -112,6 +119,42 @@ func certUID(cert *x509.Certificate) string {
 		}
 		if v, ok := n.Value.(string); ok {
 			return v
+		}
+	}
+
+	return ""
+}
+
+// certIdentifier returns the X1 identifier cert carries for the given role, from
+// either of the two forms clause 8.2.4 defines: the Subject UID relative
+// distinguished name, or an annex G certificate binding URI.
+//
+// certBinds answers "does this certificate bind *this* identifier", which is the
+// question authentication asks. certUID answers "who does the Subject say it is",
+// which is what clause 6.1 needs when a request could not be parsed. This is the
+// second question asked of both forms, and it exists because answering it from the
+// Subject alone cannot name a peer whose identity is carried only by the URI — a form
+// certBinds accepts for authentication. Such a peer was answered with an empty
+// identifier and therefore a message invalid against the schema, which compounds the
+// fault instead of reporting it.
+//
+// The role is part of the question because the URN carries it: a certificate binding
+// an identifier as an ADMF says nothing about that identifier as an NE.
+func certIdentifier(cert *x509.Certificate, role string) string {
+	if uid := certUID(cert); uid != "" {
+		return uid
+	}
+	if cert == nil {
+		return ""
+	}
+
+	prefix := certBindingURNPrefix + role + ":"
+	for _, u := range cert.URIs {
+		if u == nil {
+			continue
+		}
+		if id, found := strings.CutPrefix(u.String(), prefix); found && id != "" {
+			return id
 		}
 	}
 

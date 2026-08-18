@@ -136,11 +136,43 @@ type Server struct {
 	deactivateAllDisabled        bool
 	removeAllDestinationsEnabled bool
 
+	// transitionMu makes a task transition and the notification that carries it one
+	// indivisible step, against every other task operation including the fail-safe
+	// purge.
+	//
+	// **The interleaving that matters is not two activations.** It is an activation
+	// racing the keepalive-lapse purge, which snapshots the held tasks and only then
+	// empties the store: a task stored in between is removed from the store with no
+	// onTaskChange(task, nil) at all. The element then answers the ADMF "activated",
+	// holds nothing, and leaves the POI applying tasking that no longer exists
+	// anywhere — at a triggering function, content interception surviving a purge
+	// whose whole purpose was to stop everything, kept alive by the keepalives the
+	// forgotten trigger goes on earning. That is the worst of the available
+	// directions, and an unsynchronised read-modify-notify reaches it first.
+	//
+	// The POI callback runs *under* this lock, which serialises X1 provisioning
+	// against itself for the duration of the callback — at the UPF, a session walk.
+	// That is the correct reading of the interface rather than a concession:
+	// purgeAllTasking and notifyRemoved already document ordering guarantees ("the
+	// store is cleared first, so a POI re-deriving during its own teardown sees an
+	// empty one"; "what is being reported is that interception stopped, so it must
+	// have stopped") which mean nothing unless no other transition can interleave.
+	// The lock makes an assumption that was already relied on true.
+	//
+	// It is not taken by the fault probes or by recordActivity. Probes are documented
+	// as safe to call from the X1 request goroutine and perform no I/O, so a
+	// GetNEStatus must not queue behind a DeactivateTask's session walk; recordActivity
+	// keeps mu. Where both are held, this one is taken first.
+	transitionMu sync.Mutex
+
 	mu       sync.Mutex
 	lastSeen time.Time // time of the last X1 message from the ADMF (keepalive watchdog)
 	// requireDIDs refuses a CC task whose destinations are unknown, rather than
 	// accepting it and delivering nothing.
 	requireDIDs bool
+	// honoursCorrelation records that this element acts on a provisioned correlation
+	// value. See HonoursCorrelationID.
+	honoursCorrelation bool
 	// destinations maps a DID provisioned with CreateDestination to the destination it
 	// names. A task carries DIDs rather than addresses, so this is how an NE learns
 	// where to deliver product.
@@ -390,6 +422,26 @@ func BulkOptions(deactivateAllTasks, removeAllDestinations *bool) []Option {
 // destination it provisioned has been lost (a restart, say), so an acknowledgement
 // it cannot honour leaves content being dropped while the triggering function
 // believes interception is running.
+// HonoursCorrelationID declares that this element acts on a provisioned correlation
+// value, so a task carrying one is accepted rather than refused.
+//
+// **Whether a field can be honoured is a property of the element, not only of the
+// field**, and this is the field that forced that distinction. A content POI stamps the
+// provisioned value on every unit it delivers and an LI_T3 trigger carries one
+// mandatorily, so the UPF's CC-POI sets this. An information POI in a 5G core cannot:
+// the correlation that joins its records to a session's content is the session's, one
+// task covers many sessions, and a single provisioned value applied to all of them
+// would join at the mediation function what the network keeps separate. So the AMF and
+// SMF do not set it, and refuse the field instead.
+//
+// Refusing everywhere is not available either — it would refuse tasking an ADMF may
+// legitimately send to several elements at once, which is the reasoning the recognised
+// extension already follows. Neither uniform answer works, which is why the element's
+// role is part of the test.
+func HonoursCorrelationID() Option {
+	return func(s *Server) { s.honoursCorrelation = true }
+}
+
 func RequireResolvableDIDs() Option {
 	return func(s *Server) { s.requireDIDs = true }
 }
@@ -548,9 +600,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // has no x1TransactionId: table 6.1-1 makes that field conditional and says it
 // "shall be omitted for 'TopLevelError' situations", which is consistent, since
 // the identifier would have had to come from the request nobody could read.
-var topLevelErrorTemplate = template.Must(template.New("x1tle").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var topLevelErrorTemplate = template.Must(template.New("x1tle").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1TopLevelErrorResponse xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10">
   <ns1:admfIdentifier>{{esc .AdmfID}}</ns1:admfIdentifier>
   <ns1:neIdentifier>{{esc .NeID}}</ns1:neIdentifier>
@@ -569,7 +619,12 @@ var topLevelErrorTemplate = template.Must(template.New("x1tle").Funcs(template.F
 func (s *Server) topLevelError(peer *x509.Certificate) []byte {
 	admf := s.admfID
 	if admf == "" {
-		admf = certUID(peer)
+		// Both binding forms, not just the Subject UID. certBinds accepts either that
+		// or an annex G binding URI when authenticating, so a peer identified solely by
+		// the second is one this element has already accepted and then could not name:
+		// it answered with an empty admfIdentifier, which does not validate against the
+		// schema, compounding the fault this message exists to report.
+		admf = certIdentifier(peer, roleADMF)
 	}
 
 	var body bytes.Buffer
@@ -660,16 +715,36 @@ func (s *Server) recordActivity() {
 	s.mu.Unlock()
 }
 
+// MinKeepaliveWindow is the shortest fail-safe window WatchKeepalive will run.
+//
+// It exists because the window is halved to produce the tick interval, and integer
+// division reaches zero: a window under two nanoseconds panicked time.NewTicker, on a
+// goroutine, taking the network function down. A second is far below any window a
+// deployment would choose and far above the arithmetic's floor, which is what a guard
+// against a configuration mistake should be.
+const MinKeepaliveWindow = time.Second
+
 // WatchKeepalive enforces the TS 103 221-1 keepalive fail-safe: if no X1 message
 // arrives from the ADMF within timeout, all tasking is purged (the controlling
 // ADMF is presumed gone, so warrants must not persist). It blocks — run it in a
-// goroutine; timeout must be > 0.
+// goroutine.
+//
+// A timeout below MinKeepaliveWindow is refused: the watchdog does not start, and this
+// returns rather than running with a window it cannot measure. The callers all check
+// their configured value first and report an unusable one to the ADMF, which is where
+// an operator's mistake should be caught — but the contract used to be stated as
+// "timeout must be > 0", which 1ns satisfies and then panicked the process. A library
+// whose precondition is wrong is one every future caller inherits, and this one is
+// being upstreamed.
 //
 // It returns when stop is closed. A network function passes nil, since the
 // fail-safe must run for as long as the element can hold tasking; a nil channel
 // never becomes ready, so the watchdog simply never stops. Tests pass a real
 // channel so each one does not leave a ticker and a goroutine behind.
 func (s *Server) WatchKeepalive(timeout time.Duration, stop <-chan struct{}) {
+	if timeout < MinKeepaliveWindow {
+		return
+	}
 	s.recordActivity() // seed, so a freshly-started NE does not purge immediately
 	ticker := time.NewTicker(timeout / 2)
 	defer ticker.Stop()
@@ -710,12 +785,31 @@ func (s *Server) purgeIfLapsed(timeout time.Duration) {
 // Both the keepalive fail-safe and DeactivateAllTasks arrive here, which is what stops a bulk
 // deactivation becoming a second, subtly different implementation of the same thing.
 func (s *Server) purgeAllTasking(reason PurgeReason) {
+	// Held across snapshot, clear and teardown. Without it a task activated between
+	// the snapshot and the clear is removed with no teardown of its own — see
+	// transitionMu.
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
 	tasks := s.store.Snapshot()
+	// nil in production. It exists because the window between the snapshot and the
+	// clear is a few instructions wide, so the interleaving it used to admit cannot be
+	// reached by racing two goroutines and hoping — and a property this consequential
+	// asserted by hope is one that passes against the defect. See
+	// TestAnActivationRacingTheFailSafePurgeLeavesNoOrphan, which holds the purge open
+	// here and is mutation-verified against the unsynchronised ordering.
+	if afterPurgeSnapshot != nil {
+		afterPurgeSnapshot()
+	}
 	s.store.DeactivateAll()
 	for _, t := range tasks {
 		s.notifyRemoved(t, reason)
 	}
 }
+
+// afterPurgeSnapshot is called between reading the tasks a purge will tear down and
+// emptying the store. Set only by tests; nil otherwise.
+var afterPurgeSnapshot func()
 
 // deactivateAll performs the bulk deactivation TS 103 221-1 requires every implementation to
 // support: "If enabled, the DeactivateAllTasks command shall perform a 'DeactivateTask' command
@@ -804,6 +898,102 @@ func (s *Server) removeAllDestinations() {
 	s.destinations = make(map[string]heldDestination)
 }
 
+// applyTaskTransition performs an activation or a modification as one indivisible
+// step: read the task this element currently holds, replace it in the store, and tell
+// the point of interception — with no other task operation, bulk deactivation or
+// fail-safe purge able to interleave.
+//
+// The three used to be separate operations under no shared lock, on a server net/http
+// gives a goroutine per request. See transitionMu for what that let through, and why
+// the notification is issued from inside the operation rather than after it.
+func (s *Server) applyTaskTransition(m X1RequestMessage, isModify bool) (int, error) {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
+	var (
+		err  error
+		code int // TS 103 221-1 error code; 0 means "pick the generic one"
+	)
+
+	// An activation naming an XID this element already holds replaces it rather
+	// than being refused, which is deliberate: re-provisioning is how an ADMF
+	// restores tasking after an element restarts, and refusing it
+	// would break the recovery path the fault reporting exists to trigger.
+	// Modifying tasking that is *not* held has no such reading and is refused
+	// below.
+	//
+	// The task already held is read for both, so that a replacement carries what
+	// it replaces to the POI: an activation over a held XID changes this
+	// element's tasking exactly as a modification does, and a POI told only
+	// about the new task has no way to take down the state it applied for the
+	// old one.
+	var prevTask types.InterceptTask
+	var hadPrev bool
+	if m.TaskDetails != nil {
+		prevTask, hadPrev = s.store.Get(types.XID(m.TaskDetails.XID))
+	}
+	// Two questions answered before the switch, because each one picks a case, and
+	// answered here rather than inside taskFromDetails because the code for a task
+	// refusal differs between an activation and a modification.
+	//
+	// They are separate questions and stay separate: a value that violates the format
+	// its schema defines is malformed, which is a general message error, while a field
+	// this element cannot honour is a well-formed instruction it must refuse. The
+	// registry orders them the same way, and so does the switch.
+	var malformed, unhonourable error
+	if m.TaskDetails != nil {
+		malformed = malformedTaskIdentifiers(*m.TaskDetails)
+		unhonourable = unhonourableTaskFields(*m.TaskDetails, s.honoursCorrelation)
+	}
+	switch {
+	case isModify && m.TaskDetails == nil:
+		err = fmt.Errorf("missing taskDetails")
+	case malformed != nil:
+		// Before the "no such task" check below, deliberately. A ModifyTask naming a
+		// malformed xId reached that check first and was refused with 2020, "XID does
+		// not exist on NE" — true, but an accident of ordering, and it points the ADMF
+		// at activating a task that would fail for the same reason. 1010 names the
+		// actual fault, and "implementers shall use the most specific error code
+		// available".
+		err = malformed
+		code = errorCode(err)
+	case unhonourable != nil:
+		err = unhonourable
+		code = errorCode(err)
+		if code == 0 {
+			code = taskFailureCode(isModify)
+		}
+	case isModify && !hadPrev:
+		// Applying this would silently create the task, leaving the ADMF believing
+		// it had adjusted an interception that never existed here — the same class
+		// of undetected divergence as tasking lost to a restart. Answering
+		// "no such task" is what lets it activate the warrant instead.
+		err = fmt.Errorf("no such task")
+		code = errCodeNoSuchTask
+	default:
+		var task types.InterceptTask
+		task, err = s.activate(m)
+		// A refusal from the activate path may name its own code — a malformed
+		// identifier is a schema error, not a generic failure — so it travels
+		// rather than being flattened below.
+		code = errorCode(err)
+		if err != nil && code == 0 {
+			// What is left is a refusal whose reason is in the description: a POI's
+			// CanApply saying it cannot carry out this task, or a field of the task
+			// details this element will not accept. 3000/3001 are the registry's own
+			// "details of why the Task cannot be activated/modified", which is what
+			// that is; 1000 says only that something went wrong, and an ADMF reads
+			// the code before the text.
+			code = taskFailureCode(isModify)
+		}
+		if err == nil {
+			s.notifyChanged(prevTask, hadPrev, task)
+		}
+	}
+
+	return code, err
+}
+
 func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	rm := X1ResponseMessage{
 		AdmfIdentifier:   m.AdmfIdentifier,
@@ -817,82 +1007,7 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 	var code int // TS 103 221-1 error code; 0 means "pick the generic one"
 	switch localType(m.Type) {
 	case "ActivateTaskRequest", "ModifyTaskRequest":
-		// An activation naming an XID this element already holds replaces it rather
-		// than being refused, which is deliberate: re-provisioning is how an ADMF
-		// restores tasking after an element restarts, and refusing it
-		// would break the recovery path the fault reporting exists to trigger.
-		// Modifying tasking that is *not* held has no such reading and is refused
-		// below.
-		//
-		// The task already held is read for both, so that a replacement carries what
-		// it replaces to the POI: an activation over a held XID changes this
-		// element's tasking exactly as a modification does, and a POI told only
-		// about the new task has no way to take down the state it applied for the
-		// old one.
-		isModify := localType(m.Type) == "ModifyTaskRequest"
-		var prevTask types.InterceptTask
-		var hadPrev bool
-		if m.TaskDetails != nil {
-			prevTask, hadPrev = s.store.Get(types.XID(m.TaskDetails.XID))
-		}
-		// Two questions answered before the switch, because each one picks a case, and
-		// answered here rather than inside taskFromDetails because the code for a task
-		// refusal differs between an activation and a modification.
-		//
-		// They are separate questions and stay separate: a value that violates the format
-		// its schema defines is malformed, which is a general message error, while a field
-		// this element cannot honour is a well-formed instruction it must refuse. The
-		// registry orders them the same way, and so does the switch.
-		var malformed, unhonourable error
-		if m.TaskDetails != nil {
-			malformed = malformedTaskIdentifiers(*m.TaskDetails)
-			unhonourable = unhonourableTaskFields(*m.TaskDetails)
-		}
-		switch {
-		case isModify && m.TaskDetails == nil:
-			err = fmt.Errorf("missing taskDetails")
-		case malformed != nil:
-			// Before the "no such task" check below, deliberately. A ModifyTask naming a
-			// malformed xId reached that check first and was refused with 2020, "XID does
-			// not exist on NE" — true, but an accident of ordering, and it points the ADMF
-			// at activating a task that would fail for the same reason. 1010 names the
-			// actual fault, and "implementers shall use the most specific error code
-			// available".
-			err = malformed
-			code = errorCode(err)
-		case unhonourable != nil:
-			err = unhonourable
-			code = errorCode(err)
-			if code == 0 {
-				code = taskFailureCode(isModify)
-			}
-		case isModify && !hadPrev:
-			// Applying this would silently create the task, leaving the ADMF believing
-			// it had adjusted an interception that never existed here — the same class
-			// of undetected divergence as tasking lost to a restart. Answering
-			// "no such task" is what lets it activate the warrant instead.
-			err = fmt.Errorf("no such task")
-			code = errCodeNoSuchTask
-		default:
-			var task types.InterceptTask
-			task, err = s.activate(m)
-			// A refusal from the activate path may name its own code — a malformed
-			// identifier is a schema error, not a generic failure — so it travels
-			// rather than being flattened below.
-			code = errorCode(err)
-			if err != nil && code == 0 {
-				// What is left is a refusal whose reason is in the description: a POI's
-				// CanApply saying it cannot carry out this task, or a field of the task
-				// details this element will not accept. 3000/3001 are the registry's own
-				// "details of why the Task cannot be activated/modified", which is what
-				// that is; 1000 says only that something went wrong, and an ADMF reads
-				// the code before the text.
-				code = taskFailureCode(isModify)
-			}
-			if err == nil {
-				s.notifyChanged(prevTask, hadPrev, task)
-			}
-		}
+		code, err = s.applyTaskTransition(m, localType(m.Type) == "ModifyTaskRequest")
 		rm.Type = strings.Replace(localType(m.Type), "Request", "Response", 1)
 	case "DeactivateTaskRequest":
 		code, err = s.deactivate(m.XID)
@@ -1059,6 +1174,11 @@ func (s *Server) deactivate(xid string) (int, error) {
 	if err := validIdentifier("xId", xid); err != nil {
 		return 0, err
 	}
+
+	// The validation above needs no lock and takes none; from here the operation
+	// touches this element's tasking, and read-remove-notify is one step.
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
 
 	// Read before removal so a POI can undo state it applied for the target (e.g. clear
 	// mid-session CC on the SMF), and so "was it held" is answered from the same read.
@@ -1248,7 +1368,18 @@ func (s *Server) activate(m X1RequestMessage) (types.InterceptTask, error) {
 	// store stamps the task state, so a caller comparing this against what it held
 	// before — which is how a replay is told from a change — must be comparing two
 	// values of the same provenance.
-	stored, _ := s.store.Get(task.XID)
+	//
+	// The found bool is honoured rather than discarded. Under the transition lock a
+	// concurrent removal can no longer land between the store and this read, so this
+	// is a guard on an interleaving that should now be impossible — but answering the
+	// absence as though it were the task just activated is the specific failure it
+	// guards against, and it is silent: the POI is handed a zero InterceptTask, with
+	// no XID and no targets, as a successful activation, and the ADMF is told the
+	// warrant is running.
+	stored, found := s.store.Get(task.XID)
+	if !found {
+		return types.InterceptTask{}, fmt.Errorf("task was removed before the activation completed")
+	}
 
 	return stored, nil
 }
@@ -1702,7 +1833,33 @@ func populatedLIT3Arms(id UPFLIT3Identifier) int {
 // What is deliberately *not* here: listOfMediationDetails and
 // implicitDeactivationAllowed, both of which pass. See their declarations for the
 // sentences that put them on the other side of the rule.
-func unhonourableTaskFields(td TaskDetails) error {
+// honoursCorrelation says whether this element acts on a provisioned correlation
+// value. It is a parameter rather than a property of td because the answer differs by
+// element — see HonoursCorrelationID — which cost this function its purity as a rule
+// about fields alone. That was the price of the requirement's own conclusion: a field
+// one point of interception honours and another cannot has to follow the element.
+func unhonourableTaskFields(td TaskDetails, honoursCorrelation bool) error {
+	if td.CorrelationID != "" && !honoursCorrelation {
+		// Accepted and then ignored, until now: parsed into the task, stored, and never
+		// used by either IRI-POI — the AMF sends a zero correlation and the SMF sends
+		// the session's F-SEID. The value at stake is how the mediation function joins
+		// this element's records to a warrant's content, so an ADMF that provisioned it
+		// per clause 6.2.1.2 received an acknowledgement and a different interception
+		// from the one it authorised, with no channel through which the divergence
+		// could be reported. That is precisely what this function exists to prevent.
+		//
+		// Honouring it here is not the alternative: a 5G correlation is per session by
+		// construction, and one provisioned value across the many sessions a task covers
+		// would collapse them into one stream at the mediation function. Refusing names
+		// the divergence at the moment it can still be corrected.
+		//
+		// No code is attached, so the caller supplies 3000 or 3001 by whether it is
+		// serving an activation or a modification — the registry's own "details of why
+		// the Task cannot be activated/modified", which is what this is.
+		return fmt.Errorf("a provisioned correlationID is not supported by this element: " +
+			"its correlation is derived per session, so one value cannot serve a task covering many")
+	}
+
 	if len(td.ListOfServiceTypes) > 0 {
 		// This element applies no service-type scoping, so honouring the task as sent
 		// would intercept every service for the target when a narrower set was
@@ -1859,6 +2016,19 @@ func refuse(code int, format string, args ...any) error {
 // supportedVersion is the X1 interface version this element speaks, and the value it
 // substitutes when a peer's is not one the schema admits.
 const supportedVersion = "v1.6.1"
+
+// x1TemplateFuncs is what every X1 template is given: XML escaping, and the interface
+// version this element speaks.
+//
+// version is a function rather than a literal in each template because there were eight
+// copies of the literal, and Requester.validate compares an answer against the constant.
+// Bumping the constant would therefore have made every request this element sends state
+// one version and every answer be checked against another — breaking the binding on all
+// eight at once, in a way no single template reads as wrong.
+var x1TemplateFuncs = template.FuncMap{
+	"esc":     escapeXML,
+	"version": func() string { return supportedVersion },
+}
 
 // versionPattern is the schema's Version restriction, `v1\.\d+\.\d+`.
 var versionPattern = regexp.MustCompile(`^v1\.\d+\.\d+$`)

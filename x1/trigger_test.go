@@ -138,7 +138,7 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 	// the triggering function is not authority in itself. httptest serves plain
 	// HTTP, so the peer certificate is supplied to Process directly, as the other
 	// listener tests do.
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
 	peer := certWithUID(t, "smf-1")
 	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
@@ -271,7 +271,7 @@ func TestCreateDestinationWireForm(t *testing.T) {
 // with CreateDestination is what tells the POI where its product goes.
 func TestDestinationProvisioningResolvesDIDs(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
 	peer := certWithUID(t, "smf-1")
 	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
@@ -430,7 +430,7 @@ func asRequestError(err error, out **RequestError) bool {
 // lapses at all.
 func TestKeepaliveIsAcknowledged(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"))
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
 	peer := certWithUID(t, "smf-1")
 	req, body := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
@@ -456,7 +456,7 @@ func TestKeepaliveIsAcknowledged(t *testing.T) {
 // can withdraw must not exist.
 func TestTaskXIDsReportsWhatThePOIHolds(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"), RequireResolvableDIDs())
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), RequireResolvableDIDs(), HonoursCorrelationID())
 	peer := certWithUID(t, "smf-1")
 	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler

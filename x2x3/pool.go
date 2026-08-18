@@ -109,28 +109,6 @@ func (p *Pool) For(addr string) Sender {
 	return s
 }
 
-// UnreachableAmong reports how many of addrs cannot currently be reached, and how many of
-// them this pool has attempted a delivery to at all.
-//
-// Both numbers, because an element may deliver to several agencies and "one of three" and
-// "three of three" call for different responses from a provisioning function. Neither names
-// an address: which destination is failing belongs to that destination's own status, not to
-// the element's, and a probe is the one place that distinction is easy to lose.
-//
-// The caller passes the destinations its *tasking* currently names, and that is the whole
-// point of the argument. A pool never forgets a client, so a destination whose last delivery
-// failed and whose warrant was then withdrawn would otherwise count for the life of the
-// process — nothing will ever deliver there again to clear it, and an element holding no
-// tasking at all would report itself faulty. That is the probe-stuck-on failure this design
-// exists to avoid, and it is answered by asking only about destinations still in use.
-//
-// A destination nothing has been sent to is not counted either way — see Client.Unreachable —
-// so an element that has delivered nothing reports nothing. A destination named twice counts
-// once: two warrants to one agency are one place product goes, and counting it twice would
-// make "2 of 2 unreachable" out of a single failing endpoint.
-//
-// It performs no I/O and answers from state each client already holds, so it is safe to call
-// from a fault probe on the X1 request goroutine.
 // UnreachableAt answers for one address what UnreachableAmong counts over many: is
 // this destination currently unreachable.
 //
@@ -154,6 +132,28 @@ func (p *Pool) UnreachableAt(addr string) bool {
 	return ok && r.Unreachable()
 }
 
+// UnreachableAmong reports how many of addrs cannot currently be reached, and how many of
+// them this pool has attempted a delivery to at all.
+//
+// Both numbers, because an element may deliver to several agencies and "one of three" and
+// "three of three" call for different responses from a provisioning function. Neither names
+// an address: which destination is failing belongs to that destination's own status, not to
+// the element's, and a probe is the one place that distinction is easy to lose.
+//
+// The caller passes the destinations its *tasking* currently names, and that is the whole
+// point of the argument. A pool never forgets a client, so a destination whose last delivery
+// failed and whose warrant was then withdrawn would otherwise count for the life of the
+// process — nothing will ever deliver there again to clear it, and an element holding no
+// tasking at all would report itself faulty. That is the probe-stuck-on failure this design
+// exists to avoid, and it is answered by asking only about destinations still in use.
+//
+// A destination nothing has been sent to is not counted either way — see Client.Unreachable —
+// so an element that has delivered nothing reports nothing. A destination named twice counts
+// once: two warrants to one agency are one place product goes, and counting it twice would
+// make "2 of 2 unreachable" out of a single failing endpoint.
+//
+// It performs no I/O and answers from state each client already holds, so it is safe to call
+// from a fault probe on the X1 request goroutine.
 func (p *Pool) UnreachableAmong(addrs []string) (unreachable, inUse int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -32,11 +32,14 @@ import (
 // It logs nothing: what is tasked, and that anything is tasked at all, must not
 // reach general operator logs.
 type Requester struct {
-	neURL  string // the NE's X1 endpoint
-	ourID  string // identifier this requester asserts (the TF's own)
-	neID   string // the NE being addressed
-	client *http.Client
-	now    func() time.Time
+	// authenticated records that this element was given TLS material, and therefore
+	// that its peers' certificates are something it can hold them to.
+	authenticated bool
+	neURL         string // the NE's X1 endpoint
+	ourID         string // identifier this requester asserts (the TF's own)
+	neID          string // the NE being addressed
+	client        *http.Client
+	now           func() time.Time
 }
 
 // NewRequester returns a Requester that POSTs to a triggered POI's X1 endpoint
@@ -46,6 +49,9 @@ func NewRequester(neURL, ourID, neID string, tlsConfig *tls.Config) *Requester {
 		neURL: neURL,
 		ourID: ourID,
 		neID:  neID,
+		// Whether this element has credentials at all, which is what decides whether an
+		// answer must prove whose it is. See bindsResponder.
+		authenticated: tlsConfig != nil,
 		client: &http.Client{
 			Transport: &http.Transport{TLSClientConfig: tlsConfig},
 			Timeout:   10 * time.Second,
@@ -150,13 +156,21 @@ func responseTypeFor(requestType string) string {
 // received the trigger. Nothing downstream reveals that, because the product that
 // would be missing was never produced.
 //
-// What it does not defend against, said plainly: three of the four fields are
-// echoes a conformant peer copies straight off the request, so any endpoint that
-// *received* the request can return them correctly. Only neIdentifier is the
-// peer's own assertion of who it is, and an endpoint that wants to be believed
-// states whatever the requester expects. These checks catch a *wrong* element, not
-// a lying one; mutual TLS and the certificate binding are what bound the lying
-// case, and this does not extend them.
+// Three of the four fields are echoes a conformant peer copies straight off the
+// request, so any endpoint that *received* the request can return them correctly.
+// Only neIdentifier is the peer's own assertion of who it is, and an endpoint that
+// wants to be believed states whatever the requester expects. So these checks catch
+// a *wrong* element and not a lying one, and readResponse adds the check that bounds
+// the second case: the responder's certificate must bind the addressed identifier in
+// the NE role, exactly as the server checks a requester's certificate inbound.
+//
+// This comment used to say mutual TLS and the certificate binding bounded the lying
+// case already. On the server side that is true. On this side it was not: the client
+// verified the chain and the hostname and nothing checked the clause 8.2.4 binding, so
+// the holder of any LI-CA certificate whose SANs covered the dialled address could
+// assert the configured neIdentifier and convince this element that an LI_T3 trigger
+// was installed. A hostname binds a name; the annex G binding binds an X1 identifier,
+// and inside one trust domain those are not the same statement.
 //
 // Every field checked here is a member of the schema's X1ResponseMessage base
 // type, so every response type carries all of them and each check can be
@@ -216,8 +230,45 @@ func (r *Requester) validate(h header, out X1Response) (X1ResponseMessage, error
 	return m, nil
 }
 
+// bindsResponder checks the TS 103 221-1 clause 8.2.4 binding on the answering side:
+// the certificate the peer presented must carry neID in the NE role.
+//
+// It is the mirror of what the server applies to every inbound request, and the
+// asymmetry it removes was the one with the silent consequence. A misrouted, stale or
+// compromised endpoint inside the LI domain could acknowledge tasking, and the
+// triggering function would record an interception as installed at an element that
+// never received it — with nothing downstream to reveal it, because the product that
+// would be missing was never produced.
+func (r *Requester) bindsResponder(resp *http.Response, neID string) error {
+	if !r.authenticated {
+		// No TLS material was configured, which is the certificate-less mode this
+		// project supports deliberately so a deployment can be brought up before its
+		// PKI is. There is no certificate to bind and no chain to have verified, so
+		// requiring a binding here would refuse a mode that is documented and used —
+		// and would do it at the triggering interface only. Every deployment holding
+		// credentials, which is every real one, takes the checks below.
+		return nil
+	}
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		// Configured with credentials and answered over a connection that presented
+		// none: the peer is not authenticated at all, and an acknowledgement this
+		// element cannot attribute to an element is not one it can act on.
+		return &ResponseError{Field: "peer certificate", Want: neID, Got: "none"}
+	}
+	if !certBinds(resp.TLS.PeerCertificates[0], roleNE, neID) {
+		return &ResponseError{
+			Field: "peer certificate",
+			Want:  neID,
+			Got:   certIdentifier(resp.TLS.PeerCertificates[0], roleNE),
+		}
+	}
+
+	return nil
+}
+
 // readResponse is every step between an HTTP response and a message this element
-// is entitled to act on: status, decode, and the binding above.
+// is entitled to act on: status, decode, the responder's certificate binding, and
+// the message binding above.
 //
 // One function so that a new request type cannot reach a response without passing
 // it. The two readers this replaces had drifted apart — one checked that a message
@@ -239,6 +290,18 @@ func (r *Requester) readResponse(h header, resp *http.Response) (X1ResponseMessa
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRequestBytes))
 	if err != nil {
 		return X1ResponseMessage{}, fmt.Errorf("x1: reading response: %w", err)
+	}
+
+	// The responder is who its certificate says it is, before anything it says about
+	// itself is read. Placed here rather than in validate because validate works on a
+	// decoded message and this is a property of the connection that carried it — and
+	// because putting it here means no request type can reach a response without it.
+	//
+	// A response over a connection with no peer certificate is refused for the same
+	// reason: this interface is mutually authenticated, and an answer this element
+	// cannot bind to an element is not an acknowledgement it can act on.
+	if err := r.bindsResponder(resp, h.NeID); err != nil {
+		return X1ResponseMessage{}, err
 	}
 
 	var out X1Response
@@ -299,15 +362,13 @@ func (r *Requester) header(msgType string) header {
 //
 // deliveryType is fixed at X3Only: TS 33.128 table 6.2.3-6 requires it for this
 // trigger, and a triggered CC-POI produces no IRI.
-var taskTemplate = template.Must(template.New("x1task").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var taskTemplate = template.Must(template.New("x1task").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ext="urn:3GPP:ns:li:3GPPX1Extensions:r18:v6">
   <ns1:x1RequestMessage xsi:type="ns1:{{.Header.Type}}">
     <ns1:admfIdentifier>{{esc .Header.OurID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .Header.NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Header.Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .Header.TxID}}</ns1:x1TransactionId>
     <ns1:taskDetails>
       <ns1:xId>{{esc .XID}}</ns1:xId>
@@ -341,15 +402,13 @@ var taskTemplate = template.Must(template.New("x1task").Funcs(template.FuncMap{
 </ns1:X1Request>`))
 
 // deactivateTemplate emits a DeactivateTaskRequest, which carries only the XID.
-var deactivateTemplate = template.Must(template.New("x1deact").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var deactivateTemplate = template.Must(template.New("x1deact").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:DeactivateTaskRequest">
     <ns1:admfIdentifier>{{esc .Header.OurID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .Header.NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Header.Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .Header.TxID}}</ns1:x1TransactionId>
     <ns1:xId>{{esc .XID}}</ns1:xId>
   </ns1:x1RequestMessage>
@@ -365,15 +424,13 @@ var deactivateTemplate = template.Must(template.New("x1deact").Funcs(template.Fu
 // the request validated against nothing, because the only peer it has ever been sent to
 // is our own X1 server, which parsed the same wrong shape back. X2 and X3 are carried
 // over TCP (TS 103 221-2), so the arm is TCPPort.
-var destinationTemplate = template.Must(template.New("x1dest").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var destinationTemplate = template.Must(template.New("x1dest").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:c="http://uri.etsi.org/03280/common/2017/07">
   <ns1:x1RequestMessage xsi:type="ns1:CreateDestinationRequest">
     <ns1:admfIdentifier>{{esc .Header.OurID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .Header.NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Header.Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .Header.TxID}}</ns1:x1TransactionId>
     <ns1:destinationDetails>
       <ns1:dId>{{esc .DID}}</ns1:dId>
@@ -487,29 +544,25 @@ func (r *Requester) task(msgType string, t Trigger) error {
 
 // keepaliveTemplate emits a KeepaliveRequest. It carries only the common header:
 // its purpose is to prove the requester is still there.
-var keepaliveTemplate = template.Must(template.New("x1ka").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var keepaliveTemplate = template.Must(template.New("x1ka").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:KeepaliveRequest">
     <ns1:admfIdentifier>{{esc .Header.OurID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .Header.NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Header.Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .Header.TxID}}</ns1:x1TransactionId>
   </ns1:x1RequestMessage>
 </ns1:X1Request>`))
 
 // detailsTemplate emits a GetAllDetailsRequest, which carries only the header.
-var detailsTemplate = template.Must(template.New("x1all").Funcs(template.FuncMap{
-	"esc": escapeXML,
-}).Parse(`<?xml version="1.0" encoding="UTF-8"?>
+var detailsTemplate = template.Must(template.New("x1all").Funcs(x1TemplateFuncs).Parse(`<?xml version="1.0" encoding="UTF-8"?>
 <ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:GetAllDetailsRequest">
     <ns1:admfIdentifier>{{esc .Header.OurID}}</ns1:admfIdentifier>
     <ns1:neIdentifier>{{esc .Header.NeID}}</ns1:neIdentifier>
     <ns1:messageTimestamp>{{esc .Header.Timestamp}}</ns1:messageTimestamp>
-    <ns1:version>v1.6.1</ns1:version>
+    <ns1:version>{{version}}</ns1:version>
     <ns1:x1TransactionId>{{esc .Header.TxID}}</ns1:x1TransactionId>
   </ns1:x1RequestMessage>
 </ns1:X1Request>`))

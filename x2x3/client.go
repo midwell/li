@@ -37,6 +37,12 @@ type Client struct {
 	// to it, or nil when none is. Everything about one connection dies with it —
 	// see connState.
 	live *connState
+	// closed records that Close was called, which deliver has to know: it treats a nil
+	// live as "not connected yet" and dials. Without this a Send after Close delivered
+	// product over a *new* connection to a destination this element had finished with —
+	// AsyncSender guards that for every pooled caller today, and a client should not
+	// depend on its wrapper for a property of its own lifecycle.
+	closed bool
 
 	// unreachable is what the most recent exchange with this destination established,
 	// kept outside mu because a fault probe reads it on the X1 request goroutine: mu is
@@ -69,14 +75,16 @@ func (c *Client) Send(pdu *PDU) error {
 		return err
 	}
 
-	return c.sendBytes(b)
+	return c.sendBytes(b, nil)
 }
 
 // sendBytes writes already-marshalled PDU bytes and records what the attempt established
 // about the destination. One place records it, so the answer Unreachable gives cannot
 // disagree with the outcome the caller saw.
-func (c *Client) sendBytes(b []byte) error {
-	err := c.deliver(b)
+// boundaries are the offsets at which each product unit in b ends, so a retry after a
+// partial write can resume at one. Nil means b is a single unit.
+func (c *Client) sendBytes(b []byte, boundaries []int) error {
+	err := c.deliver(b, boundaries)
 	c.unreachable.Store(err != nil)
 
 	return err
@@ -106,28 +114,89 @@ func (c *Client) Unreachable() bool {
 // deliver writes already-marshalled PDU bytes, reconnecting once if the MDF has
 // dropped an idle connection. Reached from both Send and SendBatch through sendBytes, so
 // both get the same reconnect behaviour — a batch is only a longer write.
-func (c *Client) deliver(b []byte) error {
+func (c *Client) deliver(b []byte, boundaries []int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closed {
+		return fmt.Errorf("x2x3: send to %s after Close", c.addr)
+	}
 	if c.live == nil {
 		if err := c.dialLocked(); err != nil {
 			return err
 		}
 	}
-	if err := c.writeLocked(b); err == nil {
+	n, err := c.writeLocked(b)
+	if err == nil {
 		return nil
 	}
+
+	// **The retry resumes at a product-unit boundary, and does not restart the write.**
+	// PDUs are self-delimiting and concatenated, so a batch shares one write and a write
+	// can end in the middle of one. Sending the whole buffer again after a partial write
+	// delivers the leading complete PDUs a second time — on a fresh connection, where
+	// nothing marks them as repeats — which is duplicate product under one warrant, the
+	// outcome deduplicating destinations by address exists to prevent, arrived at from
+	// the delivery mechanism instead of the destination list.
+	rest, dropped := resumeAt(b, boundaries, n)
+
 	// One reconnect attempt — the MDF may have dropped an idle connection.
 	c.dropLocked()
 	if err := c.dialLocked(); err != nil {
 		return err
 	}
-	if err := c.writeLocked(b); err != nil {
-		c.dropLocked()
-		return fmt.Errorf("x2x3: send to %s: %w", c.addr, err)
+	if len(rest) > 0 {
+		if _, err := c.writeLocked(rest); err != nil {
+			c.dropLocked()
+
+			return fmt.Errorf("x2x3: send to %s: %w", c.addr, err)
+		}
 	}
+	if dropped {
+		// A PDU that was partially written cannot be resumed and is not completed on the
+		// new connection: a mediation function reading the head of a stream would take
+		// the tail of a unit as the start of one, and the framing error would consume
+		// whatever followed. A drop leaves a gap in a numbered sequence, which the peer
+		// can see and the fault channel can explain — strictly better than a stream it
+		// cannot parse.
+		return fmt.Errorf("x2x3: send to %s: one product unit was partially written and dropped", c.addr)
+	}
+
 	return nil
+}
+
+// resumeAt splits a buffer that was partially written at the first product-unit
+// boundary at or after what the peer received, and reports whether a unit was left
+// half-delivered.
+//
+// boundaries are the offsets at which each unit *ends*, in order. A nil boundaries —
+// a single-PDU write — means the whole buffer is one unit: anything short of all of it
+// is a partial unit, and there is nothing to resume.
+func resumeAt(b []byte, boundaries []int, written int) (rest []byte, droppedPartial bool) {
+	if written <= 0 {
+		return b, false
+	}
+	if written >= len(b) {
+		return nil, false
+	}
+	if len(boundaries) == 0 {
+		// One unit, partially written. Nothing survives it and nothing is resumable.
+		return nil, true
+	}
+
+	for _, end := range boundaries {
+		if end == written {
+			// The peer received whole units and nothing more: resume exactly here.
+			return b[written:], false
+		}
+		if end > written {
+			// The write stopped inside this unit. Everything before it arrived; this
+			// one is dropped, and delivery resumes with the next.
+			return b[end:], true
+		}
+	}
+
+	return nil, false
 }
 
 func (c *Client) dialLocked() error {
@@ -148,7 +217,7 @@ func (c *Client) dialLocked() error {
 	return nil
 }
 
-func (c *Client) writeLocked(b []byte) error {
+func (c *Client) writeLocked(b []byte) (int, error) {
 	// Bound the write so a stalled/half-open MDF cannot block delivery (and every
 	// other Send behind the mutex) indefinitely; a timeout is treated as any other
 	// write error — drop + one redial.
@@ -156,8 +225,11 @@ func (c *Client) writeLocked(b []byte) error {
 		//nolint:errcheck // a deadline a connection will not take is not actionable here
 		_ = c.conn().SetWriteDeadline(time.Now().Add(c.writeTimeout))
 	}
-	_, err := c.conn().Write(b)
-	return err
+	// n is returned rather than discarded: it is what the peer actually received, and
+	// therefore what a retry must not send again.
+	n, err := c.conn().Write(b)
+
+	return n, err
 }
 
 // conn is the held connection. Callers hold mu, and every one of them has already
@@ -185,6 +257,7 @@ func (c *Client) dropLocked() {
 // dropLocked gives.
 func (c *Client) Close() error {
 	c.mu.Lock()
+	c.closed = true
 	live := c.live
 	if live == nil {
 		c.mu.Unlock()
@@ -221,7 +294,11 @@ func (c *Client) SendBatch(pdus []*PDU) error {
 	}
 
 	var (
-		buf        []byte
+		buf []byte
+		// ends is where each PDU in buf finishes. It is what lets a retry after a
+		// partial write resume at a unit boundary rather than resending the whole
+		// buffer, so the destination is not sent the leading PDUs twice.
+		ends       []int
 		marshalErr error
 	)
 
@@ -244,13 +321,14 @@ func (c *Client) SendBatch(pdus []*PDU) error {
 		}
 
 		buf = append(buf, b...)
+		ends = append(ends, len(buf))
 	}
 
 	if len(buf) == 0 {
 		return marshalErr
 	}
 
-	if err := c.sendBytes(buf); err != nil {
+	if err := c.sendBytes(buf, ends); err != nil {
 		return err
 	}
 

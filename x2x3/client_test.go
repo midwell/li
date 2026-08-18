@@ -117,12 +117,26 @@ func TestClientSendAndRedial(t *testing.T) {
 	}
 	recv("second PDU (connection reuse)")
 
-	// Close then send again: the client must redial.
+	// Close is terminal: a Send after it is refused rather than delivered over a fresh
+	// connection.
+	//
+	// This assertion used to be the opposite — that the client redialled — and the old
+	// contract is what the change corrects. A closed client is one whose caller has
+	// finished with the destination: a purge, a reconfiguration, an element shutting
+	// down. Delivering product to it afterwards, on a connection opened *after* the
+	// decision to stop, is the delivery mechanism outliving the authority for it.
+	// AsyncSender guards this for every pooled caller today, and the client should not
+	// depend on its wrapper for a property of its own lifecycle.
 	client.Close()
-	if err := client.Send(pdu); err != nil {
-		t.Fatalf("Send after Close (redial): %v", err)
+	if err := client.Send(pdu); err == nil {
+		t.Error("a Send after Close delivered product on a new connection")
 	}
-	recv("third PDU (redial)")
+
+	select {
+	case got := <-received:
+		t.Errorf("the destination received a PDU after the client was closed: %+v", got)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 func TestSendMarshalError(t *testing.T) {

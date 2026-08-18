@@ -704,6 +704,13 @@ bad second — and either way the field stops being read. The full classificatio
 condition and which mechanism carries it, is in `x1/report.go` beside the constants, which is
 where somebody adding one will be looking.
 
+- **A provisioned `correlationID` at the AMF or SMF** (TS 103 221-1 clause 6.2.1.2).
+  Refused with error 3000/3001 rather than accepted and disregarded. The UPF's CC-POI
+  honours it — it stamps the value on every X3 PDU — but an IRI-POI's correlation is
+  derived per session, one task covers many sessions, and a single provisioned value
+  across them would join at the mediation function what the network keeps separate. An
+  ADMF provisioning this field for an AMF or SMF task must stop; see `CONFORMANCE.md`.
+
 ## Which xIRI records this produces
 
 Every record type TS 33.128 defines for an AMF or SMF IRI-POI is listed here — produced,
@@ -959,6 +966,31 @@ The blocks above are what LI reads on disk; deployment tooling sets them for you
 | `deactivateAllTasks` | `deactivate_all_tasks` | Whether this element performs a bulk deactivation of all its tasking. Boolean; **unset means "no agreement in advance"**, which is the specification's default of *enabled*. Recommended `false` on the UPF — see *[Bulk deactivation is enabled by default](#bulk-deactivation-is-enabled-by-default)* | optional |
 | `removeAllDestinations` | `remove_all_destinations` | Whether this element performs a bulk removal of all its destinations. Boolean; unset is the specification's default of *disabled* | optional |
 | — | `x3_sockaddr` | Datapath X3 tee socket (match `LI_X3_SOCKET_PATH`) | UPF: yes |
+
+### What only the deployment can guarantee
+
+Two properties this software depends on, and can neither enforce nor detect. Each is
+invisible to every element, and each silently breaks a join at the mediation function —
+so both are listed here rather than left to be discovered from records that do not line
+up.
+
+**One warrant's tasks must carry the same `productID` across elements.** A warrant's AMF
+task and its SMF task join at the mediation function only because the ADMF gave them a
+matching product identifier: that value is what each element stamps on the product it
+delivers, and it is the only thing tying one element's signalling to another's. Each
+element sees only its own task, so neither can notice a mismatch — the records stay
+well-formed, separately deliverable, and unjoinable. If the ADMF allocates a distinct XID
+per element (which is normal, and which this project's own test suite now exercises), it
+must set one shared `productID` on all of them.
+
+**Node clocks must be synchronised.** Record ordering *across* elements rests entirely on
+their clocks agreeing: the timestamp on each record is the time the event occurred by the
+producing element's clock, and nothing in the streams re-establishes an order. On a
+deployment whose nodes drift, an agency reconstructing a session can see a release before
+its establishment, with nothing to indicate it. The specifications say this — the LI
+requirements name the "5G core system clock (UTC, network-time-synchronised)" as the
+source — but they say it where an implementer reads and not where an operator does. Run
+NTP or PTP on every node that hosts one of these functions.
 
 ### Certificate requirements
 
