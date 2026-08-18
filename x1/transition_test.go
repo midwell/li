@@ -212,3 +212,103 @@ func TestAProbeIsReachableFromInsideACallback(t *testing.T) {
 			"behind a POI callback")
 	}
 }
+
+// TestAnAcknowledgedActivationIsNeverAnEmptyTask is the other scenario the transition
+// lock owes: an element that answers "activated" holds that task, and the point of
+// interception was notified with it rather than with an empty one.
+//
+// The two halves of that are one mechanism. activate re-reads the store to answer with
+// the task as this element now holds it, and used to discard the found bool — so a
+// removal landing in between produced the *zero* InterceptTask, with no XID and no
+// targets, handed to the POI as a successful activation and acknowledged to the ADMF.
+// Honouring found closes that; the lock makes it unreachable.
+//
+// **What this test can and cannot fail against.** With the lock in place a concurrent
+// removal cannot land between the store write and the read, so discarding found alone is
+// unobservable — this pins the *pair*, and it fails if either the lock or the guard goes.
+// It is driven through the purge window rather than by racing goroutines, for the reason
+// the sibling test records: the window is a few instructions wide.
+func TestAnAcknowledgedActivationIsNeverAnEmptyTask(t *testing.T) {
+	st := store.New()
+
+	var (
+		mu      sync.Mutex
+		applied []types.InterceptTask
+	)
+	srv := NewServer(st, "neID", OnTaskChange(func(_, next *types.InterceptTask) {
+		if next == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		applied = append(applied, *next)
+	}))
+
+	inWindow := make(chan struct{}, 1)
+	proceed := make(chan struct{}, 1)
+	afterPurgeSnapshot = func() { inWindow <- struct{}{}; <-proceed }
+	t.Cleanup(func() { afterPurgeSnapshot = nil })
+
+	srv.mu.Lock()
+	srv.lastSeen = srv.now().Add(-time.Hour)
+	srv.mu.Unlock()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.purgeIfLapsed(0)
+	}()
+
+	<-inWindow
+
+	var (
+		acknowledged bool
+		ackMu        sync.Mutex
+	)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		resp, err := srv.Process([]byte(activateXML), admfPeer(t))
+		if err != nil || len(resp.Messages) == 0 {
+			return
+		}
+		ackMu.Lock()
+		acknowledged = resp.Messages[0].OK == ackOK
+		ackMu.Unlock()
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	proceed <- struct{}{}
+	wg.Wait()
+
+	mu.Lock()
+	told := append([]types.InterceptTask(nil), applied...)
+	mu.Unlock()
+
+	for i, task := range told {
+		if task.XID == "" {
+			t.Errorf("instruction %d handed the point of interception a task with no identifier: "+
+				"it has been told to apply nothing and this element called that a success", i)
+		}
+		if len(task.Targets) == 0 {
+			t.Errorf("instruction %d handed the point of interception a task with no targets", i)
+		}
+	}
+
+	ackMu.Lock()
+	ack := acknowledged
+	ackMu.Unlock()
+
+	// And an acknowledgement means the element holds it.
+	if ack {
+		if _, held := st.Get(testXID); !held {
+			t.Error("the activation was acknowledged and the element holds no such task")
+		}
+		if len(told) == 0 {
+			t.Error("the activation was acknowledged and the point of interception was never told to apply it")
+		}
+	}
+}
