@@ -6,6 +6,7 @@ package x2x3
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -163,5 +164,47 @@ func TestARetryDoesNotRedeliverWhatThePeerAlreadyHas(t *testing.T) {
 	if len(got) > len(one)*len(pdus) {
 		t.Errorf("the destination received %d bytes for %d offered; the retry did not resume "+
 			"at a product-unit boundary", len(got), len(one)*len(pdus))
+	}
+}
+
+// TestADroppedUnitDoesNotReportTheDestinationUnreachable keeps the two conditions
+// separate, which is the whole reason the delivery-lost reports exist alongside the
+// reachability probe.
+//
+// A partial write that costs one product unit leaves a destination that took the rest of
+// the batch: it is up, and it is being delivered to. Recording that as unreachability
+// makes the destination watcher report a fault about a working mediation function — and
+// then retract it on the next successful send — which is exactly the conflation
+// AsyncSender.Unreachable's own documentation refuses for a full queue. The loss is a
+// loss; the destination is fine.
+func TestADroppedUnitDoesNotReportTheDestinationUnreachable(t *testing.T) {
+	cert := selfSignedServer(t)
+
+	payload := bytes.Repeat([]byte{0xCD}, 400*1024)
+	pdus := []*PDU{
+		{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128, Payload: payload},
+		{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128, Payload: payload},
+		{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128, Payload: payload},
+	}
+
+	mdf := newHalfOpenMDF(t, cert, 64*1024)
+
+	c := NewClient(mdf.addr, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // test peer
+		KeepaliveConfig{Disabled: true})
+	c.writeTimeout = 2 * time.Second
+	t.Cleanup(func() { c.Close() }) //nolint:errcheck // test cleanup
+
+	err := c.SendBatch(pdus)
+	if err == nil {
+		t.Skip("this peer took the whole batch, so no unit was dropped and there is nothing to assert")
+	}
+	if !errors.Is(err, ErrUnitDropped) {
+		t.Skipf("the write failed for another reason (%v); this case needs a dropped unit", err)
+	}
+
+	if c.Unreachable() {
+		t.Error("a destination that took the rest of the batch is reported unreachable: the watcher " +
+			"will raise a fault about a working mediation function, and the loss that actually " +
+			"happened is reported as the wrong condition")
 	}
 }

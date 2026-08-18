@@ -85,7 +85,12 @@ func (c *Client) Send(pdu *PDU) error {
 // partial write can resume at one. Nil means b is a single unit.
 func (c *Client) sendBytes(b []byte, boundaries []int) error {
 	err := c.deliver(b, boundaries)
-	c.unreachable.Store(err != nil)
+
+	// A dropped unit is not a statement about the destination. The rest of the batch
+	// reached it, so it is reachable, and recording it as unreachable would report a
+	// fault about a working mediation function — see ErrUnitDropped. The loss is still
+	// returned to the caller.
+	c.unreachable.Store(err != nil && !errors.Is(err, ErrUnitDropped))
 
 	return err
 }
@@ -159,11 +164,25 @@ func (c *Client) deliver(b []byte, boundaries []int) error {
 		// whatever followed. A drop leaves a gap in a numbered sequence, which the peer
 		// can see and the fault channel can explain — strictly better than a stream it
 		// cannot parse.
-		return fmt.Errorf("x2x3: send to %s: one product unit was partially written and dropped", c.addr)
+		return fmt.Errorf("%w: send to %s", ErrUnitDropped, c.addr)
 	}
 
 	return nil
 }
+
+// ErrUnitDropped reports that delivery succeeded except for one product unit, which was
+// partially written and could not be resumed.
+//
+// It is a distinct error because the two outcomes call for different reports and this
+// element must not conflate them. A destination that took the rest of the batch is
+// *reachable*; what happened is that product was lost. Returning an ordinary error here
+// made sendBytes mark the destination unreachable, which is the same mistake the drop
+// hooks exist to avoid — mdfUnreachable and the delivery-lost conditions are deliberately
+// separate, because a reachability probe answers "can this element deliver at all" and a
+// loss answers "something did not arrive". A watcher told the destination is down would
+// report a fault about a mediation function that is working, and retract it on the next
+// successful send.
+var ErrUnitDropped = errors.New("x2x3: one product unit was partially written and dropped")
 
 // resumeAt splits a buffer that was partially written at the first product-unit
 // boundary at or after what the peer received, and reports whether a unit was left
