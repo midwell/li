@@ -59,6 +59,8 @@ var vendoredSchemaDigests = map[string]string{
 	"urn_3GPP_ns_li_3GPPX1Extensions.xsd": "08eb7cb113a4ec8904344b9d59fdc13ea7fd1b46f36ca2ce0fc68de0a4f59c0d",
 }
 
+const requireValidationEnv = "LI_REQUIRE_SCHEMA_VALIDATION"
+
 // requireXmllint reports whether a validator is available, loudly.
 //
 // A developer without libxml2 should not be blocked, so this skips by default — but the
@@ -73,8 +75,6 @@ var vendoredSchemaDigests = map[string]string{
 // transitive package is how this validation came to skip unnoticed in the first place. The
 // `conformance` job in .github/workflows/main.yml installs the validator and sets this
 // variable, so exactly one job promises to validate and fails if it cannot.
-const requireValidationEnv = "LI_REQUIRE_SCHEMA_VALIDATION"
-
 func requireXmllint(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("xmllint"); err == nil {
@@ -304,6 +304,16 @@ func TestRenderedResponsesValidate(t *testing.T) {
 		held(st, srv)
 		withDestination(st, srv)
 	}
+	// A destination the delivery layer cannot currently reach, which is a *different*
+	// rendering path from the one above: destinationDeliveryStatus carries deliveryFault and
+	// listOfFaults is populated rather than empty. The element only emits this shape when a
+	// destination is actually down, so it is the shape least likely to be exercised and the
+	// worst to have wrong — an invalid answer at exactly the moment the ADMF is asking why
+	// product has stopped.
+	withUnreachableDestination := func(st *store.Store, srv *Server) {
+		withDestination(st, srv)
+		srv.destinationReachable = func(string) bool { return true }
+	}
 
 	cases := []struct {
 		name  string
@@ -384,6 +394,9 @@ func TestRenderedResponsesValidate(t *testing.T) {
 		{name: "GetAllTaskDetailsResponse, with a task held", setup: heldWithDIDs, req: request("GetAllTaskDetailsRequest", "")},
 		{name: "GetAllTaskDetailsResponse, holding nothing", req: request("GetAllTaskDetailsRequest", "")},
 		{name: "GetAllDestinationDetailsResponse, with a destination", setup: withDestination, req: request("GetAllDestinationDetailsRequest", "")},
+		{name: "GetAllDestinationDetailsResponse, a destination in delivery fault", setup: withUnreachableDestination, req: request("GetAllDestinationDetailsRequest", "")},
+		{name: "GetDestinationDetailsResponse, a destination in delivery fault", setup: withUnreachableDestination, req: request("GetDestinationDetailsRequest", "\n    <ns1:dId>"+testDID+"</ns1:dId>")},
+		{name: "GetAllDetailsResponse, a destination in delivery fault", setup: withUnreachableDestination, req: request("GetAllDetailsRequest", "")},
 		{name: "GetAllDestinationDetailsResponse, holding nothing", req: request("GetAllDestinationDetailsRequest", "")},
 		{
 			name:  "GetAllDestinationDetailsResponse, a destination declared in configuration",

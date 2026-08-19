@@ -247,11 +247,21 @@ func destinationResponseDetails(ind int, d ReportedDestination) string {
 	b.WriteString(close(ind+2, "destinationDetails"))
 
 	b.WriteString(open(ind+2, "destinationStatus"))
-	// activeAndWorking or deliveryFault are the only enumerated values. Per-destination
-	// fault state is not tracked yet, so a held destination reports as working; making that
-	// truthful belongs with the element's own fault state.
-	b.WriteString(el(ind+4, "destinationDeliveryStatus", "activeAndWorking"))
-	b.WriteString(listOfFaults(ind+4, nil))
+	// activeAndWorking or deliveryFault are the only enumerated values, and the element's
+	// own delivery layer decides which: see WithDestinationReachability for why answering
+	// activeAndWorking unconditionally was worse than answering nothing.
+	status, faults := "activeAndWorking", []X1Error(nil)
+	if d.Unreachable {
+		status = "deliveryFault"
+		// The same code the pushed report carries for this condition, so an ADMF
+		// correlating the two sees one fault and not two.
+		faults = []X1Error{{
+			ErrorCode:        issueCodeNonTerminatingFault,
+			ErrorDescription: "delivery destination is unreachable",
+		}}
+	}
+	b.WriteString(el(ind+4, "destinationDeliveryStatus", status))
+	b.WriteString(listOfFaults(ind+4, faults))
 	b.WriteString(close(ind+2, "destinationStatus"))
 
 	b.WriteString(close(ind, "destinationResponseDetails"))
@@ -440,6 +450,17 @@ func elNS(ind int, ns, name, value string) string {
 // unknown here when product is reaching it. Each is marked, so the answer stays literal
 // about what was provisioned as well as complete about what resolves.
 func (s *Server) heldDestinations() []ReportedDestination {
+	out := s.heldDestinationsLocked()
+	s.annotateReachability(out)
+
+	return out
+}
+
+// heldDestinationsLocked is the same list without the reachability answer. Split out because
+// that answer comes from the element's delivery layer, which holds locks of its own — calling
+// into it under s.mu would order this package's lock ahead of theirs, and the fault probes are
+// kept outside the lock for exactly that reason.
+func (s *Server) heldDestinationsLocked() []ReportedDestination {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -518,6 +539,20 @@ func (s *Server) unresolvedFaults() []X1Error {
 // configured. It answers the same question heldDestinations does, for one identifier, so
 // the two cannot disagree about whether this element can deliver to a DID.
 func (s *Server) destinationByDID(did string) (ReportedDestination, bool) {
+	reported, ok := s.destinationByDIDLocked(did)
+	if !ok {
+		return ReportedDestination{}, false
+	}
+
+	// Outside the lock, as heldDestinationsLocked documents.
+	one := []ReportedDestination{reported}
+	s.annotateReachability(one)
+
+	return one[0], true
+}
+
+// destinationByDIDLocked resolves one DID without the reachability answer.
+func (s *Server) destinationByDIDLocked(did string) (ReportedDestination, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -527,4 +562,24 @@ func (s *Server) destinationByDID(did string) (ReportedDestination, bool) {
 	}
 
 	return s.reportedLocked(did, dest), true
+}
+
+// annotateReachability fills in each entry's delivery status from the element's own delivery
+// layer. Called with s.mu released.
+//
+// An element that supplied no answer leaves every entry as it was, which reports
+// activeAndWorking — the same answer this package gave unconditionally before, now a
+// consequence of the element having nothing to say rather than a claim made on its behalf.
+func (s *Server) annotateReachability(dests []ReportedDestination) {
+	s.mu.Lock()
+	unreachable := s.destinationReachable
+	s.mu.Unlock()
+
+	if unreachable == nil {
+		return
+	}
+
+	for i := range dests {
+		dests[i].Unreachable = unreachable(dests[i].Address)
+	}
 }

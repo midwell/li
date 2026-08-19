@@ -197,6 +197,18 @@ Two properties of the answers matter more than the coverage:
 - **`GetNEStatus` answers for the conditions the element can currently observe**, and stops
   reporting each when it stops holding — `mdfUnreachable` while delivery is failing,
   `x3EgressDown` while the datapath egress is down.
+- **`destinationDeliveryStatus` answers from the delivery layer**, not from a constant.
+  `deliveryFault` while the element cannot reach that destination's endpoint,
+  `activeAndWorking` while it can, computed per request and never cached — so a destination
+  that recovers is reported as recovered without anything having to clear a stored flag. The
+  answer comes from the same reachability state `ReportDestinationIssue` reports from, which is
+  the point: until 2026-08-19 this field was hard-coded `activeAndWorking`, so an element that
+  had just told the ADMF an endpoint was unreachable answered "working" when the ADMF checked.
+  Interrogation is how a provisioning function checks a pushed report, so the answer it would
+  have acted on was the wrong one — and wrong in the unsafe direction, claiming product was
+  arriving when it was not. An element that supplies no reachability answer at all still
+  reports `activeAndWorking`; that is now a stated default rather than a claim made on its
+  behalf.
 
 `GetTaskDetails` round-trips a task's target identifiers back into the vocabulary the request
 used, across all fifteen identifier types, so an ADMF can compare what the element holds
@@ -493,11 +505,44 @@ plainly, so nobody mistakes its scope for a clean bill of health:
 
 ## Known gaps, in order of consequence
 
-None open.
+**`triggerFaulty` cannot be raised against a point of interception by this project.** The
+condition is declared, encoded and reportable (`NEIssueTriggerFaulty`), and the SMF's CC
+Triggering Function is the element that would raise it — but the fault it names has to come
+from the POI's own answer about the task, and this library's POIs cannot give one. `taskStatus`
+answers `provisioningStatus: complete` with an empty `listOfFaults` for every task in the
+store, unconditionally, because a task reaches the store only after activation has established
+that this element can carry it out (see *Tasks — clause 6.2*). There is no per-task fault state
+to report, so a POI that has been triggered, has acknowledged, and is producing nothing answers
+exactly as one that is working.
 
-**Closed since this disposition was written**, in order. All six were found by writing it,
-and none could have been found by the schema checks — that is the class this document exists
-for:
+The consequence is bounded and worth stating precisely, because the surrounding remedies make
+it look larger than it is:
+
+- The **destination** half of this is no longer part of it. `destinationDeliveryStatus` now
+  answers from the delivery layer (see *Interrogation*), so a POI whose X3 delivery has failed
+  says so when interrogated. That was the reachable half, and it is closed.
+- What remains is a POI whose *duplication* is not in place while its task is held — the
+  datapath refused a rule, or the trigger was installed against a session that has gone. Those
+  conditions **are** reported, at element scope, by the POI's own `ReportNEIssue`
+  (`duplicationRefused`, `contentUntasked`, `x3EgressDown`). So the information reaches the
+  triggering function; what it does not do is arrive as a *per-task* fault the triggering
+  function can turn into `triggerFaulty` for one warrant.
+- Therefore **no end-to-end section can exercise `triggerFaulty`**, and none claims to. The
+  condition rests entirely on interoperation with a POI implementation that populates a task's
+  `listOfFaults` — which is a conformant thing for a POI to do and not something this project's
+  POIs do. Its encoding is unit-tested; its being raised is not, and cannot be by anything in
+  this repository.
+
+Closing it means giving a held task a fault state, which is a change to what every POI here
+tracks per task rather than a change to this package. It is recorded here rather than
+implemented so that the compliance claim does not read as covering a condition nothing can
+reach.
+
+**Closed since this disposition was written**, in order. Six of the seven were found by
+writing it, and none of those six could have been found by the schema checks — that is the
+class this document exists for. The seventh, at the end, was found by review rather than by
+writing, and it is the same class: a field whose value validated against the schema and
+contradicted what the element was reporting elsewhere.
 
 - **`ReportDestinationIssue` was not implemented (clause 6.5.3)**, so an issue relating
   specifically to one DID was reported at network-element scope instead. The information
@@ -526,6 +571,9 @@ for:
   consistently, since the identifier would have had to come from the message nobody could
   read. The ADMF identifier comes from configuration, or from the peer's certificate where
   this element has none configured, which is clause 6.1's own provision.
+- **`destinationDeliveryStatus` was hard-coded `activeAndWorking`** (clause 6.4.5), so the
+  answer to an interrogation contradicted the element's own `ReportDestinationIssue` about the
+  same endpoint. Closed 2026-08-19; see *Interrogation*.
 
 **Deliberate divergences, which are not gaps**, are recorded above with their reasoning rather
 than repeated here: the emitted Version, the echo substitutions, the timestamp rendering, the

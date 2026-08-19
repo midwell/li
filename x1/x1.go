@@ -122,6 +122,14 @@ type Server struct {
 	// element is asked for its status, never cached, so no answer can go stale — which is the
 	// failure mode every retaining design shares. See WithFaultProbes.
 	faultProbes []FaultProbe
+	// destinationReachable answers whether this element can currently deliver to one
+	// address. Consulted when a destination's details are assembled, never cached, for the
+	// same reason the probes are not.
+	//
+	// nil means the element supplied no answer, and every destination then reports
+	// activeAndWorking — which is what it did unconditionally before, and is now a stated
+	// configuration rather than a hard-coded claim. See WithDestinationReachability.
+	destinationReachable func(addr string) bool
 	// deactivateAllDisabled and removeAllDestinationsEnabled carry the two bulk operations'
 	// *different* defaults, which is the specification's asymmetry rather than ours.
 	//
@@ -369,6 +377,27 @@ func WithFaultProbes(probes ...FaultProbe) Option {
 	return func(s *Server) { s.faultProbes = append(s.faultProbes, probes...) }
 }
 
+// WithDestinationReachability supplies the answer to "can this element deliver to that
+// address right now", for the destination status a provisioning function can ask for.
+//
+// Without it, GetDestinationDetails and GetAllDestinationDetails answered activeAndWorking
+// for every destination unconditionally — while the same element was reporting the same
+// endpoint as unreachable over ReportDestinationIssue. Two answers about one fact, from one
+// element, disagreeing: the pushed report says the product is not arriving and the
+// interrogation says it is. An ADMF that reconciles them has to decide which of its own
+// element's statements to believe, and the interrogation is the one it will trust, because
+// asking is how it checks.
+//
+// The function is the delivery layer's own — the same `unreachable` a network function
+// already supplies to DestinationHealthOf — so the two answers come from one source and
+// cannot diverge. Passed in rather than derived here, because this package holds no
+// connections: only the element that delivers knows whether delivery is working.
+//
+// It is called without the server's lock and may be called concurrently.
+func WithDestinationReachability(unreachable func(addr string) bool) Option {
+	return func(s *Server) { s.destinationReachable = unreachable }
+}
+
 // WithoutDeactivateAllTasks refuses bulk deactivation, which TS 103 221-1 otherwise requires
 // an element to perform by default.
 //
@@ -413,16 +442,6 @@ func BulkOptions(deactivateAllTasks, removeAllDestinations *bool) []Option {
 	return opts
 }
 
-// RequireResolvableDIDs makes the server refuse a task that requests content
-// delivery but names destinations it does not know.
-//
-// The default is deliberately lenient, because an ADMF may legitimately task an
-// IRI-POI whose MDF address comes from configuration and name DIDs it never
-// provisioned — which is what real ADMFs do. That leniency is wrong for a
-// *triggered* POI: its triggering function has no other way to discover that the
-// destination it provisioned has been lost (a restart, say), so an acknowledgement
-// it cannot honour leaves content being dropped while the triggering function
-// believes interception is running.
 // HonoursCorrelationID declares that this element acts on a provisioned correlation
 // value, so a task carrying one is accepted rather than refused.
 //
@@ -443,6 +462,16 @@ func HonoursCorrelationID() Option {
 	return func(s *Server) { s.honoursCorrelation = true }
 }
 
+// RequireResolvableDIDs makes the server refuse a task that requests content
+// delivery but names destinations it does not know.
+//
+// The default is deliberately lenient, because an ADMF may legitimately task an
+// IRI-POI whose MDF address comes from configuration and name DIDs it never
+// provisioned — which is what real ADMFs do. That leniency is wrong for a
+// *triggered* POI: its triggering function has no other way to discover that the
+// destination it provisioned has been lost (a restart, say), so an acknowledgement
+// it cannot honour leaves content being dropped while the triggering function
+// believes interception is running.
 func RequireResolvableDIDs() Option {
 	return func(s *Server) { s.requireDIDs = true }
 }

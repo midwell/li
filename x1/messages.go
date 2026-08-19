@@ -473,6 +473,16 @@ type ReportedDestination struct {
 	// of silence: an operator whose configured entry is not the one in force has to be
 	// able to see that from what the element reports.
 	ShadowsConfigured bool
+	// Unreachable is whether this element can currently deliver to Address, as the
+	// delivery layer itself answers it. It is what destinationDeliveryStatus reports:
+	// deliveryFault when set, activeAndWorking when not.
+	//
+	// It is filled in when an answer is assembled and is not stored, for the reason
+	// unresolvedFaults gives about the element's own faults: a reachability answer that
+	// is cached is an answer that can be stale, and this one is re-observable, so
+	// caching it would buy nothing and cost the ADMF a fault that has cleared or a
+	// destination reported as working after it stopped working.
+	Unreachable bool
 }
 
 // TaskResponseDetails is one task as reported by an element (TS 103 221-1
