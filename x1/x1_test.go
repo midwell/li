@@ -75,7 +75,7 @@ func TestReportNEIssue(t *testing.T) {
 func TestKeepaliveWatchdogPurgesTasking(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: "a", Targets: []types.TargetIdentifier{supiTarget("1")}})
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 	now := time.Now()
 	srv.now = func() time.Time { return now }
 	srv.recordActivity() // ADMF last seen now
@@ -102,7 +102,7 @@ func TestKeepalivePurgeRunsTeardown(t *testing.T) {
 	st.Activate(types.InterceptTask{XID: "a", Targets: []types.TargetIdentifier{supiTarget("1")}, Products: []types.ProductType{types.ProductCC}})
 	st.Activate(types.InterceptTask{XID: "b", Targets: []types.TargetIdentifier{supiTarget("2")}, Products: []types.ProductType{types.ProductCC}})
 	var torn []types.XID
-	srv := NewServer(st, "neID", OnTaskChange(func(prev, next *types.InterceptTask) {
+	srv := testServer(st, OnTaskChange(func(prev, next *types.InterceptTask) {
 		if next == nil {
 			torn = append(torn, prev.XID)
 		}
@@ -134,7 +134,7 @@ func TestKeepalivePurgeRunsTeardown(t *testing.T) {
 func TestKeepaliveResetsWatchdog(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: "a", Targets: []types.TargetIdentifier{supiTarget("1")}})
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 	now := time.Now()
 	srv.now = func() time.Time { return now }
 	srv.recordActivity()
@@ -189,9 +189,30 @@ const activateXML = `<?xml version="1.0" encoding="UTF-8"?>
 
 const testXID = types.XID("50b93d1e-1b53-4d63-aacb-e4d99811bc0b")
 
+// testDIDInActivateXML is the destination identifier the shared activateXML fixture
+// names. TS 33.128 marks ListOfDIDs mandatory in every ActivateTask table it defines, so
+// the fixture keeps naming one — and the element now refuses a task naming a destination
+// identifier it cannot resolve, because storing it with the subset means an agency the
+// warrant names receives nothing while provisioning reports success.
+//
+// So the fixture's DID is declared in the element's configuration, which is the supported
+// arrangement for a destination agreed out of band and is what these tests were relying
+// on the old leniency to stand in for.
+const testDIDInActivateXML = "7d1c2f60-8a4e-4a1e-9f3b-2c5d6e7f8091"
+
+// testServer is NewServer with that destination declared, for the tests whose subject is
+// something other than destination resolution.
+func testServer(st *store.Store, opts ...Option) *Server {
+	return NewServer(st, "neID", append([]Option{WithConfiguredDestinations(ConfiguredDestination{
+		DID:          testDIDInActivateXML,
+		DeliveryType: "X2andX3",
+		Address:      "10.0.60.122:42069",
+	})}, opts...)...)
+}
+
 func TestProcessActivate(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	resp, err := srv.Process([]byte(activateXML), admfPeer(t))
 	if err != nil {
@@ -241,7 +262,7 @@ func TestParseTargetIdentifierTypes(t *testing.T) {
 	}
 	for _, c := range cases {
 		st := store.New()
-		srv := NewServer(st, "neID")
+		srv := testServer(st)
 		body := strings.Replace(activateXML,
 			"<ns1:e164Number>2125552368</ns1:e164Number>",
 			"<ns1:"+c.elem+">"+c.val+"</ns1:"+c.elem+">", 1)
@@ -261,7 +282,7 @@ func TestParseTargetIdentifierTypes(t *testing.T) {
 func TestProcessDeactivate(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: testXID, Targets: []types.TargetIdentifier{{Type: types.TargetGPSI, Value: "2125552368"}}})
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	deactivateXML := `<ns1:X1Request xmlns:ns1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ns1:x1RequestMessage xsi:type="ns1:DeactivateTaskRequest">
@@ -292,7 +313,7 @@ func TestProcessDeactivate(t *testing.T) {
 // The authorized round trip over real mutual TLS is TestServeHTTPMutualTLS.
 func TestServeHTTPWithoutCertificateRejected(t *testing.T) {
 	st := store.New()
-	ts := httptest.NewServer(NewServer(st, "neID"))
+	ts := httptest.NewServer(testServer(st))
 	defer ts.Close()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/X1/NE", strings.NewReader(activateXML))
@@ -327,7 +348,7 @@ func TestServeHTTPWithoutCertificateRejected(t *testing.T) {
 
 func TestRejectsUnknownAndBadTarget(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	// Unknown request type -> ErrorResponse, nothing stored.
 	unknown := strings.Replace(activateXML, "ActivateTaskRequest", "FrobnicateRequest", 1)
@@ -351,7 +372,7 @@ func TestRejectsUnknownAndBadTarget(t *testing.T) {
 // the ADMF to activate the warrant properly.
 func TestModifyUnknownTaskRefused(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	modifyXML := strings.Replace(activateXML, "ActivateTaskRequest", "ModifyTaskRequest", 1)
 	resp, err := srv.Process([]byte(modifyXML), admfPeer(t))
@@ -376,7 +397,7 @@ func TestModifyUnknownTaskRefused(t *testing.T) {
 // restarts, so it must be accepted and applied, not refused as a duplicate.
 func TestActivateReplacesHeldTask(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
 		t.Fatalf("activate: %v", err)
@@ -404,7 +425,7 @@ func TestActivateReplacesHeldTask(t *testing.T) {
 // applied here.
 func TestMissingNeIdentifierRefused(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	noNE := strings.Replace(activateXML, "<ns1:neIdentifier>neID</ns1:neIdentifier>", "", 1)
 	resp, err := srv.Process([]byte(noNE), admfPeer(t))
@@ -569,7 +590,7 @@ const activateWithServiceTypesXML = `<?xml version="1.0" encoding="UTF-8"?>
 
 func TestActivateWithServiceTypeScopingIsRefused(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	resp, err := srv.Process([]byte(activateWithServiceTypesXML), admfPeer(t))
 	if err != nil {
@@ -613,7 +634,7 @@ func cloneTaskPtr(t *types.InterceptTask) *types.InterceptTask {
 func TestOnTaskChangeCarriesBothSides(t *testing.T) {
 	st := store.New()
 	var log taskChangeLog
-	srv := NewServer(st, "neID", OnTaskChange(log.record))
+	srv := testServer(st, OnTaskChange(log.record))
 
 	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
 		t.Fatalf("activate: %v", err)
@@ -682,7 +703,7 @@ func TestOnTaskChangeCarriesBothSides(t *testing.T) {
 func TestExactReplayIsANoOp(t *testing.T) {
 	st := store.New()
 	var log taskChangeLog
-	srv := NewServer(st, "neID", OnTaskChange(log.record))
+	srv := testServer(st, OnTaskChange(log.record))
 
 	for i := range 3 {
 		if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
@@ -706,7 +727,7 @@ func TestExactReplayIsANoOp(t *testing.T) {
 func TestProductChangeReachesThePOI(t *testing.T) {
 	st := store.New()
 	var log taskChangeLog
-	srv := NewServer(st, "neID", OnTaskChange(log.record))
+	srv := testServer(st, OnTaskChange(log.record))
 
 	// IRI only to begin with.
 	iriOnly := strings.Replace(activateXML, "<ns1:deliveryType>X2andX3</ns1:deliveryType>",
@@ -751,7 +772,7 @@ func TestPurgeReasonNamesThePath(t *testing.T) {
 	st := store.New()
 	var reasons []PurgeReason
 	var torn []types.XID
-	srv := NewServer(st, "neID",
+	srv := testServer(st,
 		OnTaskChange(func(prev, next *types.InterceptTask) {
 			if next == nil {
 				torn = append(torn, prev.XID)

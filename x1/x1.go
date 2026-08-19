@@ -1313,37 +1313,43 @@ func (s *Server) resolveLocked(did string) (heldDestination, bool) {
 	return d, ok
 }
 
-// resolveDIDs turns the DIDs a task references into delivery endpoints, skipping
-// any this element cannot resolve.
+// resolveDIDs turns the DIDs a task references into delivery endpoints, and reports
+// separately the identifiers it could not resolve.
 //
-// Skipping rather than rejecting is deliberate. A task naming an unresolvable DID
-// is arguably malformed, but an ADMF is entitled to task an IRI-POI whose MDF2
-// address comes from configuration — which is how this implementation has always
-// worked, and what the sipgate simulator does — so failing the task here would
-// stop interception working against every ADMF that does not call
-// CreateDestination first. The strictness belongs at the point of delivery
-// instead: a POI that has no destination for the product it was asked to produce
-// must refuse to produce it, which is where an unresolvable destination becomes
-// visible (as a reported fault) rather than silent.
+// **Reporting them is the whole change.** The endpoints alone cannot distinguish the
+// two situations that produce a short list, and they need opposite answers: a DID that
+// resolved to an X3-only destination contributes no X2 endpoint, which is correct and
+// complete, while a DID this element cannot place at all is an instruction it cannot
+// carry out. Returning only the endpoints made those indistinguishable, so a task
+// naming three agencies of which one was unknown was stored with two — and provisioning
+// reported success while an agency named in the warrant received nothing.
 //
-// What is *not* skipped is a DID that resolves. Delivering to this element's own
-// configured endpoint in preference to one the task named is the gap this change
-// closes: two warrants provisioned to two agencies both arrived at whichever address
-// configuration happened to name.
-func (s *Server) resolveDIDs(dids []string) []types.DeliveryEndpoint {
+// The caller refuses such a task. The earlier reasoning for skipping was that an ADMF is
+// entitled to task an IRI-POI whose MDF2 address comes from configuration, and that
+// remains true and remains served: a task that names *no* DID falls back to the element's
+// configured endpoint, and destinations agreed out of band are declared in the element's
+// own configuration (WithConfiguredDestinations), where they resolve. What is refused is
+// the case neither of those covers — a named identifier the element genuinely cannot
+// place — because substituting an endpoint of its own is the element deciding where a
+// warrant's product goes.
+func (s *Server) resolveDIDs(dids []string) (endpoints []types.DeliveryEndpoint, unresolved []string) {
 	if len(dids) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []types.DeliveryEndpoint
 	for _, did := range dids {
-		if dest, ok := s.resolveLocked(did); ok {
-			out = append(out, dest.endpoints(did)...)
+		dest, ok := s.resolveLocked(did)
+		if !ok {
+			unresolved = append(unresolved, did)
+
+			continue
 		}
+		endpoints = append(endpoints, dest.endpoints(did)...)
 	}
-	return out
+
+	return endpoints, unresolved
 }
 
 func (s *Server) activate(m X1RequestMessage) (types.InterceptTask, error) {
@@ -1421,7 +1427,26 @@ func (s *Server) taskFromDetails(td TaskDetails) (types.InterceptTask, error) {
 			return types.InterceptTask{}, fmt.Errorf("invalid correlationID")
 		}
 	}
-	deliveries := s.resolveDIDs(td.ListOfDIDs)
+	deliveries, unresolved := s.resolveDIDs(td.ListOfDIDs)
+	if len(unresolved) > 0 {
+		// **Before it is stored, before any callback and before any trigger.** A task
+		// held here is one this element reports as active and acts on, so a partially
+		// applied destination list has to be refused rather than stored with the subset:
+		// otherwise an agency the warrant names receives nothing while the provisioning
+		// function is told the interception is running, which is undiscoverable from
+		// outside. On an element serving several agencies the alternative is worse than
+		// silence — the product goes to whichever endpoint the element's own
+		// configuration names, and li-security-isolation admits no exception for a
+		// destination the element could not resolve.
+		//
+		// 2040 is the registry's own "DID does not exist on the NE", which tells the ADMF
+		// what to do; a generic failure would tell it only that something went wrong. The
+		// identifier is named here, on the X1 answer to the party that provisioned it, and
+		// nowhere else.
+		return types.InterceptTask{}, codedError{errCodeNoSuchDID, fmt.Errorf(
+			"listOfDids names %d destination identifier(s) this element cannot resolve: %s",
+			len(unresolved), strings.Join(unresolved, ", "))}
+	}
 	if s.requireDIDs && slices.Contains(products, types.ProductCC) && !hasDelivery(deliveries, types.DeliveryX3) {
 		// Accepting this would mean duplicating a subject's traffic and discarding
 		// every copy, while the party that asked for it is told all is well.

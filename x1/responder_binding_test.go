@@ -224,7 +224,7 @@ func TestAnUnparseableRequestFromAURIBoundPeerIsAnsweredWithItsIdentifier(t *tes
 
 			// No configured ADMF identifier, which is the case that sends this to the
 			// certificate at all.
-			srv := NewServer(nil, "neID")
+			srv := testServer(nil)
 			answer := srv.topLevelError(cert.Leaf)
 
 			if !strings.Contains(string(answer), "<ns1:admfIdentifier>"+admfID+"</ns1:admfIdentifier>") {
@@ -268,7 +268,7 @@ func TestAProvisionedCorrelationIDFollowsTheElement(t *testing.T) {
 		"<ns1:correlationID>2752413510594253201</ns1:correlationID>\n    <ns1:targetIdentifiers>", 1)
 
 	t.Run("refused at an element whose correlation is per session", func(t *testing.T) {
-		srv := NewServer(store.New(), "neID")
+		srv := testServer(store.New())
 
 		resp, err := srv.Process([]byte(withCorrelation), admfPeer(t))
 		if err != nil {
@@ -286,7 +286,7 @@ func TestAProvisionedCorrelationIDFollowsTheElement(t *testing.T) {
 	})
 
 	t.Run("accepted at an element that stamps it", func(t *testing.T) {
-		srv := NewServer(store.New(), "neID", HonoursCorrelationID())
+		srv := testServer(store.New(), HonoursCorrelationID())
 
 		resp, err := srv.Process([]byte(withCorrelation), admfPeer(t))
 		if err != nil {

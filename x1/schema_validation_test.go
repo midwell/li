@@ -444,7 +444,7 @@ func TestRenderedResponsesValidate(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			st := store.New()
-			srv := NewServer(st, "neID")
+			srv := testServer(st)
 			if c.setup != nil {
 				c.setup(st, srv)
 			}

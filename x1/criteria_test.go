@@ -121,7 +121,7 @@ func TestParseLIT3Criteria(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			st := store.New()
-			srv := NewServer(st, "neID")
+			srv := testServer(st)
 			if _, err := srv.Process([]byte(withTarget(c.xml)), admfPeer(t)); err != nil {
 				t.Fatalf("Process: %v", err)
 			}
@@ -163,7 +163,7 @@ func TestRefuseCriteriaOutsideTheTable(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			st := store.New()
-			srv := NewServer(st, "neID")
+			srv := testServer(st)
 			resp, err := srv.Process([]byte(withTarget(c.xml)), admfPeer(t))
 			if err != nil {
 				t.Fatalf("Process: %v", err)
@@ -181,7 +181,7 @@ func TestRefuseCriteriaOutsideTheTable(t *testing.T) {
 // describing the same traffic two ways must not have one description dropped.
 func TestSeveralCriteriaInOneTask(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 	body := withTarget(`<ns1:ipv4Address>10.250.0.9</ns1:ipv4Address>
         </ns1:targetIdentifier>
         <ns1:targetIdentifier>
@@ -209,7 +209,7 @@ func TestSeveralCriteriaInOneTask(t *testing.T) {
 // interception below what was ordered while answering that it had been applied.
 func TestOneBadCriterionRefusesTheTask(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 	body := withTarget(`<ns1:ipv4Address>10.250.0.9</ns1:ipv4Address>
         </ns1:targetIdentifier>
         <ns1:targetIdentifier>
@@ -234,7 +234,7 @@ func TestOneBadCriterionRefusesTheTask(t *testing.T) {
 func TestCanApplyRefusesBeforeAcknowledging(t *testing.T) {
 	st := store.New()
 	var asked []types.XID
-	srv := NewServer(st, "neID", CanApply(func(task types.InterceptTask) error {
+	srv := testServer(st, CanApply(func(task types.InterceptTask) error {
 		asked = append(asked, task.XID)
 
 		return fmt.Errorf("this datapath holds no state for that criterion")
@@ -269,7 +269,7 @@ func TestARefusedModificationFromCanApplyCarriesTheModifyCode(t *testing.T) {
 	st := store.New()
 	// Approves the activation so there is tasking to modify, then refuses.
 	var asked int
-	srv := NewServer(st, "neID", CanApply(func(types.InterceptTask) error {
+	srv := testServer(st, CanApply(func(types.InterceptTask) error {
 		asked++
 		if asked == 1 {
 			return nil
@@ -296,7 +296,7 @@ func TestARefusedModificationFromCanApplyCarriesTheModifyCode(t *testing.T) {
 // change what an acknowledged activation does.
 func TestCanApplyApprovalStores(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID", CanApply(func(types.InterceptTask) error { return nil }))
+	srv := testServer(st, CanApply(func(types.InterceptTask) error { return nil }))
 	if _, err := srv.Process([]byte(activateXML), admfPeer(t)); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestReportedIdentifiersRoundTrip(t *testing.T) {
 	for _, id := range criteria {
 		t.Run(string(id.Type)+"/"+id.Value, func(t *testing.T) {
 			st := store.New()
-			srv := NewServer(st, "neID")
+			srv := testServer(st)
 			if !st.Activate(types.InterceptTask{XID: testXID, Targets: []types.TargetIdentifier{id}}) {
 				t.Fatal("Activate failed")
 			}

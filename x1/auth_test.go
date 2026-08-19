@@ -132,7 +132,7 @@ func TestCertBindsAcceptedForms(t *testing.T) {
 // processWith runs body against a fresh server holding st, as peer.
 func processWith(t *testing.T, st *store.Store, peer *x509.Certificate, body string, opts ...Option) *X1Response {
 	t.Helper()
-	resp, err := NewServer(st, "neID", opts...).Process([]byte(body), peer)
+	resp, err := testServer(st, opts...).Process([]byte(body), peer)
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestAuthenticationAcceptsBoundPeer(t *testing.T) {
 func TestUnauthenticatedRequestDoesNotResetWatchdog(t *testing.T) {
 	st := store.New()
 	st.Activate(types.InterceptTask{XID: testXID, Targets: []types.TargetIdentifier{supiTarget("imsi-1")}})
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 
 	base := time.Now()
 	srv.now = func() time.Time { return base }
@@ -304,7 +304,7 @@ func TestServeHTTPMutualTLS(t *testing.T) {
 			}, ca, caKey)
 
 			st := store.New()
-			ts := httptest.NewUnstartedServer(NewServer(st, "neID", WithADMF("admfID")))
+			ts := httptest.NewUnstartedServer(testServer(st, WithADMF("admfID")))
 			ts.TLS = &tls.Config{
 				Certificates: []tls.Certificate{{Certificate: [][]byte{serverCert.Raw}, PrivateKey: serverKey}},
 				ClientCAs:    pool,

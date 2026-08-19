@@ -131,7 +131,7 @@ more expensive than one read here.
 | **Delivery destinations** | **A task's product goes to the destinations the task named** | `listOfDIDs`, for X2 as for X3. TS 33.128 marks it mandatory in every ActivateTask table it defines — see *[Where a task's product goes](#where-a-tasks-product-goes)* for the three sources and their precedence |
 | | Destinations **provisioned over X1** with `CreateDestination` | Source 1, and the one that wins |
 | | Destinations **declared in configuration** as a DID→endpoint mapping | Source 2. For endpoints an operator and an ADMF agreed out of band; resolves exactly as a provisioned one does |
-| | A **configured default endpoint** (`mdf2`) | Source 3, for a task that names no destination this element can resolve |
+| | A **configured default endpoint** (`mdf2`) | Source 3, for a task that names **no destination**. A task that names one this element cannot resolve is refused, not served from configuration |
 | | An `X2andX3` destination serves both interfaces | One destination, two endpoints |
 | | Clause 8.2.4 peer authentication | Identity binding checked per message: 1030 / 1040 / 1060 / 1080 |
 | | NE-initiated fault reporting, at the scope the fault has | `ReportNEIssue`, `ReportTaskIssue` and `ReportDestinationIssue`, with schema-valid message types and issue codes. An issue relating to one delivery destination names that destination's DID (clause 6.5.3), rather than being reported as a fault of the whole element — an ADMF that provisioned several otherwise cannot tell which one failed. Where one endpoint serves several DIDs, each is reported |
@@ -213,8 +213,25 @@ An element resolves a DID from three sources, in this order:
 | | Source | When it applies |
 |---|---|---|
 | 1 | **Provisioned over X1** with `CreateDestination` | Always wins where it resolves. What TS 33.128 mandates |
-| 2 | **Declared in configuration**, as a DID→endpoint mapping | For destinations agreed out of band. Resolves exactly as a provisioned one does, and the task is *not* refused for naming an unprovisioned DID |
-| 3 | **The configured default endpoint** (`mdf2`) | Only for a task that names no destination this element can resolve for that product type |
+| 2 | **Declared in configuration**, as a DID→endpoint mapping | For destinations agreed out of band. Resolves exactly as a provisioned one does, so a task naming such a DID is accepted |
+| 3 | **The configured default endpoint** (`mdf2`) | Only for a task that names **no destination at all**. Naming none the element can resolve is a different fact, and is refused — see below |
+
+**A destination identifier this element cannot resolve is refused, not replaced.** Source 3
+serves a task that named *nothing* — a gap the provisioning function left, which the
+configured endpoint fills, and the case every deployment predating the destination
+requirement is in. A task that names identifiers and resolves none of them, or only some of
+them, is a different fact: it is an assertion the element cannot honour as stated, and
+substituting an endpoint of its own is the element deciding where a warrant's product goes.
+On an element serving several agencies the product then goes to whichever endpoint local
+configuration names, which is the disclosure this whole section exists to prevent, reached
+from the other direction. So such a task is refused with 2040 ("dId does not exist on the
+NE") before it is stored, before any callback and before any trigger, and the refusal names
+the identifier on the X1 answer.
+
+The migration cost is real and is stated rather than hidden: a deployment whose ADMF names
+DIDs it never provisioned here, and relied on `mdf2` to serve them, will start receiving
+refusals. The remedy is to declare those DIDs in the element's configuration — source 2,
+which is a supported arrangement and resolves.
 
 Configuration is a supported way of supplying a destination, not a degraded one. Nothing
 in either specification requires that a DID arrived over X1 rather than having been
@@ -952,9 +969,9 @@ The blocks above are what LI reads on disk; deployment tooling sets them for you
 | AMF/SMF (`configuration.li`) | UPF (`li`) | Meaning | Required |
 |---|---|---|---|
 | `x1Listen` | — | X1 listener bind address (ADMF → NF) | AMF/SMF: yes |
-| `mdf2` | — | xIRI (X2) delivery **default**, `host:port`. Used only for a task that names no destination this element can resolve — see *[Where a task's product goes](#where-a-tasks-product-goes)* | AMF/SMF: yes |
+| `mdf2` | — | xIRI (X2) delivery **default**, `host:port`. Used only for a task that names no destination at all — see *[Where a task's product goes](#where-a-tasks-product-goes)* | AMF/SMF: yes |
 | `destinations` | — | Pre-shared DID→endpoint mappings, a list of `{did, deliveryType, address}`. `did` must be a UUID, `deliveryType` one of `X2Only`/`X3Only`/`X2andX3`, `address` a `host:port`. An entry that is not all three is dropped rather than half-applied | AMF/SMF: optional |
-| `mdf3` | — | xCC (X3) delivery **default**, `host:port`. The CC triggering function provisions a task's own X3 destinations at each UPF it triggers and names them on the trigger; this serves only a task that names no X3 destination this element can resolve — see *[Where a task's product goes](#where-a-tasks-product-goes)* | SMF: with `upfTriggers` |
+| `mdf3` | — | xCC (X3) delivery **default**, `host:port`. The CC triggering function provisions a task's own X3 destinations at each UPF it triggers and names them on the trigger; this serves only a task that names no destination at all — see *[Where a task's product goes](#where-a-tasks-product-goes)* | SMF: with `upfTriggers` |
 | `upfTriggers` | — | Per-UPF triggering endpoints (`nodeId`, `x1Url`, `neId`) | SMF: for CC |
 | — | `x1_listen` | Bind address of the triggering interface (SMF → UPF) | UPF: yes |
 | — | `tf_id` | Identifier of the element permitted to task this UPF | UPF: yes |

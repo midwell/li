@@ -30,7 +30,7 @@ import (
 func TestGenericObjectQueryIsAnsweredWithoutClaimingSupport(t *testing.T) {
 	const req = "GetAllGenericObjectDetailsRequest"
 
-	srv := NewServer(store.New(), "neID")
+	srv := testServer(store.New())
 	srv.now = func() time.Time { return zeroTailInstant }
 
 	resp, err := srv.Process(request(req, ""), admfPeer(t))
@@ -76,7 +76,7 @@ func TestGenericObjectCRUDIsRefused(t *testing.T) {
 		"DeleteObjectRequest", "ListObjectsOfTypeRequest", "DeleteAllObjectsRequest",
 	} {
 		t.Run(req, func(t *testing.T) {
-			srv := NewServer(store.New(), "neID")
+			srv := testServer(store.New())
 			srv.now = func() time.Time { return zeroTailInstant }
 
 			resp, err := srv.Process(request(req, ""), admfPeer(t))

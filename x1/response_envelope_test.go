@@ -31,7 +31,15 @@ func echoedEnvelope(t *testing.T, send func(*Requester) error) X1ResponseMessage
 	t.Helper()
 
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
+	// The trigger's destination is declared, because a task naming one this element
+	// cannot resolve is now refused — and what this test is about is the response
+	// envelope, not destination resolution.
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID(),
+		WithConfiguredDestinations(ConfiguredDestination{
+			DID:          testTrigger().DIDs[0],
+			DeliveryType: deliveryX3Only,
+			Address:      "10.0.2.5:9000",
+		}))
 	peer := certWithUID(t, "smf-1")
 
 	var raw string
@@ -239,7 +247,14 @@ func TestTheRequesterAlwaysGeneratesAConformantTransactionIdentifier(t *testing.
 // worth asserting rather than assuming.
 func TestASingleRequestIsAnsweredWithASingleMessage(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
+	// The trigger's destination is declared: a task naming one this element cannot
+	// resolve is refused, and what this test is about is D1's single-message rule.
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID(),
+		WithConfiguredDestinations(ConfiguredDestination{
+			DID:          testTrigger().DIDs[0],
+			DeliveryType: deliveryX3Only,
+			Address:      "10.0.2.5:9000",
+		}))
 	peer := certWithUID(t, "smf-1")
 
 	var counted int

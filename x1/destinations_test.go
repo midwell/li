@@ -120,6 +120,20 @@ func endpointsOf(t *testing.T, st *store.Store, xid types.XID, dt types.Delivery
 	return out
 }
 
+// provisionAgencyA creates didAgencyA at the element, the way TS 33.128 requires: it
+// marks ListOfDIDs mandatory on an ActivateTask and requires the endpoints to have been
+// provisioned with CreateDestination beforehand.
+//
+// It exists because the element now refuses a task naming a destination identifier it
+// cannot resolve — storing it with the subset meant an agency the warrant names received
+// nothing while provisioning reported success — so a test whose subject is something
+// other than destination resolution has to provision the one its fixture names.
+func provisionAgencyA(t *testing.T, srv *Server) {
+	t.Helper()
+
+	mustAck(t, srv, createDestinationXML(didAgencyA, deliveryX2Only, "10.0.60.122", tcpPort("42069"), ""))
+}
+
 // TestTaskCarriesTheX2DestinationsItNamed is the conformance fix itself. TS 33.128 marks
 // ListOfDIDs mandatory in every ActivateTask table it defines and requires the endpoints
 // to have been provisioned with CreateDestination beforehand; this is the element holding
@@ -137,18 +151,55 @@ func TestTaskCarriesTheX2DestinationsItNamed(t *testing.T) {
 	}
 }
 
-// A DID this element cannot resolve yields no endpoint — and the task is still accepted,
-// because an ADMF may legitimately task an IRI-POI whose endpoint comes from
-// configuration. What must not happen is the task resolving to something else.
-func TestTaskNamingAnUnknownDestinationResolvesNothing(t *testing.T) {
+// TestATaskNamingAnUnresolvableDestinationIsRefused replaces the test that asserted such
+// a task was accepted and resolved nothing.
+//
+// That was the behaviour, and it was wrong in the direction this plane must not fail in.
+// The task was stored, reported as active, and produced product for whichever endpoints
+// *did* resolve — so an agency named in the warrant received nothing while provisioning
+// reported success, which is undiscoverable from outside. The case the leniency was
+// written for is still served two ways: a task that names no destination at all falls
+// back to the element's configured endpoint, and a destination agreed out of band is
+// declared in the element's own configuration, where it resolves.
+//
+// Refused before it is stored, so nothing is left behind — a task in the store is one
+// this element reports as active and acts on.
+func TestATaskNamingAnUnresolvableDestinationIsRefused(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "neID")
 
-	mustAck(t, srv, createDestinationXML(didAgencyA, deliveryX2Only, "10.0.60.122", tcpPort("42069"), ""))
-	mustAck(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyB), ""))
+	provisionAgencyA(t, srv)
+	m := serve(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyB), ""))
 
-	if got := endpointsOf(t, st, testXID, types.DeliveryX2); len(got) != 0 {
-		t.Errorf("X2 endpoints = %v, want none: the task named a DID this element does not hold", got)
+	if m.ErrorInformation == nil || m.ErrorInformation.ErrorCode != errCodeNoSuchDID {
+		t.Fatalf("got %+v, want error %d (dId does not exist on the NE)", m.ErrorInformation, errCodeNoSuchDID)
+	}
+	if !strings.Contains(m.ErrorInformation.ErrorDescription, didAgencyB) {
+		t.Errorf("the refusal does not name the identifier the ADMF has to fix: %q",
+			m.ErrorInformation.ErrorDescription)
+	}
+	if st.Len() != 0 {
+		t.Error("a task naming a destination this element cannot resolve was stored: it would be " +
+			"reported as active, and the agency the warrant names would receive nothing")
+	}
+}
+
+// And the mixed case, which is the one that made this a refusal rather than a report: a
+// list of which some resolve and some do not is refused whole. Delivering to the subset
+// is under-delivery an ADMF cannot see, and delivering the rest to the element's own
+// configured endpoint is the element deciding where a warrant's product goes.
+func TestAPartiallyResolvableDestinationListIsRefusedWhole(t *testing.T) {
+	st := store.New()
+	srv := NewServer(st, "neID")
+
+	provisionAgencyA(t, srv)
+	m := serve(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyA, didAgencyB), ""))
+
+	if m.ErrorInformation == nil || m.ErrorInformation.ErrorCode != errCodeNoSuchDID {
+		t.Fatalf("got %+v, want error %d", m.ErrorInformation, errCodeNoSuchDID)
+	}
+	if st.Len() != 0 {
+		t.Error("a task whose destination list only partly resolved was stored with the subset")
 	}
 }
 
@@ -503,6 +554,7 @@ func TestDestinationSetsAreRefused(t *testing.T) {
 func TestARefusedModificationCarriesTheModifyCode(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "neID")
+	provisionAgencyA(t, srv)
 	mustAck(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyA), ""))
 
 	body := strings.Replace(
@@ -608,6 +660,7 @@ func TestIdentifierAssociationExtensionSetsTheTaskRecordScope(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			st := store.New()
 			srv := NewServer(st, "neID")
+			provisionAgencyA(t, srv)
 			mustAck(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyA), c.afterDIDs))
 
 			task, ok := st.Get(testXID)
@@ -663,7 +716,12 @@ func TestAReportedTaskCarriesItsDestinationIdentifiers(t *testing.T) {
 	st := store.New()
 	srv := NewServer(st, "neID")
 
-	mustAck(t, srv, createDestinationXML(didAgencyA, deliveryX2Only, "10.0.60.122", tcpPort("42069"), ""))
+	provisionAgencyA(t, srv)
+	// Both provisioned. This test used to name one destination the element could not
+	// resolve, to show that what is reported is what the ADMF said rather than what
+	// resolved — but such a task is now refused, and the reporting property is asserted
+	// with two resolvable ones instead.
+	mustAck(t, srv, createDestinationXML(didAgencyB, deliveryX2Only, "10.0.60.123", tcpPort("42069"), ""))
 	mustAck(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyA, didAgencyB), ""))
 
 	m := serve(t, srv, string(request("GetTaskDetailsRequest", "\n    <ns1:xId>"+string(testXID)+"</ns1:xId>")))
@@ -758,6 +816,7 @@ func TestTaskIdentifiersMustBeUUIDs(t *testing.T) {
 	// supplies to label product with the warrant rather than with its own trigger task.
 	st := store.New()
 	srv := NewServer(st, "neID")
+	provisionAgencyA(t, srv)
 	mustAck(t, srv, activateXMLWith(goodXID, deliveryX2Only, dIDs(didAgencyA),
 		"\n      <ns1:productID>cccccccc-cccc-4ccc-8ccc-cccccccccccc</ns1:productID>"))
 
@@ -848,6 +907,7 @@ func TestDeactivationRefusesWhatItCannotHonour(t *testing.T) {
 				torn = append(torn, prev.XID)
 			}
 		}))
+		provisionAgencyA(t, srv)
 		mustAck(t, srv, activateXMLWith(string(testXID), deliveryX2Only, dIDs(didAgencyA), ""))
 		mustAck(t, srv, deactivate(string(testXID)))
 

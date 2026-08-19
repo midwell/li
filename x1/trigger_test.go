@@ -6,6 +6,7 @@ package x1
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -138,7 +139,15 @@ func TestTriggerRoundTripThroughListener(t *testing.T) {
 	// the triggering function is not authority in itself. httptest serves plain
 	// HTTP, so the peer certificate is supplied to Process directly, as the other
 	// listener tests do.
-	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID())
+	// The trigger's destination is declared, because a task naming one this element
+	// cannot resolve is now refused — and what this test is about is the trigger round
+	// trip, not destination resolution.
+	srv := NewServer(st, "upf-1", WithADMF("smf-1"), HonoursCorrelationID(),
+		WithConfiguredDestinations(ConfiguredDestination{
+			DID:          testTrigger().DIDs[0],
+			DeliveryType: deliveryX3Only,
+			Address:      "192.0.2.1:42069",
+		}))
 	peer := certWithUID(t, "smf-1")
 	req, _ := requesterTo(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
@@ -319,21 +328,29 @@ func TestDestinationProvisioningResolvesDIDs(t *testing.T) {
 		t.Errorf("destination type = %q, want X3", got)
 	}
 
-	// A DID nobody provisioned is skipped rather than failing the task: an ADMF may
-	// legitimately task an IRI-POI whose MDF address comes from configuration. The
-	// POI that needs a destination enforces that at delivery instead.
+	// A DID nobody provisioned fails the task. It used to be skipped, on the reasoning
+	// that an ADMF may legitimately task an IRI-POI whose MDF address comes from
+	// configuration — which is still true and is still served, by declaring that
+	// destination in the element's configuration or by naming no destination at all.
+	// What is refused is an identifier the element genuinely cannot place: accepting it
+	// leaves the triggering function believing content interception is running while the
+	// element has nowhere to send the product, which is the state this whole interface
+	// exists to make visible.
 	tr2 := testTrigger()
 	tr2.XID = "44444444-4444-4444-8444-444444444444"
 	tr2.DIDs = []string{"55555555-5555-4555-8555-555555555555"}
-	if err := req.ActivateTask(tr2); err != nil {
-		t.Fatalf("ActivateTask with an unprovisioned DID: %v", err)
+	err := req.ActivateTask(tr2)
+	if err == nil {
+		t.Fatal("ActivateTask with an unprovisioned DID was acknowledged: the triggering function " +
+			"is told the interception is running and the product has nowhere to go")
 	}
-	task2, ok := st.Get(tr2.XID)
-	if !ok {
-		t.Fatal("task with an unprovisioned DID was not stored")
+	var refused *RequestError
+	if !errors.As(err, &refused) || refused.Code != errCodeNoSuchDID {
+		t.Errorf("ActivateTask failed with %v, want a refusal carrying %d (dId does not exist "+
+			"on the NE)", err, errCodeNoSuchDID)
 	}
-	if len(task2.Deliveries) != 0 {
-		t.Errorf("Deliveries = %+v, want none resolved", task2.Deliveries)
+	if _, held := st.Get(tr2.XID); held {
+		t.Error("a task naming an unresolvable destination was stored")
 	}
 }
 

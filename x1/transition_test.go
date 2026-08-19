@@ -190,7 +190,7 @@ func TestAProbeIsReachableFromInsideACallback(t *testing.T) {
 
 	var srv *Server
 
-	srv = NewServer(st, "neID",
+	srv = testServer(st,
 		WithFaultProbes(func() *X1Error { return nil }),
 		OnTaskChange(func(_, _ *types.InterceptTask) {
 			// Under the transition lock, on the same server. Both of these take mu and

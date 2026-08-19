@@ -22,7 +22,7 @@ import (
 func TestDeactivateAllTasksTearsDownWhatItRemoves(t *testing.T) {
 	st := store.New()
 	var tornDown []types.XID
-	srv := NewServer(st, "neID", OnTaskChange(func(prev, next *types.InterceptTask) {
+	srv := testServer(st, OnTaskChange(func(prev, next *types.InterceptTask) {
 		if next == nil {
 			tornDown = append(tornDown, prev.XID)
 		}
@@ -68,7 +68,7 @@ func TestDeactivateAllTasksIsEnabledByDefault(t *testing.T) {
 		Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
 		Products: []types.ProductType{types.ProductIRI},
 	})
-	srv := NewServer(st, "neID")
+	srv := testServer(st)
 	srv.now = func() time.Time { return zeroTailInstant }
 
 	if _, err := srv.Process(request("DeactivateAllTasksRequest", ""), admfPeer(t)); err != nil {
@@ -110,7 +110,7 @@ func TestBulkOperationsRefuseWithTheSpecifiedText(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			srv := NewServer(store.New(), "neID", c.opts...)
+			srv := testServer(store.New(), c.opts...)
 			srv.now = func() time.Time { return zeroTailInstant }
 
 			resp, err := srv.Process(request(c.req, ""), admfPeer(t))
@@ -151,7 +151,7 @@ func TestBulkOptionsNoAgreementLeavesTheSpecificationsDefaults(t *testing.T) {
 		Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
 		Products: []types.ProductType{types.ProductIRI},
 	})
-	srv := NewServer(st, "neID", opts...)
+	srv := testServer(st, opts...)
 	srv.now = func() time.Time { return zeroTailInstant }
 
 	if _, err := srv.Process(request("DeactivateAllTasksRequest", ""), admfPeer(t)); err != nil {
@@ -187,7 +187,7 @@ func TestBulkOptionsCarryTheNonDefaultDirections(t *testing.T) {
 			Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
 			Products: []types.ProductType{types.ProductIRI},
 		})
-		srv := NewServer(st, "neID", BulkOptions(&no, nil)...)
+		srv := testServer(st, BulkOptions(&no, nil)...)
 		srv.now = func() time.Time { return zeroTailInstant }
 
 		resp, err := srv.Process(request("DeactivateAllTasksRequest", ""), admfPeer(t))
@@ -211,7 +211,7 @@ func TestBulkOptionsCarryTheNonDefaultDirections(t *testing.T) {
 	})
 
 	t.Run("bulk destination removal enabled", func(t *testing.T) {
-		srv := NewServer(store.New(), "neID", BulkOptions(nil, &yes)...)
+		srv := testServer(store.New(), BulkOptions(nil, &yes)...)
 		srv.now = func() time.Time { return zeroTailInstant }
 		srv.destinations[testDID] = heldDestination{
 			DeliveryType: deliveryX2Only, Address: "10.0.60.122:42069",
@@ -239,7 +239,7 @@ func TestBulkOptionsCarryTheNonDefaultDirections(t *testing.T) {
 // have caused that itself.
 func TestRemoveAllDestinationsRefusesWhileReferenced(t *testing.T) {
 	st := store.New()
-	srv := NewServer(st, "neID", WithRemoveAllDestinations())
+	srv := testServer(st, WithRemoveAllDestinations())
 	srv.now = func() time.Time { return zeroTailInstant }
 	srv.destinations[testDID] = heldDestination{
 		DeliveryType: deliveryX2Only, Address: "10.0.60.122:42069",
@@ -294,7 +294,7 @@ func TestBulkDeactivationSharesTheFailSafePath(t *testing.T) {
 	run := func(viaKeepalive bool) []types.XID {
 		st := store.New()
 		var tornDown []types.XID
-		srv := NewServer(st, "neID", OnTaskChange(func(prev, next *types.InterceptTask) {
+		srv := testServer(st, OnTaskChange(func(prev, next *types.InterceptTask) {
 			if next == nil {
 				tornDown = append(tornDown, prev.XID)
 			}
