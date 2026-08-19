@@ -216,12 +216,40 @@ Of these, this project emits exactly three: format 2 on X2, and formats 5 and 12
 | 9 | SIP message | Yes | No | Permitted on X2, never emitted. |
 | 10 | DHCP message | Yes | No | Permitted on X2, never emitted. |
 | 11 | RADIUS packet | Yes | No | Permitted on X2, never emitted. |
-| 12 | GTP-U message | No | Yes | **Emitted** on X3 — the encapsulated form. |
+| 12 | GTP-U message | No | Yes | **Emitted** on X3 — the encapsulated form. Confirmed against the reference MDF, 2026-08-19; see below. |
 | 13 | MSRP message | No | Yes | Permitted on X3, never emitted. |
 | 14 | 3GPP TS 33.108 EpsIRIContent | Yes | No | Permitted on X2, never emitted. |
 | 15 | MIME message | Yes | Yes | Permitted, never emitted. |
 | 16 | 3GPP unstructured PDU | No | Yes | Permitted on X3, never emitted. |
 | 17 | ETSI TS 102 232-1 PS-PDU.Payload | Yes | Yes | Permitted, never emitted. Added in V1.8.1. |
+
+### Value 12, settled against the mediation function — 2026-08-19
+
+Which reading of value 12 an MDF implements is not something the specification text settles
+on its own: "GTP-U message" could mean the encapsulated packet as it appears on N3, or an
+inner packet the POI has labelled by the tunnel it arrived on. This project emits the first —
+the downlink copy is teed after encapsulation, so what is delivered is the GTP-U datagram —
+and until now that was a reading rather than an agreement.
+
+**The reference implementation resolves it the same way.** Delivering to the sipgate simulator
+from the deployed UPF, its own inbound handler logged the PDU it had parsed:
+
+```
+X2X3InboundHandlerAdapter : Received message: PduObject[majorVersion=0, minorVersion=5,
+  pduType=X3_PDU, payloadFormat=GTP_U, payloadDirection=SENT_TO_TARGET, xid=…, correlationID=…,
+  conditionalAttributeFields=[…], payload=…]
+```
+
+So the peer decoded value 12 into its own `GTP_U` payload format, accepted the PDU, and
+retained it — with the payload this element sent, which is the encapsulated form. That is
+agreement on the reading, established by interoperation rather than by argument.
+
+**What it does not establish**, stated because the distinction is the whole point of this
+document: the simulator accepting a payload is not the same as a mediation function
+*validating* it. Nothing here shows that a strict MDF would reconstruct the session from the
+encapsulated form, only that the reference implementation reads the label as this element
+means it. The uplink copy is delivered as format 5 (decapsulated IPv4) and raises no such
+question.
 
 ## What this disposition does not cover
 
