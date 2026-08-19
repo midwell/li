@@ -11,6 +11,7 @@ package x1
 import (
 	"encoding/xml"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/omec-project/li/types"
@@ -127,6 +128,12 @@ type Port struct {
 // Value returns the port number whichever arm carries it, or 0 when neither does.
 // The transport is not distinguished: X2 and X3 are carried over TCP (TS 103 221-2),
 // so a UDPPort names the same endpoint this element would dial anyway.
+//
+// **It does not settle a multi-arm choice, and must not be asked to.** Populating both
+// arms is invalid against the schema, so no reading of it is authoritative — and this
+// switch's order would make the element choose which port a warrant's product is
+// delivered to. Cardinality is decided on the decode path (Arms), before any consumer
+// reaches this.
 func (p Port) Value() uint16 {
 	switch {
 	case p.TCPPort != nil:
@@ -138,10 +145,95 @@ func (p Port) Value() uint16 {
 	}
 }
 
+// Arms counts how many arms of the Port choice carry a value.
+//
+// The same rule the element already applies to targetIdentifier arms, at the level a
+// destination's port lives: zero populated arms is a destination with no port, several is
+// a message that violates its own format, and exactly one is the only valid shape. Kept
+// beside the declaration it mirrors so an arm added to the struct and not added here is
+// visible as an omission.
+func (p Port) Arms() int {
+	n := 0
+	for _, v := range []*uint16{p.TCPPort, p.UDPPort} {
+		if v != nil {
+			n++
+		}
+	}
+
+	return n
+}
+
 // IPAddress is a CHOICE of IPv4 and IPv6 literal.
 type IPAddress struct {
 	IPv4 string `xml:"http://uri.etsi.org/03280/common/2017/07 IPv4Address,omitempty"`
 	IPv6 string `xml:"http://uri.etsi.org/03280/common/2017/07 IPv6Address,omitempty"`
+}
+
+// Arms counts how many arms of the IPAddress choice carry a value. See Port.Arms.
+func (a IPAddress) Arms() int {
+	n := 0
+	for _, v := range []string{a.IPv4, a.IPv6} {
+		if v != "" {
+			n++
+		}
+	}
+
+	return n
+}
+
+// Valid reports whether this address is one arm carrying a value of the family that arm
+// names.
+//
+// **The family matters as much as the cardinality.** TS 103 280 types these as an IPv4
+// and an IPv6 address, and the element took the text of the IPv4 arm as an address
+// without parsing it — so a destination whose address is not an address at all was
+// created, acknowledged, and then dialled forever, with the failure reported as an
+// unreachable mediation function rather than as the provisioning error it is. Checking
+// the family and not just the syntax also refuses an IPv6 literal placed in the IPv4 arm,
+// which would otherwise be joined to a port without brackets and produce an address
+// nothing can dial.
+func (a IPAddress) Valid() error {
+	switch n := a.Arms(); {
+	case n == 0:
+		return fmt.Errorf("address populates no arm of a choice; exactly one is valid")
+	case n > 1:
+		return fmt.Errorf("address populates %d arms of a choice; exactly one is valid", n)
+	}
+
+	if a.IPv4 != "" {
+		ip, err := netip.ParseAddr(a.IPv4)
+		if err != nil || !ip.Is4() {
+			return fmt.Errorf("IPv4Address %q is not an IPv4 address", a.IPv4)
+		}
+
+		return nil
+	}
+	ip, err := netip.ParseAddr(a.IPv6)
+	if err != nil || ip.Is4() {
+		return fmt.Errorf("IPv6Address %q is not an IPv6 address", a.IPv6)
+	}
+
+	return nil
+}
+
+// Valid reports whether this port is one arm carrying a value a peer can be dialled on.
+//
+// Zero is refused because it is not a port: the schema types both arms as a TS 103 280
+// Port, and a destination stored with port 0 is one this element would dial and never
+// reach. The upper bound comes free from the uint16 the arms are typed as — a value above
+// it fails to decode, which is where a range check belongs when the type can carry it.
+func (p Port) Valid() error {
+	switch n := p.Arms(); {
+	case n == 0:
+		return fmt.Errorf("port populates no arm of a choice; exactly one is valid")
+	case n > 1:
+		return fmt.Errorf("port populates %d arms of a choice; exactly one is valid", n)
+	}
+	if p.Value() == 0 {
+		return fmt.Errorf("port is 0, which names no endpoint")
+	}
+
+	return nil
 }
 
 // TaskDetails describes the interception task being (de)provisioned. Field order

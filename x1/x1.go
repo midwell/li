@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"reflect"
 	"regexp"
 	"slices"
@@ -493,8 +494,21 @@ func (d ConfiguredDestination) Valid() error {
 	if _, err := deliveryProducts(d.DeliveryType); err != nil {
 		return err
 	}
-	if _, _, err := net.SplitHostPort(d.Address); err != nil {
+	host, port, err := net.SplitHostPort(d.Address)
+	if err != nil {
 		return fmt.Errorf("address is not host:port")
+	}
+	// **SplitHostPort accepts a host that is not an address**, so this used to admit an
+	// entry that resolves to a destination nothing can dial — and an operator's static
+	// declaration is the one destination source with no X1 answer to carry the refusal, so
+	// an unusable entry is dropped and the task naming its DID is then refused for an
+	// identifier the operator believes they supplied. The same two checks the provisioned
+	// path takes, for the same reason: the value, not only the shape that carried it.
+	if _, err := netip.ParseAddr(host); err != nil {
+		return fmt.Errorf("address host %q is not an IP address", host)
+	}
+	if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+		return fmt.Errorf("address port %q is not a port number", port)
 	}
 
 	return nil
@@ -654,20 +668,15 @@ func (s *Server) Process(body []byte, peer *x509.Certificate) (*X1Response, erro
 		return nil, fmt.Errorf("x1: malformed request: %w", err)
 	}
 	resp := &X1Response{}
-	authenticated := false
 	for _, m := range req.Messages {
-		rm, ok := s.applyAuthenticated(m, peer)
-		authenticated = authenticated || ok
+		// The bool the two-return form carried said "this message authenticated", and it
+		// existed only to record ADMF liveness after the batch. That now happens inside,
+		// before each message is applied — see applyAuthenticated for why the order
+		// matters to the fail-safe — so nothing out here needs it.
+		rm, _ := s.applyAuthenticated(m, peer)
 		resp.Messages = append(resp.Messages, rm)
 	}
-	// An authenticated X1 message means the responsible ADMF is alive — this feeds
-	// the keepalive watchdog (TS 103 221-1: the ADMF sends KeepaliveRequest at least
-	// every TIME_P1; if they lapse the NE purges tasking). Unauthenticated traffic
-	// must not reset it, or anyone able to reach the X1 port could hold the
-	// fail-safe open indefinitely while the real ADMF is gone.
-	if authenticated {
-		s.recordActivity()
-	}
+
 	return resp, nil
 }
 
@@ -706,6 +715,25 @@ func (s *Server) applyAuthenticated(m X1RequestMessage, peer *x509.Certificate) 
 			RequestType: localType(m.Type),
 		}, false
 	}
+	// **Recorded before the message is applied, not after the batch.**
+	//
+	// An authenticated X1 message means the responsible ADMF is alive — this feeds the
+	// keepalive watchdog (TS 103 221-1: the ADMF sends KeepaliveRequest at least every
+	// TIME_P1; if they lapse the NE purges tasking). Unauthenticated traffic must not
+	// reset it, or anyone able to reach the X1 port could hold the fail-safe open
+	// indefinitely while the real ADMF is gone — which is why this is here rather than
+	// on every message.
+	//
+	// Recorded *before* applying because of what a lapse purge does with it. The purge
+	// re-reads lastSeen under the transition lock precisely so a recovery activation
+	// acknowledged during the window is not purged by a tick already in flight; recorded
+	// after the batch, the activation would release that lock with lastSeen still stale
+	// and the tick would purge the tasking the ADMF has just been told is active.
+	//
+	// It is also the truer statement: the ADMF is alive because its message arrived, not
+	// because this element finished acting on it.
+	s.recordActivity()
+
 	return s.apply(m), true
 }
 
@@ -765,13 +793,42 @@ func (s *Server) WatchKeepalive(timeout time.Duration, stop <-chan struct{}) {
 // store alone is not a complete purge. After the first purge the snapshot is
 // empty, so subsequent lapsed ticks are no-ops.
 func (s *Server) purgeIfLapsed(timeout time.Duration) {
-	s.mu.Lock()
-	idle := s.now().Sub(s.lastSeen)
-	s.mu.Unlock()
-	if idle <= timeout {
+	if !s.lapsed(timeout) {
 		return
 	}
-	s.purgeAllTasking(PurgeKeepaliveLapse)
+
+	// nil in production. The window between deciding the ADMF has gone quiet and acting
+	// on it is where a returning ADMF's recovery activation lands — see
+	// TestAnActivationInTheLapseWindowSurvives.
+	if afterLapseDecision != nil {
+		afterLapseDecision()
+	}
+
+	// **Re-checked under the transition lock, and that is not belt-and-braces.** The read
+	// above and the purge below are separate steps, and an X1 request arriving between
+	// them is the recovery case: a returning ADMF's ActivateTask takes the transition
+	// lock, records activity, stores the task and acknowledges it — and this tick, already
+	// past its own test, then purges the tasking it has just acknowledged. The ADMF holds
+	// an acknowledgement for an interception that no longer exists, and the report it gets
+	// says the ADMF went quiet, which is true of the window and false of the ADMF.
+	//
+	// So the decision and the purge are one hold of the transition lock: re-checking and
+	// then re-acquiring would leave the same window a few instructions narrower.
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
+	if !s.lapsed(timeout) {
+		return
+	}
+	s.purgeAllTaskingLocked(PurgeKeepaliveLapse)
+}
+
+// lapsed reports whether no X1 message has arrived within timeout.
+func (s *Server) lapsed(timeout time.Duration) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.now().Sub(s.lastSeen) > timeout
 }
 
 // purgeAllTasking removes every task and runs the per-task teardown over what was there.
@@ -791,6 +848,15 @@ func (s *Server) purgeAllTasking(reason PurgeReason) {
 	s.transitionMu.Lock()
 	defer s.transitionMu.Unlock()
 
+	s.purgeAllTaskingLocked(reason)
+}
+
+// purgeAllTaskingLocked is purgeAllTasking's body, for the caller that already holds the
+// transition lock because its own decision had to be taken under it — the lapse purge,
+// whose test of whether the ADMF has gone quiet must not be separated from acting on it.
+//
+// Caller holds s.transitionMu.
+func (s *Server) purgeAllTaskingLocked(reason PurgeReason) {
 	tasks := s.store.Snapshot()
 	// nil in production. It exists because the window between the snapshot and the
 	// clear is a few instructions wide, so the interleaving it used to admit cannot be
@@ -810,6 +876,14 @@ func (s *Server) purgeAllTasking(reason PurgeReason) {
 // afterPurgeSnapshot is called between reading the tasks a purge will tear down and
 // emptying the store. Set only by tests; nil otherwise.
 var afterPurgeSnapshot func()
+
+// afterDestinationGuard is called inside createDestination, after its two refusals have
+// been decided and before the destination is stored. Set only by tests; nil otherwise.
+var afterDestinationGuard func()
+
+// afterLapseDecision is called inside purgeIfLapsed, after it has concluded the ADMF has
+// gone quiet and before it acts on that. Set only by tests; nil otherwise.
+var afterLapseDecision func()
 
 // deactivateAll performs the bulk deactivation TS 103 221-1 requires every implementation to
 // support: "If enabled, the DeactivateAllTasks command shall perform a 'DeactivateTask' command
@@ -892,10 +966,29 @@ func (s *Server) destinationsInUse() int {
 // specification's bulk removal is over "all Destinations on the NE" in the sense of
 // those an ADMF created, and an X1 message that could delete an element's own
 // configuration would be a different and much larger power.
-func (s *Server) removeAllDestinations() {
+// The in-use count and the removal are taken together, under the transition lock, for
+// the same reason createDestination takes it: the guard is decided from task state, and a
+// task activated between the count and the clear would be left referencing a destination
+// this element has just deleted — producing product with nowhere to send it, which is the
+// failure RequireResolvableDIDs exists to prevent, reached by removing the destination
+// rather than by never providing it.
+func (s *Server) removeAllDestinations() (int, error) {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
+	if n := s.destinationsInUse(); n > 0 {
+		// "Since a RemoveDestination request can only be issued against destinations that
+		// are not in use, an NE shall respond with an error if the ADMF sends a
+		// RemoveAllDestinations request while any of the Destinations are referenced by
+		// Tasks."
+		return errCodeDestinationsInUse, fmt.Errorf("%d destination(s) are referenced by tasks", n)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.destinations = make(map[string]heldDestination)
+
+	return 0, nil
 }
 
 // applyTaskTransition performs an activation or a modification as one indivisible
@@ -1031,15 +1124,10 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 			// tidied, because tidying it would break a peer matching the published string.
 			err = fmt.Errorf("RemoveAllDestinations request is not enabled")
 			code = errCodeRemoveAllOff
-		} else if n := s.destinationsInUse(); n > 0 {
-			// "Since a RemoveDestination request can only be issued against destinations that
-			// are not in use, an NE shall respond with an error if the ADMF sends a
-			// RemoveAllDestinations request while any of the Destinations are referenced by
-			// Tasks."
-			err = fmt.Errorf("%d destination(s) are referenced by tasks", n)
-			code = errCodeDestinationsInUse
 		} else {
-			s.removeAllDestinations()
+			// The in-use guard moved inside, so it is evaluated atomically with the
+			// removal rather than a few instructions before it.
+			code, err = s.removeAllDestinations()
 		}
 		rm.Type = "RemoveAllDestinationsResponse"
 	case "GetAllTaskDetailsRequest":
@@ -1232,9 +1320,33 @@ func (s *Server) createDestination(d *DestinationDetails) (int, error) {
 		return 0, err
 	}
 
+	// **The guards below and the mutation are one step against the transitions they
+	// race.** Both refusals are decided from state a *task* operation changes: whether
+	// any task references the DID, which an activation or a deactivation moves. Asked
+	// outside the transition lock, an activation naming this DID could land between the
+	// question and the answer — so the element would create a destination under a
+	// configured identifier a live task depends on, and every task activated before that
+	// moment would keep delivering to the configured address while the element answered
+	// with the new one. A provisioning function could read a destination back from an
+	// element still sending a live warrant's product somewhere else.
+	//
+	// Lock order is the file's existing one: transition lock, then store, then s.mu. No
+	// network I/O runs under it, and destinations are provisioned once per endpoint
+	// before first use, so the latency this adds to X1 is bounded by a map write.
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
 	// Whether a task references the DID is answered from the task store, which has its
 	// own lock, so it is asked before s.mu is taken.
 	referenced := s.didReferenced(d.DID)
+
+	// nil in production. The window between the reference check and the mutation is a
+	// few instructions wide, so the interleaving it used to admit cannot be reached by
+	// racing two goroutines and hoping — see
+	// TestACreateRacingAnActivationResolvesOneWayOrTheOther.
+	if afterDestinationGuard != nil {
+		afterDestinationGuard()
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1282,18 +1394,27 @@ func destinationFrom(d DestinationDetails) (heldDestination, error) {
 		return heldDestination{}, codedError{errCodeBadAddressType, fmt.Errorf("unsupported deliveryAddress")}
 	}
 	ap := d.Address.IPAddressAndPort
+
+	// **The value, not only the field that carried it.** This used to take the IPv4 arm's
+	// text as an address without parsing it, and read the port through a helper that
+	// resolved a two-armed choice by precedence — so a destination whose address is not an
+	// address was created, acknowledged and dialled forever, and a message populating both
+	// port arms had this element choose which one a warrant's product went to. Both are
+	// schema errors (1010): the types restrict them, and a value violating its own type is
+	// malformed rather than something this element declines to honour.
+	if err := ap.Address.Valid(); err != nil {
+		return heldDestination{}, codedError{errCodeSchemaError, err}
+	}
+	if err := ap.Port.Valid(); err != nil {
+		return heldDestination{}, codedError{errCodeSchemaError, err}
+	}
+
 	host := ap.Address.IPv4
 	if host == "" {
 		// An IPv6 literal needs brackets before it can be joined to a port.
-		if ap.Address.IPv6 == "" {
-			return heldDestination{}, fmt.Errorf("deliveryAddress carries no IP address")
-		}
 		host = "[" + ap.Address.IPv6 + "]"
 	}
 	port := ap.Port.Value()
-	if port == 0 {
-		return heldDestination{}, fmt.Errorf("deliveryAddress carries no port")
-	}
 
 	return heldDestination{
 		Address:      host + ":" + strconv.FormatUint(uint64(port), 10),
@@ -1634,6 +1755,21 @@ func one(kind types.TargetIdentifierType, value string) []types.TargetIdentifier
 // answered further in — and a criterion it cannot evaluate is still refused there
 // rather than accepted and ignored.
 func mapExtensionTarget(ext *TargetIdentifierExtension) ([]types.TargetIdentifier, error) {
+	// **The Owner is what says whose content this is.** TS 103 221-1 annex B makes the
+	// extension a placeholder — an Owner naming the specification that defines the
+	// content, then that content — and TS 33.128 table 6.2.3-7 names 3GPP as the owner of
+	// these criteria. Reading them as LI_T3 without checking it means the element applies
+	// 3GPP detection criteria to a message that claimed to carry someone else's, or
+	// claimed nothing: the nested element names and namespace matching is not the same
+	// statement as the extension being 3GPP's, and another owner is entitled to define
+	// elements of any name in a namespace this element happens to recognise.
+	//
+	// The same rule the message-level extensions already take (unhonourableExtensions),
+	// applied to the one structure that was missed — and the one where the content decides
+	// which traffic is intercepted.
+	if ext.Owner != ExtensionOwner3GPP {
+		return nil, fmt.Errorf("target identifier extension owned by %q is not supported", ext.Owner)
+	}
 	if ext.UPFT3 == nil || len(ext.UPFT3.Identifiers) == 0 {
 		return nil, fmt.Errorf("unsupported target identifier extension")
 	}
@@ -1758,6 +1894,17 @@ func malformedTaskIdentifiers(td TaskDetails) error {
 		}
 	}
 	for _, ti := range td.TargetIdentifiers {
+		// **The value, not only which arm carried it.** These arms are typed by the
+		// schema — an IPv4Address is a TS 103 280 IPv4 address, a tcpPort a Port — and
+		// mapTarget copied their text into the task store with no check at all. So a task
+		// carrying a port outside its type's range, or an address that is not an address,
+		// was stored, acted on as a detection criterion, and echoed back by
+		// GetTaskDetails as this element's own account of what it holds. Checked here
+		// because this is the decode path every task crosses: a check beside one consumer
+		// is not inherited by the next one, which is the mistake being corrected.
+		if err := malformedTargetValue(ti); err != nil {
+			return err
+		}
 		if n := populatedArms(ti); n > 1 {
 			// The schema defines TargetIdentifier as an xs:choice, so a message
 			// populating two arms is invalid against it and no reading of it is
@@ -1788,6 +1935,46 @@ func malformedTaskIdentifiers(td TaskDetails) error {
 					"LI_T3 detection criterion %d of %d populates %d arms of a choice; exactly one is valid",
 					i+1, len(ti.Extension.UPFT3.Identifiers), n)
 			}
+		}
+	}
+
+	return nil
+}
+
+// malformedTargetValue checks the arms whose schema type restricts what they may carry.
+//
+// Only the arms with a restriction this element can state: the two addresses against their
+// families, and the two transport ports against the range of a port. The subscriber
+// identifiers are left to validIdentifier's own rules, and the extension arm's contents
+// are checked by mapUPFLIT3Identifier, which refuses each criterion it cannot use.
+func malformedTargetValue(t TargetIdentifier) error {
+	for _, a := range []struct {
+		name, value string
+		want4       bool
+	}{
+		{"ipv4Address", t.IPv4Address, true},
+		{"ipv6Address", t.IPv6Address, false},
+	} {
+		if a.value == "" {
+			continue
+		}
+		ip, err := netip.ParseAddr(a.value)
+		if err != nil || ip.Is4() != a.want4 {
+			return refuse(errCodeSchemaError, "%s %q is not an %s address", a.name, a.value, a.name)
+		}
+	}
+	for _, p := range []struct{ name, value string }{
+		{"tcpPort", t.TCPPort},
+		{"udpPort", t.UDPPort},
+	} {
+		if p.value == "" {
+			continue
+		}
+		// ParseUint with a 16-bit size is the range: the schema types both as a
+		// TS 103 280 Port, and a value outside it names no endpoint and no traffic.
+		if _, err := strconv.ParseUint(p.value, 10, 16); err != nil {
+			return refuse(errCodeSchemaError,
+				"%s %q is not a port number in the range the schema defines", p.name, p.value)
 		}
 	}
 
