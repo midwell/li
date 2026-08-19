@@ -90,6 +90,12 @@ func (s *Sequencer) Next(xid [xidLength]byte, corr [CorrelationIDLength]byte) ui
 //
 // A task deactivated and later activated again under the same XID therefore numbers
 // from zero, which is what a new context does.
+//
+// **Only where the whole XID is going.** This is the right granularity at an IRI-POI,
+// where one task is one warrant. It is the wrong one wherever several live tasks share
+// a delivery XID — a triggered CC-POI, where the triggering function allocates one task
+// per (warrant, session, UPF) under the warrant's ProductID — because ending one of
+// them then restarts the numbering of the rest. See ForgetContext.
 func (s *Sequencer) Forget(xid [xidLength]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,6 +107,33 @@ func (s *Sequencer) Forget(xid [xidLength]byte) {
 			delete(s.counters, key)
 		}
 	}
+}
+
+// ForgetContext drops exactly one context: this XID's numbering for this correlation
+// value, leaving every other context under the same XID numbering where it was.
+//
+// **Which of these two a point of interception needs follows from its tasking model,
+// and the two models in this project differ.** At an IRI-POI one task is one warrant
+// and is deactivated once, so the whole XID really is going and Forget is right. At a
+// triggered CC-POI the triggering function allocates one task per (warrant, session,
+// UPF) and gives them all the warrant's ProductID as their delivery XID — so the XID on
+// the wire is shared by every session that warrant is intercepting at that element, and
+// releasing by XID when one session ends restarts the numbering of all the others.
+//
+// That is not a leak but a forgery. A sequence number is how a mediation function
+// detects loss, so numbering state that resets under a live context makes this element
+// emit a sequence the receiver must read as either duplication or a gap — the loss
+// signal manufactured by the mechanism that governs it.
+//
+// The failure directions are asymmetric, and worth stating because it decides which to
+// reach for when unsure. Calling ForgetContext where Forget was needed leaks entries,
+// bounded by live tasking and visible through Identity.Contexts(). Calling Forget where
+// ForgetContext was needed corrupts product that is still being delivered.
+func (s *Sequencer) ForgetContext(xid [xidLength]byte, corr [CorrelationIDLength]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.counters, seqContext{xid: xid, corr: corr})
 }
 
 // Len reports how many contexts are being numbered. It exists so that "the state is

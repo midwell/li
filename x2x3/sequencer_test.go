@@ -121,3 +121,81 @@ func TestSequencerIsConcurrent(t *testing.T) {
 		}
 	}
 }
+
+// TestForgetContextLeavesSiblingContextsNumbering is the granularity the CC-POI needs,
+// and the assertion is deliberately on the *number* rather than on Len().
+//
+// A count passes against a release that dropped the wrong entry and then recreated it on
+// the next Next() — which is exactly the shape of the defect: the surviving context looks
+// present and starts again from zero. What a mediation function sees is a sequence
+// restarting under a live context, which it must read as duplication or as a gap. A
+// sequence number is how loss is detected on this interface, so the state that governs
+// the loss signal is capable of forging it.
+func TestForgetContextLeavesSiblingContextsNumbering(t *testing.T) {
+	s := NewSequencer()
+
+	// Two contexts under one delivery XID: at a triggered CC-POI this is two of a
+	// warrant's PDU sessions, each with its own correlation value and all of them
+	// carrying the warrant's ProductID on the wire.
+	s.Next(sampleXID, sampleCID)
+	s.Next(sampleXID, sampleCID)
+	s.Next(sampleXID, sampleCID) // this context's next number is 3
+	s.Next(sampleXID, otherCID)
+	s.Next(sampleXID, otherCID) // and this one's is 2
+
+	// One session ends. Only its context goes.
+	s.ForgetContext(sampleXID, sampleCID)
+
+	if got := s.Next(sampleXID, otherCID); got != 2 {
+		t.Errorf("a sibling context under the same XID continued at %d, want 2: ending one of a "+
+			"warrant's sessions restarted the numbering of another one it is still intercepting, "+
+			"which reaches the mediation function as duplicated numbers or a gap", got)
+	}
+	if got := s.Next(sampleXID, sampleCID); got != 0 {
+		t.Errorf("the released context resumed at %d, want 0 — a new context starts at zero", got)
+	}
+}
+
+// TestForgetStillDropsEveryContextUnderTheXID pins the other primitive, because the two
+// are now easy to confuse and the failure directions are not symmetric: a Forget where a
+// ForgetContext was needed corrupts live product, and a ForgetContext where a Forget was
+// needed leaks entries bounded by live tasking.
+func TestForgetStillDropsEveryContextUnderTheXID(t *testing.T) {
+	s := NewSequencer()
+	s.Next(sampleXID, sampleCID)
+	s.Next(sampleXID, otherCID)
+	s.Next(otherXID, sampleCID)
+
+	s.Forget(sampleXID)
+
+	if n := s.Len(); n != 1 {
+		t.Errorf("holding %d contexts after forgetting one XID, want 1", n)
+	}
+	if got := s.Next(sampleXID, otherCID); got != 0 {
+		t.Errorf("a context under the forgotten XID resumed at %d, want 0", got)
+	}
+}
+
+// TestForgetContextIsForwardedByIdentity: the points of interception reach the sequencer
+// through Identity, so a primitive that exists and is not forwarded is a primitive
+// nothing can use.
+func TestForgetContextIsForwardedByIdentity(t *testing.T) {
+	i := NewIdentity("upf-1", "1")
+
+	i.seq.Next(sampleXID, sampleCID)
+	i.seq.Next(sampleXID, otherCID)
+
+	i.ForgetContext(sampleXID, sampleCID)
+
+	if n := i.Contexts(); n != 1 {
+		t.Errorf("Identity holds %d contexts after releasing one, want 1", n)
+	}
+	if got := i.seq.Next(sampleXID, otherCID); got != 1 {
+		t.Errorf("the sibling context continued at %d, want 1", got)
+	}
+
+	i.Forget(sampleXID)
+	if n := i.Contexts(); n != 0 {
+		t.Errorf("Identity holds %d contexts after forgetting the XID, want 0", n)
+	}
+}

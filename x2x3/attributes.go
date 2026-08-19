@@ -175,10 +175,22 @@ func (i *Identity) Attributes(xid [xidLength]byte, corr [CorrelationIDLength]byt
 	return attrs
 }
 
-// Forget drops the numbering state for a task, so it does not outlive the tasking it
-// belongs to. Wire it to the X1 deactivation hook; see Sequencer.Forget.
+// Forget drops the numbering state for every context under an XID, so it does not
+// outlive the tasking it belongs to. Wire it to the X1 deactivation hook where one task
+// is one warrant; see Sequencer.Forget.
 func (i *Identity) Forget(xid [xidLength]byte) {
 	i.seq.Forget(xid)
+}
+
+// ForgetContext drops the numbering state for one correlation context under an XID,
+// leaving the XID's other contexts numbering where they were.
+//
+// This is the one a triggered CC-POI needs: its tasks are allocated per (warrant,
+// session, UPF) and share the warrant's delivery XID, so releasing by XID when one
+// session ends restarts the numbering of every other session that warrant is still
+// intercepting there. See Sequencer.ForgetContext for why that is worse than a leak.
+func (i *Identity) ForgetContext(xid [xidLength]byte, corr [CorrelationIDLength]byte) {
+	i.seq.ForgetContext(xid, corr)
 }
 
 // Contexts reports how many correlation contexts are being numbered, so that "this
