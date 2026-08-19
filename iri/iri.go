@@ -718,6 +718,16 @@ func EncodeXIRI(ctx *asn1.Context, event any) ([]byte, error) {
 	if err := validateEvent(event); err != nil {
 		return nil, err
 	}
+	// **Every constrained leaf, on the one path every record crosses.** validateEvent above
+	// checks two endpoint-list cases; this checks the restrictions the type definitions
+	// themselves carry, which nothing checked at all. A record violating its own definition
+	// encoded cleanly and went out: this element believes it delivered, a conformant mediation
+	// function discards what it cannot validate, and because delivery succeeded no fault is
+	// raised on either side. See constraints.go.
+	if err := validateConstraints(event); err != nil {
+		return nil, err
+	}
+
 	return ctx.Encode(XIRIPayload{OID: xIRIPayloadOID, Event: event})
 }
 

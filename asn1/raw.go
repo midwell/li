@@ -193,10 +193,22 @@ func decodeRawValue(reader io.Reader) (*rawValue, error) {
 			return nil, err
 		}
 	} else {
+		// LOCAL PATCH (omec/li) 4/4, continued: the same ceiling, through the other length
+		// form.
+		//
+		// The definite branch above caps the length a sender declares. This branch buffers
+		// until an end-of-contents marker arrives, so the *sender* sets the cost twice over: an
+		// unbounded bytes.Buffer grows with whatever it sends, and readEoc recursed with no
+		// depth bound, so a deeply nested indefinite construct exhausts the stack. So the
+		// ceiling the patch installed was bypassed simply by choosing the other encoding —
+		// which is the shape of defect this whole change is about, reached through a sibling.
+		//
+		// A cumulative byte budget and a depth budget, carried through the recursion. Both are
+		// expressed against the same ceiling the definite form is held to, so a peer cannot
+		// obtain more by picking a form.
 		buffer := bytes.NewBuffer([]byte{})
-		childrenReader := io.TeeReader(reader, buffer)
-		err := readEoc(childrenReader)
-		if err != nil {
+		childrenReader := io.TeeReader(&limitedReader{r: reader, left: indefiniteBudget}, buffer)
+		if err := readEoc(childrenReader, maxIndefiniteDepth); err != nil {
 			return nil, err
 		}
 		// At this point, buffer also contains the EoC bytes
@@ -208,7 +220,51 @@ func decodeRawValue(reader io.Reader) (*rawValue, error) {
 	return &raw, nil
 }
 
-func readEoc(reader io.Reader) error {
+// maxIndefiniteDepth bounds how deeply indefinite-length constructs may nest.
+//
+// readEoc recurses once per nested indefinite construct, and the nesting is the sender's to
+// choose — so without a bound a small message exhausts the goroutine's stack, which on a
+// delivery or signalling goroutine takes the network function with it. The real records this
+// codec carries nest a handful deep; this is far above any of them and far below anything that
+// costs a stack.
+const maxIndefiniteDepth = 64
+
+// indefiniteBudget is the cumulative byte ceiling an indefinite-length construct is held to.
+//
+// A variable rather than the constant itself so a test can lower it: proving the budget with
+// the real ceiling would mean feeding the decoder sixteen megabytes of conformant BER, and a
+// test that expensive is one that gets skipped. Production never assigns it.
+var indefiniteBudget uint = maxElementLength
+
+// limitedReader is io.LimitedReader with an error of this package's own, so exhausting the
+// budget is a parse error naming the ceiling rather than an EOF that reads as a truncated
+// message.
+//
+// It is *cumulative across the whole indefinite construct*, which is the point: bounding each
+// nested element separately would let a sender obtain any total it liked by nesting.
+type limitedReader struct {
+	r    io.Reader
+	left uint
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if l.left == 0 {
+		return 0, parseError("indefinite-length element exceeds maximum %d bytes", indefiniteBudget)
+	}
+	if uint(len(p)) > l.left {
+		p = p[:l.left]
+	}
+	n, err := l.r.Read(p)
+	l.left -= uint(n)
+
+	return n, err
+}
+
+func readEoc(reader io.Reader, depth int) error {
+	if depth <= 0 {
+		return parseError("indefinite-length nesting exceeds maximum depth %d", maxIndefiniteDepth)
+	}
+
 	for {
 		class, tag, constructed, err := decodeIdentifier(reader)
 		if err != nil {
@@ -229,14 +285,22 @@ func readEoc(reader io.Reader) error {
 		}
 
 		if indefinite {
-			err = readEoc(reader)
+			err = readEoc(reader, depth-1)
 		} else {
+			// The declared length of a child inside an indefinite construct is the sender's
+			// too, and skipping it reads it: the cumulative budget above is what bounds the
+			// total, and this refuses a single child that exceeds the ceiling on its own so
+			// the refusal names the length rather than the budget.
+			if length > maxElementLength {
+				return parseError("element length %d exceeds maximum %d", length, maxElementLength)
+			}
 			err = skipBytes(reader, int64(length))
 		}
 		if err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 

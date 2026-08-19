@@ -162,11 +162,16 @@ func goldenSamples() map[string]any {
 			ServiceType:            []byte{0x01},
 		},
 		"AMFUEPolicyTransfer": AMFUEPolicyTransfer{
-			SUPI:     IMSI("262019876543210"),
-			PEI:      IMEISV("3534250000000151"),
-			GPSI:     MSISDN("4915123456789"),
-			GUTI:     guti,
-			UEPolicy: UEPolicy{0x01, 0x02, 0x03},
+			SUPI: IMSI("262019876543210"),
+			PEI:  IMEISV("3534250000000151"),
+			GPSI: MSISDN("4915123456789"),
+			GUTI: guti,
+			// Sixteen octets: SIZE(16..65540). A three-octet value encoded cleanly and
+			// produced a golden vector no conformant receiver would accept.
+			UEPolicy: UEPolicy{
+				0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+				0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+			},
 		},
 		"AMFPositioningInfoTransfer": AMFPositioningInfoTransfer{
 			SUPI:             IMSI("262019876543210"),
@@ -211,10 +216,18 @@ var expectedUnchanged = map[string]bool{
 	"SMFPDUSessionRelease":                   true,
 	"SMFUnsuccessfulProcedure":               true,
 	"AMFUEServiceAccept":                     true,
-	"AMFUEPolicyTransfer":                    true,
-	"AMFPositioningInfoTransfer":             true,
-	"AMFRANHandoverCommand":                  true,
-	"AMFRANHandoverRequest":                  true,
+	// AMFUEPolicyTransfer is deliberately absent, and its vector moves in this change.
+	//
+	// **The encoding rule did not change; the sample did.** The sample carried a three-octet
+	// uEPolicy against a definition of SIZE(16..65540), which encoded cleanly because nothing
+	// checked — the evidence, in this suite, that a record violating its own definition would
+	// go out and be discarded by a conformant receiver while this element believed it had
+	// delivered. The encoder now refuses it, so the sample is corrected to the shortest
+	// permitted length and the vector is regenerated with it. A future reader comparing
+	// vectors should read the difference as a fixture correction and nothing else.
+	"AMFPositioningInfoTransfer": true,
+	"AMFRANHandoverCommand":      true,
+	"AMFRANHandoverRequest":      true,
 }
 
 func encodeGolden(t *testing.T, event any) string {

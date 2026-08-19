@@ -58,6 +58,21 @@ been archived.
    element) before allocating. **This one matters most for an archived
    dependency: nobody else is going to fix it.**
 
+   **Extended, on 2026-08-19, to the other length form — the same fix, not a new
+   patch.** The ceiling above covers the *declared* length, and the
+   indefinite-length branch beside it buffered until an end-of-contents marker
+   arrived: an unbounded `bytes.Buffer` that grows with whatever the sender sends,
+   and `readEoc` recursing once per nested construct with no depth bound, so a
+   two-byte-per-level message exhausts the decoding goroutine's stack. The sender
+   therefore set the cost twice over, and the ceiling this patch installed was
+   bypassed simply by choosing the other encoding.
+   `decodeRawValue` now carries a cumulative byte budget (`indefiniteBudget`,
+   the same 16 MiB) and a nesting depth bound (`maxIndefiniteDepth`, 64) through
+   the indefinite path, and refuses a child whose declared length is over the
+   ceiling before reading it. The refusals name the bound, because an unbounded
+   decoder fails on the same input by running off the end of the message — so a
+   test that asserted only "an error" would pass against the defect.
+
 5. `types.go` (`encodeOctetString`, `decodeOctetString`): both guards read
    `if !(kind == Array || kind == Slice) && value.Type().Elem().Kind() == Uint8`,
    which contradicts the "Invalid type or element type" comment directly above
