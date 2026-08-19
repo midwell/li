@@ -138,7 +138,7 @@ more expensive than one read here.
 | | **A fault that ends is reported as having ended** | Clause 5.3: `AllClear` at task and destination scope, `FaultCleared` at element scope. An element that reports every beginning and no ending leaves an ADMF holding a list that only grows. Rate limiting is per condition and never applies across a state change, so a destination that fails and recovers inside one window still produces both reports |
 | | The element answers for the conditions it can currently observe | `GetNEStatus` reports `mdfUnreachable` while delivery is failing and `x3EgressDown` while the datapath egress is down, and stops reporting each when it stops holding — see *Asking an element how it is* below |
 | **Targets** | SUPI/IMSI, PEI/IMEI, GPSI/MSISDN | |
-| | Eight of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7 in full, and the ninth for IPv4 | Session ID, tunnel ID, TCP/UDP port, PDR ID, QER ID, network instance, tunnel direction, PDR; UE IP Address for IPv4 — see *LI_T3 detection criteria* below |
+| | Six of the nine LI_T3 detection criteria of TS 33.128 table 6.2.3-7, plus UE IP Address for IPv4 | Session ID, tunnel ID, TCP/UDP port, network instance, tunnel direction, PDR; UE IP Address for IPv4. **PDR ID and QER ID are refused**, because they name a rule allocated per PFCP session and reused across sessions — see *LI_T3 detection criteria* below |
 | | Several criteria on one task, matched as alternatives | Traffic matching any of them is intercepted, and ships **once** however many matched |
 | | Criteria replaced by `ModifyTask`, mid-interception | Table 6.2.3-8. The task is not torn down: superseded traffic stops, newly selected traffic starts, attribution is unchanged |
 | | A `ModifyTask` that changes the **products** a task requires | Adding CC begins content interception for the target's existing sessions; removing it withdraws the trigger and clears the duplication. Derived from the task as a whole rather than from its target identifiers, so a change that leaves the target alone is still a change |
@@ -437,19 +437,38 @@ types in table 6.2.3-7. What this implementation does with each:
 | UE IP Address (IPv6) | `ipv6Address` | No | Nothing to resolve against: SD-Core has no IPv6 PDU sessions |
 | UE TCP/UDP Port | `tcpPort` / `udpPort` | **Yes** | The PDR's SDF filter, or the packet where the filter does not constrain the port |
 | PFCP Session ID | `TargetIdentifierExtension/FSEID` | **Yes** | The session's own SEID |
-| PDR ID | `TargetIdentifierExtension/PDRID` | **Yes** | `pdrID` |
-| QER ID | `TargetIdentifierExtension/QERID` | **Yes** | `qerIDList`, so every PDR the QER polices |
+| PDR ID | `TargetIdentifierExtension/PDRID` | **No, refused** | A PDR ID is allocated per PFCP session and reused across sessions from a low number, so it names no subject's traffic. See below |
+| QER ID | `TargetIdentifierExtension/QERID` | **No, refused** | Likewise per session and reused. See below |
 | Network Instance | `TargetIdentifierExtension/NetworkInstance` | **Yes** | The PDI's Network Instance, so every session on that DNN |
 | GTP Tunnel Direction | `TargetIdentifierExtension/GTPTunnelDirection` | **Yes** | The PDR's source interface, and the datapath's tag on each copy |
-| PDR | `TargetIdentifierExtension/PDR` | **Yes** | The encoded Create PDR IE, parsed with the agent's own PFCP parser and compared against a session's rules in that form |
+| PDR | `TargetIdentifierExtension/PDR` | **Yes**, except where the rule leaves a field for this element to assign | The encoded Create PDR IE, parsed with the agent's own PFCP parser and compared against a session's rules in that form. A rule asking the UPF to allocate the UE address or choose the tunnel endpoint (`CH`) is refused: it names a value this element assigns, so it can never compare equal |
 
 A task's criteria are a list, and its entries are **alternatives**: traffic
 matching any one of them is intercepted, once. A triggering function needing
 traffic that matches a *combination* of properties cannot express it as a list.
 
-What is left is the IPv6 form of UE IP Address.
+What is left is the two rule identifiers and the IPv6 form of UE IP Address.
 
-That gap is **not an interception limitation**: SD-Core has no IPv6 PDU
+**PDR ID and QER ID are refused, and this is a declared gap against table 6.2.3-7
+rather than a silent one.** Both identifiers are allocated *per PFCP session* and reused
+across sessions from a low number, and a CC-POI matches a criterion against every
+session it holds. So a task naming PDR 2 would duplicate, attribute and deliver the
+traffic of every subscriber whose session happens to hold a PDR of that number — under
+that warrant, indistinguishable downstream from the traffic it did name. That is
+interception of subjects the warrant does not name, which is the one failure this plane
+may never have.
+
+They cannot be rescued by qualification. A task's criteria are *alternatives*, so naming
+the PFCP Session ID beside the rule ID widens the interception rather than narrowing it;
+and nothing in a duplicated copy distinguishes the intended session's rule from any
+other session's rule of the same number, because every one of them holds it
+legitimately. So the element refuses the criterion at activation, with a reason, rather
+than acknowledging an interception that over-collects.
+
+A triggering function needing to intercept one session's traffic has the PFCP Session ID,
+which is exactly that and is supported.
+
+The IPv6 gap is **not an interception limitation**: SD-Core has no IPv6 PDU
 sessions to intercept. The SMF cannot allocate an IPv6 UE address — its allocator
 computes the pool size over 32 bits, and the NAS session-accept it would build
 leaves the PDU address zero-length — the WebConsole provisions subscribers with
