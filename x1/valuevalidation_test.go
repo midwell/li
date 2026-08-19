@@ -216,15 +216,20 @@ func TestAConfiguredDestinationsValueIsValidated(t *testing.T) {
 		valid bool
 	}{
 		{"an address and port", ConfiguredDestination{
-			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122:42069"}, true},
+			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122:42069",
+		}, true},
 		{"a host name", ConfiguredDestination{
-			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "mdf2.example.net:42069"}, false},
+			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "mdf2.example.net:42069",
+		}, false},
 		{"no port", ConfiguredDestination{
-			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122"}, false},
+			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122",
+		}, false},
 		{"a port of zero", ConfiguredDestination{
-			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122:0"}, false},
+			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122:0",
+		}, false},
 		{"a port above the range", ConfiguredDestination{
-			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122:99999"}, false},
+			DID: didAgencyA, DeliveryType: deliveryX2Only, Address: "10.0.60.122:99999",
+		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.dest.Valid()

@@ -397,14 +397,13 @@ func TestACreateRacingAnActivationResolvesOneWayOrTheOther(t *testing.T) {
 	}
 	task, _ := st.Get(testXID)
 	addrs := task.DeliveryAddresses(types.DeliveryX2)
-	switch {
-	case m.ErrorInformation == nil:
+	if m.ErrorInformation == nil {
 		// The create won: the task must resolve to what the element now holds.
 		if len(addrs) != 1 || addrs[0] != "10.0.60.199:42069" {
 			t.Errorf("the create was acknowledged and the task delivers to %v, want the created "+
 				"destination: the element answers with one address and delivers to another", addrs)
 		}
-	default:
+	} else {
 		// The activation won: the task keeps the configured address and the create is
 		// refused rather than silently redirecting it.
 		if len(addrs) != 1 || addrs[0] != "10.0.60.122:42069" {
