@@ -244,7 +244,31 @@ plainly, so nobody mistakes its scope for a clean bill of health:
 
 ## Known gaps, in order of consequence
 
-1. **The emitted Version field is 5, and V1.10.1 defines 6.** No longer a matter of this
+1. **A fragmented IPv4 datagram whose first fragment has not been seen is discarded.** This
+   is a CC-POI limit rather than a wire-format one, and it is declared here because the loss
+   it leaves is otherwise invisible: a copy dropped before framing leaves no gap in the X3
+   sequence, so a mediation function cannot detect it.
+
+   Only a transport-port criterion is affected, because it is the only one that has to read
+   the packet. A fragmented datagram carries its transport header in the first fragment only,
+   so the classification is taken from that fragment and applied to the datagram's later ones
+   through a bounded, direction- and identity-scoped memo held for the life of the tasking
+   generation. Every fragment of an authorised datagram is therefore delivered *provided the
+   fragments arrive in order*, which is the normal case over a GTP-U path.
+
+   What is not done is **retaining a fragment that arrives before the one carrying the
+   transport header**. Holding copies would be a second mechanism on the one path in this
+   element whose cost is per packet, in front of a datagram queue that holds ten by default,
+   and it is reachable by a peer who can choose fragment order — a denial-of-service surface
+   introduced to recover the rarest arrival order. So such a fragment is discarded, and
+   reported through the same X3 content-loss condition a full delivery queue raises. The same
+   applies to a classification that has expired or that the memo's ceiling refused to record.
+
+   If measurement ever shows out-of-order arrival is material, holding is its own change with
+   its own bounds. IPv6 fragmentation is out of scope for the reason the criteria disposition
+   gives: this core has no IPv6 PDU sessions.
+
+2. **The emitted Version field is 5, and V1.10.1 defines 6.** No longer a matter of this
    element's own conformance: the mechanism the bump was waiting on is implemented, and what
    holds it back now is that the only interoperability peer available refuses 0.6. See the
    version section above. **Blocked externally**, not deferred.
