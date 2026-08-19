@@ -185,7 +185,18 @@ func (p *PDU) validate() error {
 }
 
 // Marshal encodes the PDU to its TS 103 221-2 wire form.
+//
+// **A nil receiver is refused rather than dereferenced**, and this is where it has to be:
+// every delivery path in this package reaches the wire through here, so a check on one
+// entry point leaves the others faulting. What faults is the network function carrying the
+// delivery — an AMF's signalling goroutine or a UPF's framing worker — over invalid input,
+// which takes the element down rather than the mediation function it was delivering to.
+// SendBatch already guarded its own slice; Send and AsyncSender.Send did not, so behaviour
+// depended on whether a caller delivered one unit alone or through a batch.
 func (p *PDU) Marshal() ([]byte, error) {
+	if p == nil {
+		return nil, ErrNilPDU
+	}
 	if err := p.validate(); err != nil {
 		return nil, err
 	}

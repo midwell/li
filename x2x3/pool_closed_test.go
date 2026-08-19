@@ -3,7 +3,11 @@
 
 package x2x3
 
-import "testing"
+import (
+	"crypto/tls"
+	"testing"
+	"time"
+)
 
 // TestForAfterCloseBuildsNothing: Close empties the sender map rather than marking
 // the pool, so a delivery arriving after it used to miss the cache and construct a
@@ -77,5 +81,78 @@ func TestClosedPoolReportsNoFault(t *testing.T) {
 	}
 	if unreachable, _ := p.UnreachableAmong([]string{addr}); unreachable != 0 {
 		t.Errorf("a closed pool counted %d unreachable destinations, want 0", unreachable)
+	}
+}
+
+// TestAClosedPoolReportsItsLateProduct: product offered to a closed pool is dropped, and
+// the drop is reported through the POI's own hook.
+//
+// It used to be silent, on the reasoning that a closed pool belongs to an element shutting
+// down, so there is no ADMF exchange left to carry a report and no operator action it would
+// prompt. Half of that holds; the other half does not. A pool is also closed by a
+// reconfiguration, where the ADMF is reachable and this is simply product the element
+// produced and did not deliver — and deciding on the caller's behalf that nobody wants to be
+// told is the shape of mistake this whole plane keeps making. What a POI does with the hook
+// during its own teardown is the POI's business.
+func TestAClosedPoolReportsItsLateProduct(t *testing.T) {
+	drops := 0
+	p := NewPool(nil, KeepaliveConfig{}, nil, func() { drops++ })
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	s := p.For("10.0.60.122:42069")
+	if err := s.Send(&PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128}); err != nil {
+		t.Fatalf("a closed pool's sender returned %v; delivery must neither block nor fault the "+
+			"signalling path that offered the product", err)
+	}
+
+	if drops != 1 {
+		t.Errorf("a closed pool dropped product and reported it %d times, want 1: an xIRI the "+
+			"element produced went nowhere and nothing said so", drops)
+	}
+}
+
+// TestClosingABlackholedDestinationIsBounded is the shutdown half.
+//
+// Closing a sender waits for its worker to drain the queue, and each unit is bounded only by
+// the client's own write deadline — so one destination that accepts a connection and then
+// reads nothing costs (queue depth × write timeout), which is minutes. A network function
+// shutting down inside a container's grace period is SIGKILLed part-way through its LI
+// teardown instead, and what a SIGKILL leaves is a POI whose X1 tasking was never withdrawn.
+//
+// Worse than slow, it is observable: an element serving a tasked subscriber whose MDF is
+// blackholed takes minutes to stop where an untasked one takes none.
+func TestClosingABlackholedDestinationIsBounded(t *testing.T) {
+	cert := selfSignedServer(t)
+
+	// A peer that completes the handshake and never reads: the queue cannot drain.
+	mdf := newHalfOpenMDF(t, cert, 0, true)
+
+	p := NewPool(&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // test peer
+		KeepaliveConfig{Disabled: true}, nil, nil)
+
+	s := p.For(mdf.addr)
+	// Comfortably more than one write can carry, so the worker is still draining when Close
+	// arrives.
+	for range 64 {
+		//nolint:errcheck // enqueueing cannot fail in a way this test acts on
+		_ = s.Send(&PDU{
+			Type:          PDUTypeX2,
+			PayloadFormat: PayloadFormat3GPP33128,
+			Payload:       make([]byte, 256*1024),
+		})
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- p.Close() }()
+
+	select {
+	case <-done:
+		// Either outcome is acceptable: what is asserted is the bound, not the verdict.
+	case <-time.After(closeTimeout + 5*time.Second):
+		t.Fatalf("Close did not return within %s of its own deadline: a blackholed mediation "+
+			"function decides how long this element takes to stop, and a teardown that overruns a "+
+			"grace period is SIGKILLed with its X1 tasking never withdrawn", closeTimeout)
 	}
 }

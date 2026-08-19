@@ -18,8 +18,11 @@ type recordingSender struct {
 	mu     sync.Mutex
 	sent   int
 	closed bool
-	err    error
-	block  chan struct{}
+	// closeCount is how many times Close reached this sender. A bool cannot express
+	// idempotence, which is what AsyncSender.Close claims and did not have.
+	closeCount int
+	err        error
+	block      chan struct{}
 }
 
 func (r *recordingSender) Send(*PDU) error {
@@ -36,7 +39,15 @@ func (r *recordingSender) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
+	r.closeCount++
 	return nil
+}
+
+func (r *recordingSender) closes() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.closeCount
 }
 
 func (r *recordingSender) count() int {
@@ -320,4 +331,89 @@ func (b *batchRecorder) totals() (int, int) {
 	defer b.mu.Unlock()
 
 	return b.pdus, b.calls
+}
+
+// TestANilProductUnitIsRefusedAtEveryEntryPoint: invalid input may not terminate the
+// hosting network function.
+//
+// These entry points are called from a signalling goroutine at the AMF and SMF and from a
+// framing worker at the UPF, and a nil dereferenced there faults the *element* rather than
+// the mediation function it was delivering to — on a goroutine whose panic no caller can
+// recover. SendBatch guarded its own slice; Send, AsyncSender.Send and Marshal did not, so
+// what happened depended on whether a caller delivered one unit alone or through a batch.
+//
+// Marshal is where the property is enforced for every path, and each entry point states the
+// same answer, so the error a caller gets does not depend on how far in the nil travelled.
+func TestANilProductUnitIsRefusedAtEveryEntryPoint(t *testing.T) {
+	t.Run("Marshal", func(t *testing.T) {
+		var p *PDU
+		if _, err := p.Marshal(); !errors.Is(err, ErrNilPDU) {
+			t.Errorf("Marshal on a nil receiver returned %v, want ErrNilPDU", err)
+		}
+	})
+
+	t.Run("Client.Send", func(t *testing.T) {
+		// An address nothing is listening on: the point is that it is never dialled.
+		c := NewClient("127.0.0.1:1", nil, KeepaliveConfig{Disabled: true})
+		t.Cleanup(func() { c.Close() }) //nolint:errcheck // test cleanup
+
+		if err := c.Send(nil); !errors.Is(err, ErrNilPDU) {
+			t.Errorf("Send(nil) returned %v, want ErrNilPDU", err)
+		}
+	})
+
+	t.Run("AsyncSender.Send", func(t *testing.T) {
+		inner := &recordingSender{}
+		a := NewAsyncSender(inner, 4, nil, nil)
+		t.Cleanup(func() { a.Close() }) //nolint:errcheck // test cleanup
+
+		if err := a.Send(nil); !errors.Is(err, ErrNilPDU) {
+			t.Errorf("Send(nil) returned %v, want ErrNilPDU", err)
+		}
+		// Enqueued as nothing, so the worker never sees it.
+		if n := inner.count(); n != 0 {
+			t.Errorf("the delivery worker was handed %d units, want 0: a nil enqueued here faults "+
+				"the worker goroutine, which takes the network function down over invalid input", n)
+		}
+	})
+
+	t.Run("delivery still works afterwards", func(t *testing.T) {
+		inner := &recordingSender{}
+		a := NewAsyncSender(inner, 4, nil, nil)
+		t.Cleanup(func() { a.Close() }) //nolint:errcheck // test cleanup
+
+		//nolint:errcheck // asserted above
+		_ = a.Send(nil)
+		if err := a.Send(&PDU{Type: PDUTypeX2, PayloadFormat: PayloadFormat3GPP33128}); err != nil {
+			t.Fatalf("Send after a refused nil returned %v", err)
+		}
+		if err := a.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if n := inner.count(); n != 1 {
+			t.Errorf("the destination received %d units after a refused nil, want 1: refusing "+
+				"invalid input must not cost the delivery that follows it", n)
+		}
+	})
+}
+
+// TestAsyncCloseIsIdempotentInWhatItDoes: the once covered the channel close — closing a
+// channel twice panics — and left the inner sender's Close outside it, so a second call
+// closed the inner sender again. Benign with *Client, which guards its own second close, and
+// a broken contract for any other Sender, which is what this type takes. Reached by the pool
+// now that its own Close can return before every sender has drained.
+func TestAsyncCloseIsIdempotentInWhatItDoes(t *testing.T) {
+	inner := &recordingSender{}
+	a := NewAsyncSender(inner, 4, nil, nil)
+
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if n := inner.closes(); n != 1 {
+		t.Errorf("the inner sender was closed %d times, want 1: what a second Close does depended "+
+			"on which Sender implementation was behind it", n)
+	}
 }

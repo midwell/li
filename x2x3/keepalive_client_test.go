@@ -344,10 +344,24 @@ func TestKeepaliveToleratesTwoMissedAcknowledgements(t *testing.T) {
 	}
 }
 
-// TestKeepaliveWrongSequenceIsNotedNotFatal is the conservative failure mode: an MDF
-// whose numbering is wrong is still an MDF that is answering, and tearing down its
-// connection would cost product to punish a defect that costs none.
-func TestKeepaliveWrongSequenceIsNotedNotFatal(t *testing.T) {
+// TestKeepaliveWrongSequenceDoesNotPostponeTheDeadline is the two halves of what an
+// unusable acknowledgement means, and they pull in opposite directions.
+//
+// It is **not a protocol error**: an MDF whose numbering is wrong is still carrying
+// product, and tearing the connection down over it would cost product to punish a defect
+// that costs none. So the reader continues and the mismatch is counted.
+//
+// But it does **not refresh TIME_P2** either, which is what it used to do. Clause 6.2.4
+// numbers an acknowledgement from the Keepalive it answers, so the number is the only
+// evidence available that the peer is answering *us*; without it, "something is alive at
+// the other end" is satisfied equally by a peer stuck in a loop, a middlebox replaying, and
+// an endpoint a misroute put in the path — each of which would hold the fail-safe open over
+// a mediation function that has stopped taking product. The element already computed this
+// mismatch, for a counter, and acted on it nowhere.
+//
+// So the outcome is the fail-safe doing its job: the connection ends at TIME_P2, and the
+// fault says so rather than naming a protocol error.
+func TestKeepaliveWrongSequenceDoesNotPostponeTheDeadline(t *testing.T) {
 	m := startMDF(t, func(c net.Conn, p *PDU) {
 		if p.Type != PDUTypeKeepalive {
 			return
@@ -379,13 +393,65 @@ func TestKeepaliveWrongSequenceIsNotedNotFatal(t *testing.T) {
 		return c.live != nil && c.live.mismatches.Load() > 0
 	})
 
+	// The deadline is not postponed by traffic that acknowledges nothing this connection
+	// sent, so the fail-safe fires.
 	select {
 	case err := <-faults:
-		t.Errorf("a wrong sequence number disconnected a connection that was answering: %v", err)
-	case <-time.After(100 * time.Millisecond):
+		if !strings.Contains(err.Error(), "TIME_P2") {
+			t.Errorf("the connection ended with %v, want the TIME_P2 fail-safe: an unusable "+
+				"acknowledgement must not be treated as a protocol error, only as evidence of "+
+				"nothing", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("an MDF answering only with numbers this element never sent held the fail-safe " +
+			"open indefinitely: a peer stuck in a loop, a replaying middlebox and a misrouted " +
+			"endpoint all satisfy \"something is answering\", and each of them takes no product")
+	}
+
+	if !c.Unreachable() {
+		t.Error("the destination is still reported reachable after TIME_P2 expired over it")
+	}
+}
+
+// TestAValidAcknowledgementDoesPostponeTheDeadline is the other side of the same rule, and
+// the one that keeps the fix from being an outage: a peer answering with the number it was
+// sent holds the connection open indefinitely.
+func TestAValidAcknowledgementDoesPostponeTheDeadline(t *testing.T) {
+	m := startMDF(t, func(c net.Conn, p *PDU) {
+		if p.Type != PDUTypeKeepalive {
+			return
+		}
+		seq, ok := KeepaliveSequence(p)
+		if !ok {
+			return
+		}
+		b, err := KeepaliveAck(seq).Marshal() // the number this element actually sent
+		if err != nil {
+			return
+		}
+		//nolint:errcheck // as above
+		_, _ = c.Write(b)
+	})
+
+	faults := make(chan error, 4)
+	c := clientTo(t, m.addr, fastKeepalive(func(err error) {
+		select {
+		case faults <- err:
+		default:
+		}
+	}))
+
+	if err := c.Send(product()); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	select {
+	case err := <-faults:
+		t.Errorf("a peer answering with the numbers it was sent was disconnected: %v", err)
+	case <-time.After(500 * time.Millisecond):
 	}
 	if c.Unreachable() {
-		t.Error("an MDF answering with the wrong number was reported unreachable; it answered")
+		t.Error("a peer acknowledging every keepalive was reported unreachable")
 	}
 }
 

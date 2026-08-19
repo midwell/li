@@ -431,16 +431,49 @@ func (c *Client) handleInbound(st *connState, p *PDU) bool {
 	switch p.Type {
 	case PDUTypeKeepaliveAck:
 		seq, ok := KeepaliveSequence(p)
-		// An acknowledgement numbered beyond what this connection has handed out was
-		// never sent by us. Counted, not acted on: a peer's numbering defect must not
-		// tear down a connection that is demonstrably answering.
 		if !ok || seq >= st.seq.issued() {
+			// **An acknowledgement carrying no number this connection issued does not
+			// answer the question TIME_P2 asks.** It was not sent in reply to anything
+			// this element sent: either it carries no usable sequence number at all, or
+			// one beyond what has been handed out. Clause 6.2.4 numbers the
+			// acknowledgement from the Keepalive it answers, so this is the only evidence
+			// available that the peer is answering *us* rather than emitting traffic.
+			//
+			// It used to refresh the deadline anyway, on the reasoning that something is
+			// alive at the other end. That is true and is not the property: a peer stuck
+			// in a loop, a middlebox replaying, or an endpoint a misroute put in the path
+			// all satisfy "something is answering", and each would hold the fail-safe open
+			// over a mediation function that has stopped taking product. The mismatch was
+			// already computed here, for a counter, and acted on nowhere.
+			//
+			// The connection is *not* torn down over it — a peer's numbering defect must
+			// not end a connection that is demonstrably carrying product — so the reader
+			// continues and TIME_P2 decides, which is the fail-safe doing its job rather
+			// than a protocol error.
 			st.mismatches.Add(1)
+
+			return true
 		}
 
-		// The exchange succeeded whatever the number said — something is alive at the
-		// other end and answering keepalives, which is the whole question TIME_P2 asks.
-		c.unreachable.Store(false)
+		// A valid acknowledgement of something this connection sent: the exchange
+		// succeeded, which is the whole question TIME_P2 asks.
+		//
+		// **Only while this is still the connection the client holds.** The reader runs on
+		// its own goroutine, so an acknowledgement decoded from a connection that has since
+		// been dropped and replaced would otherwise clear a reachability conclusion the
+		// replacement has already reached — a store of false landing after expire's or
+		// protocolError's store of true, over a destination that is now failing. The two
+		// paths order themselves this way already (`if c.live == st`), and this is the
+		// third writer of the same flag taking the same rule.
+		//
+		// The deadline itself is still refreshed, because that channel belongs to st: a
+		// stale connection's watchdog has nothing left to postpone.
+		c.mu.Lock()
+		if c.live == st {
+			c.unreachable.Store(false)
+		}
+		c.mu.Unlock()
+
 		select {
 		case st.acks <- struct{}{}:
 		default:

@@ -5,7 +5,9 @@ package x2x3
 
 import (
 	"crypto/tls"
+	"errors"
 	"sync"
+	"time"
 )
 
 // Pool holds one delivery client per destination address, created on first use.
@@ -59,21 +61,34 @@ func NewPool(tlsConfig *tls.Config, keepalive KeepaliveConfig, onError func(erro
 	}
 }
 
-// discardSender is what a closed pool hands out: product offered to it is dropped,
-// and nothing is dialled, queued or reported.
+// discardSender is what a closed pool hands out: product offered to it is dropped, and
+// nothing is dialled or queued.
 //
-// Dropping silently is right here and nowhere else. A closed pool belongs to an
-// element that is shutting down or has been reconfigured, so there is no ADMF
-// exchange left to carry a report and no operator action a report would prompt —
-// where a *full queue* on a live sender is lost product that must be reported, and
-// is, by the sender that dropped it.
+// **The drop is reported, which it was not.** The reasoning for silence was that a closed
+// pool belongs to an element shutting down, so there is no ADMF exchange left to carry a
+// report and no operator action it would prompt. Half of that holds: a shutting-down
+// element's report may well not arrive. The other half does not — a pool is also closed by a
+// reconfiguration, where the ADMF is reachable and this is simply product the element
+// produced and did not deliver — and the shape of the mistake is the one this whole plane
+// keeps making: deciding on the caller's behalf that nobody wants to be told. onDrop is the
+// POI's own hook, it is the hook that already means "product was lost, not a destination
+// fault", and what a POI does with it during teardown is the POI's business.
 //
 // It reports itself reachable, because Unreachable answers what the last exchange
 // with a destination established and this has had none. Answering true would put a
 // closed pool's phantom destinations into an element's fault status.
-type discardSender struct{}
+type discardSender struct {
+	onDrop func()
+}
 
-func (discardSender) Send(*PDU) error   { return nil }
+func (d discardSender) Send(*PDU) error {
+	if d.onDrop != nil {
+		d.onDrop()
+	}
+
+	return nil
+}
+
 func (discardSender) Close() error      { return nil }
 func (discardSender) Unreachable() bool { return false }
 
@@ -100,7 +115,7 @@ func (p *Pool) For(addr string) Sender {
 	// delivery can neither block it nor fault it. A discarding sender keeps that
 	// contract without asking anything of the caller.
 	if p.closed {
-		return discardSender{}
+		return discardSender{onDrop: p.onDrop}
 	}
 
 	s := NewAsyncSender(NewClient(addr, p.tlsConfig, p.keepalive), 0, p.onError, p.onDrop)
@@ -178,9 +193,31 @@ func (p *Pool) UnreachableAmong(addrs []string) (unreachable, inUse int) {
 	return unreachable, inUse
 }
 
+// closeTimeout bounds how long Close waits for the pool's senders to drain.
+//
+// **A blackholed mediation function must not decide how long this element takes to stop.**
+// Closing a sender waits for its worker to finish the queue, and each unit is bounded only
+// by the client's own 5s write deadline — so one destination that accepts a connection and
+// then reads nothing costs (queue depth × write timeout), which is minutes. A network
+// function shutting down inside a container's grace period is SIGKILLed part-way through its
+// LI teardown instead, and what a SIGKILL leaves is a POI whose X1 tasking was never
+// withdrawn and whose peers are left to their own fail-safes.
+//
+// Worse than slow, it is *observable*: an element serving a tasked subscriber whose MDF is
+// blackholed takes minutes to stop where an untasked one takes none.
+//
+// Two seconds is far below any grace period a deployment sets and far above the time a
+// working destination needs to drain a queue it is reading.
+const closeTimeout = 2 * time.Second
+
 // Close drains and closes every client. It returns the first error, having closed the
 // rest regardless: a half-closed pool would leave delivery workers running with nothing
 // left to deliver to.
+//
+// The drain is bounded (see closeTimeout) and the senders are closed concurrently, so the
+// bound is per pool rather than per destination. A sender still draining when the bound
+// expires is left to its goroutine: this runs at teardown, the process is about to go, and
+// the alternative is being killed part-way through the same work with less of it done.
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	senders := p.senders
@@ -188,12 +225,35 @@ func (p *Pool) Close() error {
 	p.closed = true
 	p.mu.Unlock()
 
-	var firstErr error
+	// Concurrently, for the same reason the trigger keepalive round fans out: closed in
+	// line, the pool's shutdown takes as long as the sum of its unreachable destinations.
+	errs := make(chan error, len(senders))
 	for _, s := range senders {
-		if err := s.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		go func(s Sender) { errs <- s.Close() }(s)
+	}
+
+	var firstErr error
+
+	deadline := time.After(closeTimeout)
+	for range senders {
+		select {
+		case err := <-errs:
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		case <-deadline:
+			if firstErr == nil {
+				firstErr = errCloseTimedOut
+			}
+
+			return firstErr
 		}
 	}
 
 	return firstErr
 }
+
+// errCloseTimedOut says the pool stopped waiting for a destination to drain. It is
+// returned rather than logged because the caller is the network function's own teardown,
+// which is the one party that can decide whether it matters.
+var errCloseTimedOut = errors.New("x2x3: delivery pool did not drain within its close deadline")

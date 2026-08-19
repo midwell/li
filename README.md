@@ -687,7 +687,7 @@ Two conditions can appear, each answered by the part of the element that can see
 
 | Condition | Means | Observed by |
 |---|---|---|
-| `mdfUnreachable` | one or more of this element's mediation functions failed on the last *exchange* and has not since succeeded — either a delivery that failed, or a keepalive left unacknowledged for TIME_P2 | the X2/X3 delivery clients — every POI has them |
+| `mdfUnreachable` | one or more of this element's mediation functions failed on the last *exchange* and has not since succeeded — either a delivery that failed, or a keepalive left unacknowledged for TIME_P2. An acknowledgement counts only where it carries a sequence number this connection issued: that number is the only evidence it answers *this element* rather than being traffic, so one without it is counted as a mismatch and does not postpone the deadline, while still not being read as a protocol error | the X2/X3 delivery clients — every POI has them |
 | `x3EgressDown` | the datapath's content egress socket is not connected, so duplicated packets are discarded before this element ever sees them | the UPF's content shipper, the only party that can see its own egress |
 
 The description says how much is wrong — "1 of 2" — and never which destination, nor any

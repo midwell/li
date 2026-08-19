@@ -46,6 +46,10 @@ type AsyncSender struct {
 
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+	// closeErr is what the inner sender's Close returned, cached so a second Close
+	// answers the same and does not close it again. Written inside closeOnce and read
+	// after it, which is the happens-before that makes it safe without a lock.
+	closeErr error
 
 	// closeMu guards closed, and is held for reading across Send's check-and-
 	// enqueue so a Close cannot land between the two. An atomic flag would leave
@@ -144,6 +148,15 @@ func (a *AsyncSender) run() {
 // the caller is a signalling or data-plane goroutine that delivery may neither
 // block nor fault.
 func (a *AsyncSender) Send(pdu *PDU) error {
+	// **Before the queue, and without dereferencing it.** This is the entry point a POI
+	// calls from a signalling goroutine or a framing worker, and a nil enqueued here would
+	// fault the delivery worker rather than the caller — taking the network function down
+	// over invalid input, on a goroutine whose panic no caller can recover. Reported as the
+	// defined error and enqueued as nothing; batch semantics are unchanged.
+	if pdu == nil {
+		return ErrNilPDU
+	}
+
 	if a.enqueue(pdu) {
 		return nil
 	}
@@ -203,15 +216,34 @@ func (a *AsyncSender) Unreachable() bool {
 
 // Close stops accepting new PDUs, drains those already queued, waits for the
 // worker to finish, and closes the inner Sender. Safe to call more than once.
+//
+// **Idempotent in what it does, not only in what it guards.** The once covered the channel
+// close — closing a channel twice panics — and left `a.inner.Close()` outside it, so a
+// second call closed the inner sender again. That is benign with *Client, which guards its
+// own second close, and a broken contract for any other Sender: this type takes the
+// interface, so what a second Close does depended on which implementation was behind it.
+// Reached by the pool now that its own Close can return before every sender has drained.
+//
+// The result is cached rather than recomputed, so every caller is told the same thing about
+// the same teardown.
 func (a *AsyncSender) Close() error {
 	a.closeOnce.Do(func() {
 		a.closeMu.Lock()
 		a.closed = true
 		close(a.queue)
 		a.closeMu.Unlock()
+
+		// Inside the once, so the inner sender is closed exactly once — and after the
+		// wait, so it is closed with the queue drained.
+		a.wg.Wait()
+		a.closeErr = a.inner.Close()
 	})
+
+	// A second caller waits for the first's teardown to finish rather than returning
+	// before it: the once's completion is what makes the error below the real answer.
 	a.wg.Wait()
-	return a.inner.Close()
+
+	return a.closeErr
 }
 
 // send delivers a batch, using one write when the underlying sender supports it.

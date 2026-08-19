@@ -14,9 +14,16 @@ import (
 	"time"
 )
 
-// errNilPDU is what SendBatch reports for a nil entry: nothing was delivered for
-// it, which is the same loss a PDU that fails to marshal represents.
-var errNilPDU = errors.New("x2x3: nil PDU in batch")
+// ErrNilPDU is what every delivery path reports for a product unit that is not there:
+// SendBatch for a nil entry, Send and AsyncSender.Send for a nil argument, and Marshal for
+// a nil receiver. Nothing was delivered for it, which is the same loss a PDU that fails to
+// marshal represents.
+//
+// One error rather than one per path, and exported, because a POI's own delivery wrapper has
+// to be able to tell it from a transport failure: this one says the element built no
+// product, which is a defect on this side, and the other says the mediation function did
+// not take it.
+var ErrNilPDU = errors.New("x2x3: nil product unit")
 
 // Client delivers X2 (xIRI) and X3 (xCC) PDUs to a Mediation & Delivery
 // Function over a single TLS-secured TCP connection (ETSI TS 103 221-2). It
@@ -69,7 +76,16 @@ func NewClient(addr string, tlsConfig *tls.Config, keepalive KeepaliveConfig) *C
 // Send marshals pdu and writes it to the MDF, (re)connecting as needed. A PDU
 // is self-delimiting (its header carries the header and payload lengths), so no
 // extra framing is added on the wire.
+//
+// A nil pdu returns ErrNilPDU and dials nothing. Marshal refuses it too — that is where the
+// property is enforced for every path — and this is the same answer stated at the entry
+// point a POI actually calls, so the error a caller gets does not depend on how far in the
+// nil travelled.
 func (c *Client) Send(pdu *PDU) error {
+	if pdu == nil {
+		return ErrNilPDU
+	}
+
 	b, err := pdu.Marshal()
 	if err != nil {
 		return err
@@ -143,7 +159,22 @@ func (c *Client) deliver(b []byte, boundaries []int) error {
 	// nothing marks them as repeats — which is duplicate product under one warrant, the
 	// outcome deduplicating destinations by address exists to prevent, arrived at from
 	// the delivery mechanism instead of the destination list.
-	rest, dropped := resumeAt(b, boundaries, n)
+	//
+	// **A unit the write stopped inside is resumed from its own start, not skipped.** It
+	// used to be dropped, on the reasoning that a receiver reading the head of a stream
+	// would take the tail of a unit as the start of one. That is true of resuming mid-unit
+	// on the *same* stream, and false of the fresh connection the retry actually goes out
+	// on: a TCP connection is its own stream and this one begins at a frame boundary, so a
+	// whole unit sent on it cannot be read as anybody's tail. Nor can it duplicate: a unit
+	// the kernel did not accept in full is one the peer cannot have received in full,
+	// because a write reports what it took and never more.
+	//
+	// So the loss the drop represented is recovered where the retry lands, and the leading
+	// complete units are still not resent.
+	rest, resuming := resumeAt(b, boundaries, n)
+	// Whether anything reached the old connection whole, which is what makes a later
+	// failure a partial success rather than a total one.
+	landed := len(rest) < len(b)
 
 	// One reconnect attempt — the MDF may have dropped an idle connection.
 	c.dropLocked()
@@ -154,17 +185,19 @@ func (c *Client) deliver(b []byte, boundaries []int) error {
 		if _, err := c.writeLocked(rest); err != nil {
 			c.dropLocked()
 
+			if resuming && landed {
+				// The one place a unit is still knowingly lost: this element had one
+				// reconnect, spent it, and the resend did not land. Earlier units did, so
+				// the statement is the one ErrUnitDropped is for — delivery succeeded
+				// except for a product unit — and the destination is not called
+				// unreachable over it, because it took the rest. A drop leaves a gap in a
+				// numbered sequence, which the peer can see and the fault channel can
+				// explain.
+				return fmt.Errorf("%w: send to %s: %v", ErrUnitDropped, c.addr, err)
+			}
+
 			return fmt.Errorf("x2x3: send to %s: %w", c.addr, err)
 		}
-	}
-	if dropped {
-		// A PDU that was partially written cannot be resumed and is not completed on the
-		// new connection: a mediation function reading the head of a stream would take
-		// the tail of a unit as the start of one, and the framing error would consume
-		// whatever followed. A drop leaves a gap in a numbered sequence, which the peer
-		// can see and the fault channel can explain — strictly better than a stream it
-		// cannot parse.
-		return fmt.Errorf("%w: send to %s", ErrUnitDropped, c.addr)
 	}
 
 	return nil
@@ -191,7 +224,7 @@ var ErrUnitDropped = errors.New("x2x3: one product unit was partially written an
 // boundaries are the offsets at which each unit *ends*, in order. A nil boundaries —
 // a single-PDU write — means the whole buffer is one unit: anything short of all of it
 // is a partial unit, and there is nothing to resume.
-func resumeAt(b []byte, boundaries []int, written int) (rest []byte, droppedPartial bool) {
+func resumeAt(b []byte, boundaries []int, written int) (rest []byte, resuming bool) {
 	if written <= 0 {
 		return b, false
 	}
@@ -199,20 +232,24 @@ func resumeAt(b []byte, boundaries []int, written int) (rest []byte, droppedPart
 		return nil, false
 	}
 	if len(boundaries) == 0 {
-		// One unit, partially written. Nothing survives it and nothing is resumable.
-		return nil, true
+		// One unit, partially written. It resumes from its own start on the fresh
+		// connection: nothing of it was accepted in full, so nothing can be duplicated.
+		return b, true
 	}
 
+	start := 0
 	for _, end := range boundaries {
 		if end == written {
 			// The peer received whole units and nothing more: resume exactly here.
 			return b[written:], false
 		}
 		if end > written {
-			// The write stopped inside this unit. Everything before it arrived; this
-			// one is dropped, and delivery resumes with the next.
-			return b[end:], true
+			// The write stopped inside this unit. Everything before it was accepted whole
+			// and is not resent; this one was not, so it goes out again from its own
+			// start — where the old code skipped to b[end:] and lost it.
+			return b[start:], true
 		}
+		start = end
 	}
 
 	return nil, false
@@ -324,7 +361,7 @@ func (c *Client) SendBatch(pdus []*PDU) error {
 	for _, pdu := range pdus {
 		if pdu == nil {
 			if marshalErr == nil {
-				marshalErr = errNilPDU
+				marshalErr = ErrNilPDU
 			}
 
 			continue
