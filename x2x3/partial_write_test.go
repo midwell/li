@@ -26,6 +26,9 @@ type halfOpenMDF struct {
 	accepted int
 }
 
+// newHalfOpenMDF is a mediation function that accepts a connection and then stops reading
+// after stallAfter bytes, so a delivery lands in part and no further.
+//
 // stallEvery makes every connection stall rather than only the first, so the retry the
 // client makes on a fresh connection fails too. It is what distinguishes a unit that is
 // recovered from one that is lost.
