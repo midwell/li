@@ -38,6 +38,7 @@ func TestReportNEIssue(t *testing.T) {
 		//nolint:errcheck // test handler read
 		got, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(admfResponse(t, got))) //nolint:errcheck // test handler
 	}))
 	defer ts.Close()
 

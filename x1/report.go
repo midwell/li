@@ -310,6 +310,11 @@ type Reporter struct {
 	neID    string
 	client  *http.Client
 	now     func() time.Time
+	// authenticated says whether this element holds TLS material, which is what decides
+	// whether an answer must prove whose it is. Same rule and same reason as on the
+	// requester side: the certificate-less mode this project supports deliberately has no
+	// certificate to bind.
+	authenticated bool
 
 	mu sync.Mutex
 	// lastSent throttles a repeat of the same report, keyed by reportKey rather than
@@ -510,9 +515,10 @@ func (r *Reporter) settleClear(k reportKey, err error) {
 // over mutual TLS, identifying itself as neID to the ADMF admfID.
 func NewReporter(admfURL, admfID, neID string, tlsConfig *tls.Config) *Reporter {
 	return &Reporter{
-		admfURL: admfURL,
-		admfID:  admfID,
-		neID:    neID,
+		admfURL:       admfURL,
+		admfID:        admfID,
+		neID:          neID,
+		authenticated: tlsConfig != nil,
 		client: &http.Client{
 			Transport: &http.Transport{TLSClientConfig: tlsConfig},
 			Timeout:   10 * time.Second,
@@ -590,13 +596,19 @@ var reportTaskTemplate = template.Must(template.New("x1taskissue").Funcs(x1Templ
 
 // Notify reports an NE-level issue and discards the outcome. It is the form the
 // network functions call: an issue report is best-effort by design — the LI plane
-// must not surface faults through anything but this channel, so a failed report
-// has nowhere to go and nothing to do — and expressing that as a
-// void call keeps every call site from blank-assigning an error the linter then
-// flags. A nil Reporter is a no-op, so a network function with no ADMF configured
-// need not guard every call — though existing callers may still, and must when
-// they hold the Reporter behind an interface (a nil interface value cannot be
-// called at all).
+// must not surface faults through anything but this channel, so a failed report has
+// nowhere general to go — and expressing that as a void call keeps every call site
+// from blank-assigning an error the linter then flags. A nil Reporter is a no-op, so a
+// network function with no ADMF configured need not guard every call — though existing
+// callers may still, and must when they hold the Reporter behind an interface (a nil
+// interface value cannot be called at all).
+//
+// **"Nothing to do" stopped being true when settle began consuming the outcome.** The
+// caller has nowhere to put the error, and that is still so; the reporter does. A
+// report that did not arrive leaves its key unreserved rather than recorded as told, so
+// the condition is eligible at the next observation and no retraction is later sent for
+// a fault the ADMF never had. The discarding here is the *caller's* — the outcome is
+// read before it reaches this line, by whichever settle path called it.
 //
 // It stays silent on failure for the same reason ReportNEIssue does: writing the
 // error anywhere general would be the very disclosure this plane exists to avoid.
@@ -664,6 +676,9 @@ func (r *Reporter) NotifyTask(xid, reportType, details string) {
 // task's failure is its own fact — and details must still describe the fault
 // without naming the target.
 func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
+	// Held rather than generated inline, because the answer has to be bound to it.
+	txID := newUUID()
+
 	var body bytes.Buffer
 	if err := reportTaskTemplate.Execute(&body, struct {
 		AdmfID, NeID, Timestamp, TxID, XID, ReportType, Details string
@@ -671,7 +686,7 @@ func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
 		AdmfID:     r.admfID,
 		NeID:       r.neID,
 		Timestamp:  x1Timestamp(r.now()),
-		TxID:       newUUID(),
+		TxID:       txID,
 		XID:        xid,
 		ReportType: reportType,
 		Details:    details,
@@ -684,10 +699,8 @@ func (r *Reporter) ReportTaskIssue(xid, reportType, details string) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("x1: ADMF returned status %d for task issue report", resp.StatusCode)
-	}
-	return nil
+
+	return r.readReportResponse("ReportTaskIssueRequest", txID, resp)
 }
 
 // reportDestinationTemplate emits an X1Request carrying a
@@ -806,6 +819,8 @@ func (r *Reporter) NotifyDestinationClear(did, condition string) {
 // NotifyDestinationClear, which carry the throttling and the record of what has
 // been reported; this is the message on its own.
 func (r *Reporter) ReportDestinationIssue(did, reportType, details string) error {
+	txID := newUUID()
+
 	var body bytes.Buffer
 	if err := reportDestinationTemplate.Execute(&body, struct {
 		AdmfID, NeID, Timestamp, TxID, DID, ReportType, Details string
@@ -813,7 +828,7 @@ func (r *Reporter) ReportDestinationIssue(did, reportType, details string) error
 		AdmfID:     r.admfID,
 		NeID:       r.neID,
 		Timestamp:  x1Timestamp(r.now()),
-		TxID:       newUUID(),
+		TxID:       txID,
 		DID:        did,
 		ReportType: reportType,
 		Details:    details,
@@ -826,11 +841,8 @@ func (r *Reporter) ReportDestinationIssue(did, reportType, details string) error
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("x1: ADMF returned status %d for destination issue report", resp.StatusCode)
-	}
 
-	return nil
+	return r.readReportResponse("ReportDestinationIssueRequest", txID, resp)
 }
 
 // ReportNEIssue POSTs a ReportNEIssueRequest to the ADMF. issueType is a
@@ -870,6 +882,8 @@ func (r *Reporter) ReportNEIssue(issueType, description string) error {
 func (r *Reporter) reportNEIssueAs(issueType, kind string, code int, description string) error {
 	encoding := neIssueEncoding{kind: kind, code: code}
 
+	txID := newUUID()
+
 	var body bytes.Buffer
 	if err := reportTemplate.Execute(&body, struct {
 		AdmfID, NeID, Timestamp, TxID, Kind, Description string
@@ -878,7 +892,7 @@ func (r *Reporter) reportNEIssueAs(issueType, kind string, code int, description
 		AdmfID:      r.admfID,
 		NeID:        r.neID,
 		Timestamp:   x1Timestamp(r.now()),
-		TxID:        newUUID(),
+		TxID:        txID,
 		Kind:        encoding.kind,
 		IssueCode:   encoding.code,
 		Description: issueType + ": " + description,
@@ -891,9 +905,38 @@ func (r *Reporter) reportNEIssueAs(issueType, kind string, code int, description
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("x1: ADMF returned status %d for NE issue report", resp.StatusCode)
+
+	return r.readReportResponse("ReportNEIssueRequest", txID, resp)
+}
+
+// readReportResponse establishes whether the ADMF accepted a report.
+//
+// **HTTP 200 is not the answer.** Clause 7.2.2.2 is explicit that HTTP codes indicate
+// HTTP-level errors only and that an X1-level error "shall be … returned as a HTTP 200 OK
+// response", so a 200 wrapping an ErrorResponse — or a TopLevelError, which the ADMF
+// returns when it could not parse what this element sent — is a report the ADMF discarded.
+// Read as delivered, it commits: the element records the fault as reported, stops
+// re-reporting it while the condition holds, and later sends an AllClear retracting a fault
+// the ADMF never had. So the ADMF's list of faults and the element's disagree, in the one
+// direction neither side can detect.
+//
+// It reuses the requester side's binding rather than adding a second decoder, because both
+// senders on this interface have the same obligation and the only difference is which role
+// the peer holds. That also brings the checks a hand-written reader here would have
+// omitted: the response type derived from the request's, the transaction identity, and the
+// responder's certificate — so an answer from something other than the responsible ADMF
+// cannot commit a report either.
+func (r *Reporter) readReportResponse(requestType, txID string, resp *http.Response) error {
+	h := header{OurID: r.admfID, NeID: r.neID, TxID: txID, Type: requestType}
+
+	m, err := readBoundResponse(h, resp, r.authenticated, roleADMF, r.admfID)
+	if err != nil {
+		return err
 	}
+	if m.ErrorInformation != nil {
+		return &RequestError{Code: m.ErrorInformation.ErrorCode, Description: m.ErrorInformation.ErrorDescription}
+	}
+
 	return nil
 }
 

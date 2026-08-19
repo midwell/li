@@ -178,7 +178,19 @@ func responseTypeFor(requestType string) string {
 // type — a GetAllDetailsResponse carries none — so requiring one would refuse
 // every details answer, permanently. That is the check callers apply for
 // themselves where their own response type defines one.
-func (r *Requester) validate(h header, out X1Response) (X1ResponseMessage, error) {
+// validateBound is the message binding, shared by both senders on this interface.
+//
+// There are two, and they sit on opposite sides of it: a Requester is an ADMF or a
+// triggering function asking an NE, and a Reporter is an NE telling an ADMF. Both must bind
+// their answers to the requests that produced them, and neither may grow a second
+// implementation of the binding — the two readers this replaced had already drifted apart
+// once, one checking that a message carried an acknowledgement and the other not, which is
+// what a second hand-written path costs.
+//
+// The header names the two identifiers as they must appear in the answer, whichever of the
+// two parties this element is: OurID is what this element states about itself and NeID what
+// the peer states, and a conformant answer echoes both.
+func validateBound(h header, out X1Response) (X1ResponseMessage, error) {
 	if len(out.Messages) == 0 {
 		return X1ResponseMessage{}, &ResponseError{Field: "message count", Want: "1", Got: "0"}
 	}
@@ -230,36 +242,39 @@ func (r *Requester) validate(h header, out X1Response) (X1ResponseMessage, error
 	return m, nil
 }
 
-// bindsResponder checks the TS 103 221-1 clause 8.2.4 binding on the answering side:
-// the certificate the peer presented must carry neID in the NE role.
+// bindsResponderCert checks the TS 103 221-1 clause 8.2.4 binding on the answering side:
+// the certificate the peer presented must carry identifier in the given role.
 //
-// It is the mirror of what the server applies to every inbound request, and the
-// asymmetry it removes was the one with the silent consequence. A misrouted, stale or
-// compromised endpoint inside the LI domain could acknowledge tasking, and the
-// triggering function would record an interception as installed at an element that
-// never received it — with nothing downstream to reveal it, because the product that
-// would be missing was never produced.
-func (r *Requester) bindsResponder(resp *http.Response, neID string) error {
-	if !r.authenticated {
-		// No TLS material was configured, which is the certificate-less mode this
-		// project supports deliberately so a deployment can be brought up before its
-		// PKI is. There is no certificate to bind and no chain to have verified, so
-		// requiring a binding here would refuse a mode that is documented and used —
-		// and would do it at the triggering interface only. Every deployment holding
-		// credentials, which is every real one, takes the checks below.
+// It is the mirror of what the server applies to every inbound request, and the asymmetry it
+// removes was the one with the silent consequence. A misrouted, stale or compromised
+// endpoint inside the LI domain could acknowledge tasking, and the triggering function
+// would record an interception as installed at an element that never received it — with
+// nothing downstream to reveal it, because the product that would be missing was never
+// produced.
+//
+// Shared by both senders on this interface, because both have the same obligation and the
+// only thing that differs is which role the peer holds — an NE answering a triggering
+// function, or an ADMF answering an NE's fault report.
+//
+// authenticated says whether this element holds TLS material at all. Where it does not,
+// there is no certificate to bind and no chain to have verified, so requiring a binding
+// would refuse the certificate-less mode this project supports deliberately, so a
+// deployment can be brought up before its PKI is.
+func bindsResponderCert(resp *http.Response, authenticated bool, role, identifier string) error {
+	if !authenticated {
 		return nil
 	}
 	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
 		// Configured with credentials and answered over a connection that presented
 		// none: the peer is not authenticated at all, and an acknowledgement this
-		// element cannot attribute to an element is not one it can act on.
-		return &ResponseError{Field: "peer certificate", Want: neID, Got: "none"}
+		// element cannot attribute to a party is not one it can act on.
+		return &ResponseError{Field: "peer certificate", Want: identifier, Got: "none"}
 	}
-	if !certBinds(resp.TLS.PeerCertificates[0], roleNE, neID) {
+	if !certBinds(resp.TLS.PeerCertificates[0], role, identifier) {
 		return &ResponseError{
 			Field: "peer certificate",
-			Want:  neID,
-			Got:   certIdentifier(resp.TLS.PeerCertificates[0], roleNE),
+			Want:  identifier,
+			Got:   certIdentifier(resp.TLS.PeerCertificates[0], role),
 		}
 	}
 
@@ -275,6 +290,20 @@ func (r *Requester) bindsResponder(resp *http.Response, neID string) error {
 // carried an acknowledgement and the other did not — which is what a second
 // hand-written path costs.
 func (r *Requester) readResponse(h header, resp *http.Response) (X1ResponseMessage, error) {
+	return readBoundResponse(h, resp, r.authenticated, roleNE, h.NeID)
+}
+
+// readBoundResponse is every step between an HTTP response and a message this element is
+// entitled to act on: status, decode, the responder's certificate binding, and the message
+// binding.
+//
+// Shared by the two senders on this interface — a Requester asking an NE and a Reporter
+// telling an ADMF — because both have the same obligation and only the peer's role differs.
+// role and identifier are that peer's; authenticated says whether this element holds
+// credentials at all.
+func readBoundResponse(
+	h header, resp *http.Response, authenticated bool, role, identifier string,
+) (X1ResponseMessage, error) {
 	if resp.StatusCode != http.StatusOK {
 		// Clause 7.2.2.2: HTTP error codes indicate HTTP-level errors only, and an
 		// X1-level error "shall be … returned as a HTTP 200 OK response". So a non-200
@@ -300,7 +329,7 @@ func (r *Requester) readResponse(h header, resp *http.Response) (X1ResponseMessa
 	// A response over a connection with no peer certificate is refused for the same
 	// reason: this interface is mutually authenticated, and an answer this element
 	// cannot bind to an element is not an acknowledgement it can act on.
-	if err := r.bindsResponder(resp, h.NeID); err != nil {
+	if err := bindsResponderCert(resp, authenticated, role, identifier); err != nil {
 		return X1ResponseMessage{}, err
 	}
 
@@ -319,7 +348,7 @@ func (r *Requester) readResponse(h header, resp *http.Response) (X1ResponseMessa
 		return X1ResponseMessage{}, fmt.Errorf("x1: malformed response: %w", err)
 	}
 
-	return r.validate(h, out)
+	return validateBound(h, out)
 }
 
 // isTopLevelError reports whether a body is the clause 6.1 answer to a request the

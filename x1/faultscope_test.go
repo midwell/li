@@ -34,6 +34,7 @@ func newCollectingADMF(t *testing.T) *collectingADMF {
 		a.bodies = append(a.bodies, string(body))
 		a.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(admfResponse(t, body))) //nolint:errcheck // test handler
 	}))
 	t.Cleanup(a.srv.Close)
 
@@ -596,5 +597,166 @@ func TestAnEndpointWithNoIdentifierIsStillReported(t *testing.T) {
 	}
 	if !strings.Contains(reports[1], "<ns1:typeOfNeIssueMessage>"+neIssueFaultCleared+"</ns1:typeOfNeIssueMessage>") {
 		t.Errorf("the clearing report is not a FaultCleared\n%s", reports[1])
+	}
+}
+
+// TestAReportRefusedInsideA200IsNotRecordedAsDelivered is what "a fault is recorded as
+// reported only once the provisioning function has been told" means on this transport.
+//
+// Clause 7.2.2.2 is explicit that HTTP codes indicate HTTP-level errors only and that an
+// X1-level error "shall be … returned as a HTTP 200 OK response". The reporter committed on
+// the status alone, so a 200 wrapping an ErrorResponse was recorded as delivered: the
+// element stopped re-reporting the fault while it held, and then sent an AllClear retracting
+// a fault the ADMF had discarded. The two sides' lists of what is wrong disagree, in the one
+// direction neither can detect — the element believes it has told the ADMF, and the ADMF
+// believes there is nothing to tell.
+//
+// Two properties: the fault stays eligible at the next observation, and no retraction is
+// sent for a fault that was never accepted.
+func TestAReportRefusedInsideA200IsNotRecordedAsDelivered(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		bodies []string
+		refuse = true
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
+		mu.Lock()
+		bodies = append(bodies, string(body))
+		refusing := refuse
+		mu.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+		if refusing {
+			// A refusal the specification requires to arrive inside a 200.
+			_, _ = w.Write([]byte(admfErrorResponse(t, body, 1000, "not accepted"))) //nolint:errcheck // test handler
+
+			return
+		}
+		_, _ = w.Write([]byte(admfResponse(t, body))) //nolint:errcheck // test handler
+	}))
+	t.Cleanup(srv.Close)
+
+	rep := NewReporter(srv.URL, "admfID", "neID", nil)
+
+	// The condition is observed and reported, and the ADMF refuses it.
+	rep.NotifyDestinationFault(didAgencyA, TaskReportTerminatingFault, "delivery failed")
+
+	countRequests := func(want string) int {
+		mu.Lock()
+		defer mu.Unlock()
+
+		n := 0
+		for _, b := range bodies {
+			if strings.Contains(b, want) {
+				n++
+			}
+		}
+
+		return n
+	}
+	if n := countRequests("ReportDestinationIssueRequest"); n != 1 {
+		t.Fatalf("sent %d destination reports, want 1", n)
+	}
+
+	// The fault ends. Nothing may be retracted, because nothing was accepted: an AllClear
+	// here retracts a fault the ADMF discarded, and an ADMF that receives a retraction for
+	// a fault it never had cannot tell that from a fault it has lost track of.
+	rep.NotifyDestinationClear(didAgencyA, TaskReportTerminatingFault)
+	if n := countRequests(TaskReportAllClear); n != 0 {
+		t.Errorf("sent %d retractions for a report the ADMF refused", n)
+	}
+
+	// And the condition is still eligible: observed again, it is reported again rather than
+	// suppressed as a repeat of a report that never landed. The throttle is bypassed by
+	// clearing lastSent, which is what a new observation window would do.
+	rep.mu.Lock()
+	rep.lastSent = map[reportKey]time.Time{}
+	rep.mu.Unlock()
+
+	mu.Lock()
+	refuse = false
+	mu.Unlock()
+
+	rep.NotifyDestinationFault(didAgencyA, TaskReportTerminatingFault, "delivery failed")
+	if n := countRequests("ReportDestinationIssueRequest"); n != 2 {
+		t.Errorf("sent %d destination reports in total, want 2 — a fault the ADMF refused was "+
+			"recorded as reported, so it is never told again while the condition holds", n)
+	}
+
+	// Now that one was accepted, the retraction goes.
+	rep.NotifyDestinationClear(didAgencyA, TaskReportTerminatingFault)
+	if n := countRequests(TaskReportAllClear); n != 1 {
+		t.Errorf("sent %d retractions after an accepted report, want 1: a fault that ends must be "+
+			"reported as having ended", n)
+	}
+}
+
+// TestOneUnnamedDestinationDownLeavesTheFaultStanding is the aggregation, and it pins both
+// orders because the defect was iteration-order dependent — with one un-identified endpoint
+// down and one healthy, whichever the sample reached last decided whether the fault stood.
+// A test that happened to visit them in the surviving order passes against the defect.
+//
+// An element-scoped report names no destination by construction, so there is exactly one
+// state to be in: a fault while any such destination is unreachable, and a clear only when
+// none is.
+func TestOneUnnamedDestinationDownLeavesTheFaultStanding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		health []DestinationHealth
+	}{
+		{"the unreachable one first", []DestinationHealth{
+			{DID: "", Unreachable: true},
+			{DID: "", Unreachable: false},
+		}},
+		{"the healthy one first", []DestinationHealth{
+			{DID: "", Unreachable: false},
+			{DID: "", Unreachable: true},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			admf := newCollectingADMF(t)
+			rep := NewReporter(admf.srv.URL, "admfID", "neID", nil)
+
+			w := NewDestinationWatcher(func() []DestinationHealth { return tc.health }, rep, 0)
+			w.sample()
+
+			counts := admf.counting(NEIssueMDFUnreachable, "FaultCleared")
+			if counts[NEIssueMDFUnreachable] != 1 {
+				t.Errorf("reported the fault %d times, want 1: one of this element's delivery "+
+					"destinations is unreachable and the ADMF was not told",
+					counts[NEIssueMDFUnreachable])
+			}
+			if counts["FaultCleared"] != 0 {
+				t.Errorf("sent %d retractions while a destination is still unreachable: the "+
+					"healthy endpoint's clear retracted the unreachable one's fault, and which of "+
+					"the two won was decided by the order the sample visited them",
+					counts["FaultCleared"])
+			}
+		})
+	}
+}
+
+// And the other edge: once none of them is unreachable, the fault is retracted exactly once.
+func TestTheUnnamedFaultClearsWhenNoneIsUnreachable(t *testing.T) {
+	admf := newCollectingADMF(t)
+	rep := NewReporter(admf.srv.URL, "admfID", "neID", nil)
+
+	health := []DestinationHealth{{DID: "", Unreachable: true}, {DID: "", Unreachable: false}}
+	w := NewDestinationWatcher(func() []DestinationHealth { return health }, rep, 0)
+
+	w.sample()
+	if n := admf.counting(NEIssueMDFUnreachable)[NEIssueMDFUnreachable]; n != 1 {
+		t.Fatalf("reported the fault %d times, want 1", n)
+	}
+
+	// Both recover.
+	health[0].Unreachable = false
+	w.sample()
+
+	if n := admf.counting("FaultCleared")["FaultCleared"]; n != 1 {
+		t.Errorf("sent %d retractions after every un-identified destination recovered, want 1: an "+
+			"element that reports every beginning and no ending leaves an ADMF holding a list that "+
+			"only grows", n)
 	}
 }

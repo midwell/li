@@ -185,6 +185,24 @@ func (w *DestinationWatcher) Watch(stop <-chan struct{}) {
 // reported once per throttle window rather than once per sample, and one that
 // recovers without ever having been reported produces nothing.
 func (w *DestinationWatcher) sample() {
+	// **The destinations with no provisioned identifier are one element state, not
+	// several**, and that is a property of the scope rather than a convenience.
+	//
+	// An element-scoped report names no destination by construction — MDFUnreachableProbe
+	// takes counts precisely so the answer *cannot* name one — so reporting each of them
+	// separately would send the ADMF several reports carrying identical text about
+	// endpoints it cannot tell apart, and each one's retraction would retract the others.
+	// Reported per entry, with one such endpoint down and one healthy, whichever the
+	// iteration reached last decided whether the fault stood: the defect was intermittent
+	// because Go's map order decided it.
+	//
+	// What the element can honestly say at this scope is the aggregate: a fault while any
+	// un-identified destination is unreachable, and a clear only when none is.
+	var (
+		unnamed     bool
+		unnamedDown bool
+	)
+
 	for _, h := range w.health() {
 		// An endpoint this element resolved from its own configuration has no
 		// identifier the provisioning function assigned, so there is nothing
@@ -196,12 +214,8 @@ func (w *DestinationWatcher) sample() {
 		// Both edges either way. The scope changes with what can be named; whether
 		// the fault is reported at all does not.
 		if h.DID == "" {
-			if h.Unreachable {
-				w.reporter.NotifyElementFault(w.condition, "a delivery destination is unreachable")
-
-				continue
-			}
-			w.reporter.NotifyElementClear(w.condition)
+			unnamed = true
+			unnamedDown = unnamedDown || h.Unreachable
 
 			continue
 		}
@@ -213,4 +227,17 @@ func (w *DestinationWatcher) sample() {
 		}
 		w.reporter.NotifyDestinationClear(h.DID, w.condition)
 	}
+
+	// Only where this element has such a destination at all: an element with none has
+	// nothing to say at this scope, and saying "all clear" would retract a fault raised
+	// by whatever else uses the same condition.
+	if !unnamed {
+		return
+	}
+	if unnamedDown {
+		w.reporter.NotifyElementFault(w.condition, "a delivery destination is unreachable")
+
+		return
+	}
+	w.reporter.NotifyElementClear(w.condition)
 }

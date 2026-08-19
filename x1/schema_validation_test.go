@@ -570,6 +570,7 @@ func TestOriginatedRequestsValidate(t *testing.T) {
 			b, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 			body = string(b)
 			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(admfResponse(t, b))) //nolint:errcheck // test handler
 		}))
 		t.Cleanup(srv.Close)
 

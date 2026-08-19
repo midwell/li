@@ -5,9 +5,13 @@ package x1
 
 import (
 	"context"
+	"encoding/xml"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,7 +44,8 @@ func newBlockingADMF(t *testing.T) *blockingADMF {
 	a := &blockingADMF{}
 	a.release, a.unhold = context.WithCancel(context.Background())
 	a.status.Store(http.StatusOK)
-	a.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	a.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body) //nolint:errcheck // test handler
 		n := a.inFlight.Add(1)
 		for {
 			peak := a.peak.Load()
@@ -54,7 +59,11 @@ func newBlockingADMF(t *testing.T) *blockingADMF {
 			<-a.release.Done()
 		}
 		a.inFlight.Add(-1)
-		w.WriteHeader(int(a.status.Load()))
+		status := int(a.status.Load())
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = w.Write([]byte(admfResponse(t, body))) //nolint:errcheck // test handler
+		}
 	}))
 	// Unblock before Close: Close waits for handlers to return, so a held request
 	// would deadlock the cleanup rather than fail the test.
@@ -264,4 +273,69 @@ func TestAFailedRetractionLeavesTheFaultRetractable(t *testing.T) {
 	if got := admf.total.Load(); got != before {
 		t.Errorf("a fault already retracted was retracted again (%d messages, want %d)", got, before)
 	}
+}
+
+// admfResponse is the answer a conformant ADMF returns to a report: the response type
+// derived from the request's, and the five fields of the schema's X1ResponseMessage base
+// type — the sender's echoed back, its own stated.
+//
+// The stubs used to answer 200 with an empty body, which is not a response any conformant
+// ADMF sends and which the reporter now refuses as unattributable. That is the point of the
+// change: an element that reads a bare 200 as acceptance records a fault as reported, stops
+// re-reporting it, and later retracts a fault the ADMF never had — so the two sides'
+// lists disagree in the one direction neither can detect. A stub that is not conformant
+// tests this element against a fiction.
+func admfResponse(t *testing.T, request []byte) string {
+	t.Helper()
+
+	var in struct {
+		Messages []struct {
+			Type            string `xml:"http://www.w3.org/2001/XMLSchema-instance type,attr"`
+			AdmfIdentifier  string `xml:"admfIdentifier"`
+			NeIdentifier    string `xml:"neIdentifier"`
+			Timestamp       string `xml:"messageTimestamp"`
+			Version         string `xml:"version"`
+			X1TransactionID string `xml:"x1TransactionId"`
+		} `xml:"x1RequestMessage"`
+	}
+	if err := xml.Unmarshal(request, &in); err != nil {
+		t.Fatalf("ADMF stub could not parse the report it is answering: %v", err)
+	}
+	if len(in.Messages) != 1 {
+		t.Fatalf("ADMF stub received %d request messages, want 1", len(in.Messages))
+	}
+	m := in.Messages[0]
+
+	local := m.Type
+	if i := strings.LastIndex(local, ":"); i >= 0 {
+		local = local[i+1:]
+	}
+
+	return `<?xml version="1.0"?><x1:X1Response xmlns:x1="http://uri.etsi.org/03221/X1/2017/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+		`<x1:x1ResponseMessage xsi:type="x1:` + strings.TrimSuffix(local, "Request") + `Response">` +
+		`<x1:admfIdentifier>` + m.AdmfIdentifier + `</x1:admfIdentifier>` +
+		`<x1:neIdentifier>` + m.NeIdentifier + `</x1:neIdentifier>` +
+		`<x1:messageTimestamp>` + m.Timestamp + `</x1:messageTimestamp>` +
+		`<x1:version>` + m.Version + `</x1:version>` +
+		`<x1:x1TransactionId>` + m.X1TransactionID + `</x1:x1TransactionId>` +
+		`</x1:x1ResponseMessage></x1:X1Response>`
+}
+
+// admfErrorResponse is the same envelope carrying an X1-level refusal, which clause 7.2.2.2
+// requires to be returned inside a HTTP 200.
+func admfErrorResponse(t *testing.T, request []byte, code int, description string) string {
+	t.Helper()
+
+	ok := admfResponse(t, request)
+	// The response type becomes ErrorResponse and the error information is carried inside
+	// it, which is the shape the schema defines and the one this element must not read as
+	// an acknowledgement.
+	ok = strings.Replace(ok, `Response">`, `Response">`, 1)
+	i := strings.Index(ok, `xsi:type="x1:`)
+	j := strings.Index(ok[i:], `">`) + i
+
+	return ok[:i] + `xsi:type="x1:ErrorResponse` + ok[j:len(ok)-len(`</x1:x1ResponseMessage></x1:X1Response>`)] +
+		`<x1:errorInformation><x1:errorCode>` + strconv.Itoa(code) + `</x1:errorCode>` +
+		`<x1:errorDescription>` + description + `</x1:errorDescription></x1:errorInformation>` +
+		`</x1:x1ResponseMessage></x1:X1Response>`
 }
