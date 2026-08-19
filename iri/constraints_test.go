@@ -65,6 +65,33 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 			},
 			want: "LCSCorrelationID is defined as UTF8String (SIZE(1..255))",
 		},
+		{
+			// An ENUMERATED, which is the kind of restriction the requirement lists first and
+			// nothing checked. It is also the one reachable from peer input: the AMF builds
+			// this record by casting the handover type straight out of the gNB's NGAP message.
+			name: "a value outside an enumeration",
+			event: AMFRANHandoverRequest{
+				UserIdentifiers: sampleIdentifiers(),
+				AMFUENGAPID:     1,
+				RANUENGAPID:     2,
+				HandoverType:    HandoverType(9),
+			},
+			want: "HandoverType is an ENUMERATED with values 1..4",
+		},
+		{
+			// The five HandoverCause arms are numbered from one and this module states no
+			// upper bound for them, so the lower one is what can be checked. A negative
+			// cause is outside every group whichever group is in play.
+			name: "a cause below the first value of every group",
+			event: AMFRANHandoverRequest{
+				UserIdentifiers: sampleIdentifiers(),
+				AMFUENGAPID:     1,
+				RANUENGAPID:     2,
+				HandoverType:    HandoverIntra5GS,
+				HandoverCause:   CauseRadioNetwork(-1),
+			},
+			want: "CauseRadioNetwork is an ENUMERATED numbered from 1",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := EncodeXIRI(ctx, tc.event)
@@ -85,6 +112,29 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 		SUPI: IMSI("262019876543210"), UEPolicy: conformantPolicy,
 	}); err != nil {
 		t.Errorf("a conformant record was refused: %v", err)
+	}
+
+	// An enumerated member left unset is *absent*, not meaningless, and the constraint check
+	// says nothing about it. Every enumeration here is numbered from one, so a member nobody
+	// set reads as zero — and treating that as out of range would refuse every record that
+	// legitimately omits an optional one. The direction matters: this check exists to stop a
+	// value a *peer* chose from going out, and a peer's value is never the absence.
+	//
+	// Whether an absent member is an error at all belongs to the codec, and this asserts the
+	// division rather than assuming it: HandoverCause is mandatory in this record, so the
+	// refusal arrives — in the codec's own words about a missing mandatory field, not in the
+	// constraint check's about a value outside an enumeration.
+	_, err := EncodeXIRI(ctx, AMFRANHandoverRequest{
+		UserIdentifiers: sampleIdentifiers(),
+		AMFUENGAPID:     1,
+		RANUENGAPID:     2,
+		HandoverType:    HandoverIntra5GS,
+	})
+	if err == nil {
+		t.Error("a record omitting a mandatory member was encoded")
+	} else if strings.Contains(err.Error(), "ENUMERATED") {
+		t.Errorf("an unset member was refused as a value outside its enumeration (%v); zero is "+
+			"absence, and every record that omits an optional enumerated member would fail", err)
 	}
 }
 

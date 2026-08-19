@@ -85,7 +85,64 @@ var (
 	utf8Constraints = map[reflect.Type]utf8Size{
 		reflect.TypeOf(LCSCorrelationID("")): {1, 255},
 	}
+
+	// enumConstraints are the ENUMERATED types whose permitted values this module declares.
+	//
+	// Separate from intConstraints because the refusal has to say something different: an
+	// integer outside its range is a value too large, and an enumeration outside its set is a
+	// value that *means nothing* — no conformant receiver can interpret it, and there is no
+	// nearest legal value it could have intended.
+	//
+	// The bounds are read from the constants each type declares in iri.go rather than from
+	// the specification, so this table cannot drift from the enumeration it guards: a value
+	// added there and not here shows up as a refusal of a value the module itself defines,
+	// which is a failure that gets fixed, rather than as silent admission of one it does not.
+	//
+	// Reachable from peer input, which is why it matters. The AMF builds a handover record by
+	// casting the NGAP cause value and handover type straight out of the message the gNB sent
+	// (see handoverCause), so a RAN that is non-conformant — or is not the RAN it claims to
+	// be — decides what this element encodes. Unchecked, the record goes out structurally
+	// well-formed, a conformant mediation function discards what it cannot validate, and the
+	// element believes it delivered.
+	enumConstraints = map[reflect.Type]intRange{
+		reflect.TypeOf(AMFRegistrationType(0)):    {1, 7},
+		reflect.TypeOf(AMFRegistrationResult(0)):  {1, 3},
+		reflect.TypeOf(AMFDirection(0)):           {1, 2},
+		reflect.TypeOf(AccessType(0)):             {1, 3},
+		reflect.TypeOf(PDUSessionType(0)):         {1, 5},
+		reflect.TypeOf(FiveGSMRequestType(0)):     {1, 7},
+		reflect.TypeOf(AMFFailedProcedureType(0)): {1, 3},
+		reflect.TypeOf(SMFFailedProcedureType(0)): {1, 3},
+		reflect.TypeOf(Initiator(0)):              {1, 3},
+		reflect.TypeOf(HandoverType(0)):           {1, 4},
+
+		// The five HandoverCause arms are bounded below and **not above**, and the asymmetry
+		// is deliberate rather than an omission.
+		//
+		// Each mirrors an NGAP Cause group from TS 38.413 clause 9.3.1.2, "numbered from 1 in
+		// the order the module lists them" — so zero and below are outside every one of them,
+		// whichever group is in play, and that is checkable here. The upper bound is the
+		// number of values in a specific group of a specific release of a specification this
+		// module does not restate, and writing a number here from memory would be inventing a
+		// constraint: a bound that is wrong in the tight direction refuses records the
+		// specification permits, which on this interface means losing product that should
+		// have been delivered.
+		//
+		// So the lower bound is enforced and the upper one is an evidence gap, recorded as
+		// such in the change that added this table rather than closed by a guess. Closing it
+		// means transcribing the five groups' value counts from TS 38.413 against the release
+		// this project targets, and pinning them to that citation.
+		reflect.TypeOf(CauseRadioNetwork(0)): {1, maxInt64},
+		reflect.TypeOf(CauseTransport(0)):    {1, maxInt64},
+		reflect.TypeOf(CauseNas(0)):          {1, maxInt64},
+		reflect.TypeOf(CauseProtocol(0)):     {1, maxInt64},
+		reflect.TypeOf(CauseMisc(0)):         {1, maxInt64},
+	}
 )
+
+// maxInt64 stands for "this module states no upper bound", so an entry that bounds only one
+// end says so in the table rather than by being absent from it.
+const maxInt64 = int64(^uint64(0) >> 1)
 
 // validateConstraints walks a record and refuses any value that violates the restriction its
 // own type carries.
@@ -166,6 +223,31 @@ func constraintOf(v reflect.Value, path string) error {
 		n := v.Int()
 		if n < c.min || n > c.max {
 			return fmt.Errorf("iri: %s is %d, and %s is defined as INTEGER (%d..%d)",
+				path, n, t.Name(), c.min, c.max)
+		}
+	}
+
+	if c, ok := enumConstraints[t]; ok {
+		n := v.Int()
+		// Zero is "not present", not "present and meaningless" — the same rule the octet
+		// strings above take, for the same reason. Every enumeration here is numbered from
+		// one, so an unset field of an optional member reads as zero and the codec omits it;
+		// refusing that would refuse every record that legitimately leaves the member out. A
+		// member that is mandatory and absent is the codec's to refuse, and it does.
+		//
+		// It costs the guard exactly one value, and not one that carries the risk: what this
+		// check is for is a value a peer chose — an NGAP cause or handover type cast straight
+		// out of a gNB's message — and those are numbered from one when present.
+		if n == 0 {
+			return nil
+		}
+		if n < c.min || n > c.max {
+			if c.max == maxInt64 {
+				return fmt.Errorf("iri: %s is %d, and %s is an ENUMERATED numbered from %d",
+					path, n, t.Name(), c.min)
+			}
+
+			return fmt.Errorf("iri: %s is %d, and %s is an ENUMERATED with values %d..%d",
 				path, n, t.Name(), c.min, c.max)
 		}
 	}
