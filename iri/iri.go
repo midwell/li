@@ -113,19 +113,35 @@ const (
 	SMRequestMAPDU             FiveGSMRequestType = 7
 )
 
+// The SNSSAI and FTEID leaves. Named rather than declared inline, so the constraint table
+// keyed on type reaches them; see constraints.go for why keying on a field name would not
+// survive the next record that spells the field differently.
+//
+// `SliceServiceType` and `TEID` are inline INTEGERs in the module, which gives them no name of
+// their own — these are this package's. `IPv4Address` and `IPv6Address` are the module's own
+// types, and FTEID's members below are declared with them because that is what the module says
+// they are.
+type (
+	SliceDifferentiator []byte // SIZE(3)
+	SliceServiceType    int    // INTEGER (0..255)
+	TEID                int64  // INTEGER (0..4294967295)
+)
+
 // SNSSAI ::= SEQUENCE — the slice identifier (SST + optional SD).
 type SNSSAI struct {
-	SliceServiceType    int    `asn1:"tag:1"`          // SST (0..255)
-	SliceDifferentiator []byte `asn1:"tag:2,optional"` // SD, OCTET STRING(3)
-	MappedHPLMNSST      int    `asn1:"tag:3,optional"`
-	MappedHPLMNSD       []byte `asn1:"tag:4,optional"`
+	SliceServiceType    SliceServiceType    `asn1:"tag:1"`
+	SliceDifferentiator SliceDifferentiator `asn1:"tag:2,optional"`
+	MappedHPLMNSST      SliceServiceType    `asn1:"tag:3,optional"`
+	// The mapped HPLMN SD is the same leaf as the serving SD — `OCTET STRING (SIZE(3))` in
+	// the module both times — so it carries the same type and inherits the same check.
+	MappedHPLMNSD SliceDifferentiator `asn1:"tag:4,optional"`
 }
 
 // FTEID ::= SEQUENCE — a GTP-U F-TEID (tunnel id + endpoint IP).
 type FTEID struct {
-	TEID        int64  `asn1:"tag:1"`          // 0..4294967295
-	IPv4Address []byte `asn1:"tag:2,optional"` // OCTET STRING(4)
-	IPv6Address []byte `asn1:"tag:3,optional"` // OCTET STRING(16)
+	TEID        TEID        `asn1:"tag:1"`
+	IPv4Address IPv4Address `asn1:"tag:2,optional"`
+	IPv6Address IPv6Address `asn1:"tag:3,optional"`
 }
 
 // FiveGSGTPTunnels ::= SEQUENCE — the 5GS user plane tunnels of a PDU session
@@ -332,14 +348,27 @@ type (
 	LCSCorrelationID string
 )
 
+// The FiveGGUTI leaves. Every one is a named type in the module with a restriction of its own,
+// and every one arrives from this element's own configuration and context rather than from a
+// task — so nothing validates them before they reach a record, which is why they are named here
+// rather than left to the identity leaves' argument in constraints.go.
+type (
+	MCC         string // NumericString (SIZE(3))
+	MNC         string // NumericString (SIZE(2..3))
+	AMFRegionID int    // INTEGER (0..255)
+	AMFSetID    int    // INTEGER (0..1023)
+	AMFPointer  int    // INTEGER (0..63)
+	FiveGTMSI   int64  // INTEGER (0..4294967295)
+)
+
 // FiveGGUTI ::= SEQUENCE. All members are IMPLICIT context-tagged.
 type FiveGGUTI struct {
-	MCC         string `asn1:"tag:1"` // NumericString(3)
-	MNC         string `asn1:"tag:2"` // NumericString(2..3)
-	AMFRegionID int    `asn1:"tag:3"` // INTEGER(0..255)
-	AMFSetID    int    `asn1:"tag:4"` // INTEGER(0..1023)
-	AMFPointer  int    `asn1:"tag:5"` // INTEGER(0..63)
-	FiveGTMSI   int64  `asn1:"tag:6"` // INTEGER(0..4294967295)
+	MCC         MCC         `asn1:"tag:1"`
+	MNC         MNC         `asn1:"tag:2"`
+	AMFRegionID AMFRegionID `asn1:"tag:3"`
+	AMFSetID    AMFSetID    `asn1:"tag:4"`
+	AMFPointer  AMFPointer  `asn1:"tag:5"`
+	FiveGTMSI   FiveGTMSI   `asn1:"tag:6"`
 }
 
 // AMFRegistration is a slice of TS 33.128 AMFRegistration: the four mandatory
@@ -499,6 +528,10 @@ type (
 	MACAddress  []byte // SIZE(6)
 )
 
+// ServiceType is the one-octet service type of a SERVICE REQUEST or ACCEPT. Inline in the
+// module — `OCTET STRING (SIZE(1))` — so the name is this package's.
+type ServiceType []byte // SIZE(1)
+
 // UEEndpoint builds the ueEndpoint list for a single UE address, discriminating
 // v4 from v6 the way the rest of the project does — To4 first, because a
 // 4-in-6-mapped address answers To16 as well and would otherwise be reported as
@@ -571,8 +604,8 @@ type SMFUnsuccessfulProcedure struct {
 type AMFUEServiceAccept struct {
 	UserIdentifiers        UserIdentifiers `asn1:"tag:1"`
 	ServiceMessageIdentity any             `asn1:"tag:2,explicit,choice:serviceMessageIdentity"`
-	ServiceType            []byte          `asn1:"tag:3,optional"` // OCTET STRING (SIZE(1))
-	FiveGTMSI              int64           `asn1:"tag:4,optional"`
+	ServiceType            ServiceType     `asn1:"tag:3,optional"`
+	FiveGTMSI              FiveGTMSI       `asn1:"tag:4,optional"`
 }
 
 // AMFUEPolicyTransfer is a slice of the same-named record (XIRIEvent [146]),

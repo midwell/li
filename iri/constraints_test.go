@@ -119,6 +119,118 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 			},
 			want: "CauseNas is an ENUMERATED with values 1..4",
 		},
+
+		// The leaves whose restriction lived only in a comment until they were given names.
+		// Each of these encoded cleanly before, against a definition written two lines above
+		// the field.
+		{
+			name: "a slice differentiator that is not three octets",
+			event: SMFPDUSessionEstablishment{
+				SUPI:         IMSI("262019876543210"),
+				PDUSessionID: 5,
+				GTPTunnelID:  FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
+				SNSSAI:       SNSSAI{SliceServiceType: 1, SliceDifferentiator: SliceDifferentiator{0x01, 0x02}},
+			},
+			want: "SliceDifferentiator is defined as SIZE(3..3)",
+		},
+		{
+			// The same leaf reached through the *other* field that carries it. This is what
+			// keying on the type buys and keying on a field name would not: the mapped HPLMN
+			// differentiator is spelled differently and inherits the check anyway.
+			name: "a mapped HPLMN slice differentiator of the wrong size",
+			event: SMFPDUSessionEstablishment{
+				SUPI:         IMSI("262019876543210"),
+				PDUSessionID: 5,
+				GTPTunnelID:  FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
+				SNSSAI: SNSSAI{
+					SliceServiceType: 1,
+					MappedHPLMNSD:    SliceDifferentiator{0x01, 0x02, 0x03, 0x04},
+				},
+			},
+			want: "SliceDifferentiator is defined as SIZE(3..3)",
+		},
+		{
+			name: "a slice service type above its range",
+			event: SMFPDUSessionEstablishment{
+				SUPI:         IMSI("262019876543210"),
+				PDUSessionID: 5,
+				GTPTunnelID:  FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
+				SNSSAI:       SNSSAI{SliceServiceType: 256},
+			},
+			want: "SliceServiceType is defined as INTEGER (0..255)",
+		},
+		{
+			// A TEID is 32 bits on the wire and an int64 in Go, so the range is the only thing
+			// between a 33-bit value and a record a receiver cannot read.
+			name: "a TEID above 32 bits",
+			event: SMFPDUSessionEstablishment{
+				SUPI:         IMSI("262019876543210"),
+				PDUSessionID: 5,
+				GTPTunnelID:  FTEID{TEID: 4294967296, IPv4Address: IPv4Address{10, 250, 0, 1}},
+			},
+			want: "TEID is defined as INTEGER (0..4294967295)",
+		},
+		{
+			// The FTEID address, which is the same named type as the UEEndpointAddress arm and
+			// so was already checked in one place and not the other.
+			name: "an FTEID address whose length is not its family's",
+			event: SMFPDUSessionEstablishment{
+				SUPI:         IMSI("262019876543210"),
+				PDUSessionID: 5,
+				GTPTunnelID:  FTEID{TEID: 1, IPv6Address: IPv6Address{0x20, 0x01}},
+			},
+			want: "IPv6Address is defined as SIZE(16..16)",
+		},
+		{
+			name: "a service type that is not one octet",
+			event: AMFUEServiceAccept{
+				UserIdentifiers:        sampleIdentifiers(),
+				ServiceMessageIdentity: ServiceAcceptIdentity{0x01},
+				ServiceType:            ServiceType{0x01, 0x02},
+			},
+			want: "ServiceType is defined as SIZE(1..1)",
+		},
+		{
+			// A GUTI leaf. Every record carrying a GUTI carries all six, and all six come from
+			// this element's own configuration — so a misconfigured PLMN reaches a record
+			// without passing anything that would look at it.
+			name: "an AMF set id above its range",
+			event: AMFRegistration{
+				RegistrationType:   RegTypeInitial,
+				RegistrationResult: RegResult3GPPAccess,
+				SUPI:               IMSI("262019876543210"),
+				GUTI: FiveGGUTI{
+					MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1024, AMFPointer: 1, FiveGTMSI: 1,
+				},
+			},
+			want: "AMFSetID is defined as INTEGER (0..1023)",
+		},
+		{
+			name: "an MCC that is not three digits",
+			event: AMFRegistration{
+				RegistrationType:   RegTypeInitial,
+				RegistrationResult: RegResult3GPPAccess,
+				SUPI:               IMSI("262019876543210"),
+				GUTI: FiveGGUTI{
+					MCC: "2620", MNC: "01", AMFRegionID: 1, AMFSetID: 1, AMFPointer: 1, FiveGTMSI: 1,
+				},
+			},
+			want: "MCC is defined as NumericString (SIZE(3..3))",
+		},
+		{
+			// The alphabet, not the length. A NumericString carrying letters is the failure a
+			// size check alone passes, and a PLMN read from configuration is where one arrives.
+			name: "an MNC that is not digits",
+			event: AMFRegistration{
+				RegistrationType:   RegTypeInitial,
+				RegistrationResult: RegResult3GPPAccess,
+				SUPI:               IMSI("262019876543210"),
+				GUTI: FiveGGUTI{
+					MCC: "262", MNC: "0x", AMFRegionID: 1, AMFSetID: 1, AMFPointer: 1, FiveGTMSI: 1,
+				},
+			},
+			want: "MNC is defined as NumericString, whose alphabet is the digits and space",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := EncodeXIRI(ctx, tc.event)

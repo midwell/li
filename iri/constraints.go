@@ -30,13 +30,19 @@ import (
 // check without anybody remembering to add it, and a leaf that grows a new named type is
 // visibly missing from the table below rather than silently unchecked.
 //
-// **Which is also the limit, stated rather than implied.** A leaf declared as a bare `[]byte`
-// or `int` field — `SliceDifferentiator`, the `FTEID` addresses, `ServiceType` — carries its
-// restriction only in a comment, and this table cannot reach it without keying on field
-// names, which the next record to spell a field differently would silently escape. Giving
-// those leaves named types is how they join the table; it is a mechanical change to iri.go and
-// is not made here, because it would touch every builder in three network functions in a
-// change whose subject is the checking rather than the naming.
+// **Every leaf with a restriction now has a name, and the sweep that established that found
+// more than the three the previous version of this paragraph named.** It listed
+// `SliceDifferentiator`, the `FTEID` addresses and `ServiceType`; naming those and then reading
+// every field of every emitted record turned up `SliceServiceType`, `TEID` and all six members
+// of `FiveGGUTI` in the same condition — restriction in a comment, nothing keyed on it. The
+// `FiveGGUTI` ones are in every record that carries a GUTI. A list of examples is not a survey,
+// and the reason this one read as complete is that it had been written from the leaves somebody
+// had noticed.
+//
+// So what remains outside is stated as a property rather than as a list: a restriction on a
+// leaf whose Go declaration is a bare `[]byte`, `int` or `string` field is not enforced, and
+// there are no such leaves left among the records this project emits. A field added as a bare
+// type is the way back in, which is what `TestEveryRestrictedLeafIsNamed` exists to refuse.
 
 // octetSize is an OCTET STRING's permitted length range, inclusive. A single permitted length
 // is expressed as min == max.
@@ -72,6 +78,13 @@ var (
 		reflect.TypeOf(IPv6Address(nil)): {16, 16},
 		reflect.TypeOf(MACAddress(nil)):  {6, 6},
 		reflect.TypeOf(UEPolicy(nil)):    {16, 65540},
+
+		// The SNSSAI and service-accept leaves the module declares inline, so this package
+		// names them. Both are single permitted lengths, and a single length is the case a
+		// check catches most often: a builder handed three octets of slice differentiator
+		// where it meant to send the SST has nothing else to trip over.
+		reflect.TypeOf(SliceDifferentiator(nil)): {3, 3},
+		reflect.TypeOf(ServiceType(nil)):         {1, 1},
 	}
 
 	intConstraints = map[reflect.Type]intRange{
@@ -80,10 +93,35 @@ var (
 		reflect.TypeOf(FiveGSMCause(0)): {0, 255},
 		reflect.TypeOf(AMFUENGAPID(0)):  {0, 1099511627775},
 		reflect.TypeOf(RANUENGAPID(0)):  {0, 4294967295},
+
+		reflect.TypeOf(SliceServiceType(0)): {0, 255},
+		reflect.TypeOf(TEID(0)):             {0, 4294967295},
+
+		// The FiveGGUTI members. Each is a named type in the module with a range of its own,
+		// and each comes from this element's configuration and context — so no task validation
+		// stands between a misconfigured PLMN or a truncated AMF identifier and a record.
+		reflect.TypeOf(AMFRegionID(0)): {0, 255},
+		reflect.TypeOf(AMFSetID(0)):    {0, 1023},
+		reflect.TypeOf(AMFPointer(0)):  {0, 63},
+		reflect.TypeOf(FiveGTMSI(0)):   {0, 4294967295},
 	}
 
 	utf8Constraints = map[reflect.Type]utf8Size{
 		reflect.TypeOf(LCSCorrelationID("")): {1, 255},
+	}
+
+	// numericConstraints are the NumericString leaves, whose restriction is a length *and* an
+	// alphabet: `NumericString` admits digits and space, and TS 33.128 uses it for values that
+	// are digits throughout.
+	//
+	// The alphabet is the half worth having. A length check on an MCC would pass "abc", and a
+	// PLMN read from configuration is exactly where a non-digit arrives — whereas the identity
+	// leaves this table does not cover (IMSI, IMEI, MSISDN) get their values from a task, which
+	// `li/x1` validates on the decode path before they reach a record. That distinction is why
+	// these two are here and those are not.
+	numericConstraints = map[reflect.Type]utf8Size{
+		reflect.TypeOf(MCC("")): {3, 3},
+		reflect.TypeOf(MNC("")): {2, 3},
 	}
 
 	// enumConstraints are the ENUMERATED types whose permitted values this module declares.
@@ -238,6 +276,24 @@ func constraintOf(v reflect.Value, path string) error {
 		if n < c.min || n > c.max {
 			return fmt.Errorf("iri: %s is %d, and %s is an ENUMERATED with values %d..%d",
 				path, n, t.Name(), c.min, c.max)
+		}
+	}
+
+	if c, ok := numericConstraints[t]; ok {
+		s := v.String()
+		// Empty is absence, as everywhere else in this function: a mandatory member that is
+		// absent is the codec's to refuse.
+		if s != "" {
+			if n := len([]rune(s)); n < c.min || n > c.max {
+				return fmt.Errorf("iri: %s is %d characters, and %s is defined as NumericString (SIZE(%d..%d))",
+					path, n, t.Name(), c.min, c.max)
+			}
+			for _, r := range s {
+				if (r < '0' || r > '9') && r != ' ' {
+					return fmt.Errorf("iri: %s contains %q, and %s is defined as NumericString, "+
+						"whose alphabet is the digits and space", path, r, t.Name())
+				}
+			}
 		}
 	}
 
