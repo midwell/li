@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -516,6 +518,28 @@ func TestTaskDetailsQueryAnswersWhatIsHeld(t *testing.T) {
 	}
 }
 
+// declaredNEIssues returns the condition string of every NEIssue constant declared in
+// report.go, parsed from the source.
+//
+// The alternative is a list in the test, and the failure mode of a list in a test is that it
+// is the thing an author adding a condition forgets — which is not hypothetical here: it had
+// happened six times.
+func declaredNEIssues(t *testing.T) []string {
+	t.Helper()
+
+	src, err := os.ReadFile("report.go")
+	if err != nil {
+		t.Fatalf("reading report.go: %v", err)
+	}
+
+	var out []string
+	for _, m := range regexp.MustCompile(`(?m)^\tNEIssue\w+\s*=\s*"([^"]+)"`).FindAllSubmatch(src, -1) {
+		out = append(out, string(m[1]))
+	}
+
+	return out
+}
+
 // TestNEIssueEncodingsAreConformant checks every condition this implementation can
 // report against the enumeration TS 103 221-1 actually defines. The failure this
 // guards against is not subtle but was invisible: a value outside the enumeration
@@ -527,12 +551,16 @@ func TestNEIssueEncodingsAreConformant(t *testing.T) {
 		neIssueFaultReport: true, neIssueAlert: true,
 	}
 
-	conditions := []string{
-		NEIssueX1ListenFailed, NEIssueX3EgressDown, NEIssueMDFUnreachable,
-		NEIssueInvalidConfig, NEIssueContentUntasked, NEIssueX3PuntLost,
-		NEIssueX3FramingLost, NEIssueX3DeliveryLost, NEIssueX3TagInvalid,
-		NEIssueReconcileFailed, NEIssueTaskingPurged, NEIssueTaskingAbsent,
-		NEIssueX1AuthFailed, NEIssueTaskingWithdrawalFailed, NEIssueTaskingWithdrawalStuck,
+	// Read out of report.go rather than listed here, because the list this replaced had
+	// fallen six conditions behind the constants — including x2DeliveryLost, which two
+	// suites exercise end to end. Nothing failed: an unlisted condition is simply never
+	// checked, so the test went on claiming to cover "every condition this implementation
+	// can report" while a new one could be added, reported in production, and discarded by
+	// a conformant ADMF without this ever going red.
+	conditions := declaredNEIssues(t)
+	if len(conditions) < 20 {
+		t.Fatalf("parsed %d conditions out of report.go; the declarations must have moved, and a "+
+			"parse that finds too few is a test that checks too little", len(conditions))
 	}
 
 	// issueCode is conditional, not mandatory: it is required when the condition
