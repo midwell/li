@@ -201,3 +201,53 @@ func TestATaskFaultAnswerNamesNoTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestAnElementScopedConditionIsNotAttributedToATask is the other direction of the scoping,
+// and the one an element gets wrong by being helpful.
+//
+// TS 103 221-1 separates the two levels explicitly: NE status is "OK" or "Faults i.e. NE losing
+// traffic", and those are "separate from delivery faults which are reported per XID". A
+// condition that concerns the element — its mediation functions unreachable, its egress down —
+// is true of every task it holds, so an element that answered it against each task would report
+// one fault N times and imply each warrant was separately broken. The ADMF then cannot tell
+// "this element is losing traffic" from "N of my warrants are not arriving", which is the
+// distinction that decides what it does next.
+//
+// Asserted with a real element-scoped fault present, because the interesting case is not an
+// element with nothing to say.
+func TestAnElementScopedConditionIsNotAttributedToATask(t *testing.T) {
+	const condition = "every mediation function this element delivers to is unreachable"
+
+	sup := &faultSupplier{faults: map[types.XID][]X1Error{}}
+	srv := twoTaskServer(t,
+		WithTaskFaults(sup.supply),
+		WithFaultProbes(func() *X1Error { return NEFault(NEIssueMDFUnreachable, condition) }),
+	)
+
+	answer := answerTo(t, srv, "GetAllDetailsRequest", "")
+
+	// The element says it, once, where the schema puts an element's own conditions.
+	if !strings.Contains(answer, condition) {
+		t.Fatalf("the element's own status does not carry the condition its probe reports, so this "+
+			"test would pass against an element that reports nothing anywhere\ngot:\n%s", answer)
+	}
+	neStatus := answer[:strings.Index(answer, "<ns1:listOfTaskResponseDetails>")]
+	if !strings.Contains(neStatus, condition) {
+		t.Errorf("the condition is not in neStatusDetails, which is where an element's own faults "+
+			"belong\ngot:\n%s", neStatus)
+	}
+
+	// And no task answers it.
+	for _, xid := range []types.XID{testXID, secondTestXID} {
+		block := taskBlockFor(t, answer, xid)
+		if strings.Contains(block, condition) {
+			t.Errorf("task %s answers an element-scoped condition. One fault reported once per "+
+				"warrant reads as N broken warrants, and an ADMF cannot tell that from an element "+
+				"losing traffic\ngot:\n%s", xid, block)
+		}
+		if !strings.Contains(block, "<ns1:listOfFaults/>") {
+			t.Errorf("task %s does not answer an empty fault list while nothing task-scoped is "+
+				"wrong with it\ngot:\n%s", xid, block)
+		}
+	}
+}
