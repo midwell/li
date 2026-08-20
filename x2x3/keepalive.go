@@ -90,6 +90,16 @@ func KeepaliveSequence(p *PDU) (uint32, bool) {
 // discards them are different goroutines.
 type keepaliveCounter struct {
 	next atomic.Uint32
+
+	// highest is the largest sequence number an acknowledgement has been accepted for, and
+	// answered says whether there has been one — the two together, because zero is a
+	// legitimate first number and so cannot stand for "none yet".
+	//
+	// A mutex rather than another atomic: accept has to read and write the pair together, and
+	// a compare-and-swap loop over a packed value would be a lock written by hand.
+	mu       sync.Mutex
+	highest  uint32
+	answered bool
 }
 
 // take returns this connection's next Keepalive sequence number, starting at zero
@@ -104,6 +114,43 @@ func (c *keepaliveCounter) take() uint32 {
 // did. Used to notice a peer that echoes something of its own invention.
 func (c *keepaliveCounter) issued() uint32 {
 	return c.next.Load()
+}
+
+// accept reports whether seq is an acknowledgement this connection can act on, and records
+// it if so.
+//
+// Two questions, and the second one was missing. A number this connection never issued
+// answers nothing — that is what `issued` is for. But a number it *did* issue, replayed,
+// answers nothing either: it was already answered, and hearing it again is not evidence that
+// the peer is still there. Clause 6.2.4's own list of what must not refresh the deadline
+// includes a duplicate, and the harm is the one the never-issued case exists to prevent,
+// reached with valid material: a middlebox replaying one genuine acknowledgement holds the
+// fail-safe open indefinitely over a mediation function that has stopped taking product.
+//
+// Monotonic acceptance rather than a set of outstanding numbers. A set would be exact about
+// which are in flight and would cost a per-connection allocation and a lock on the reader's
+// path to answer a question the highest accepted number already answers: an acknowledgement
+// older than one already accepted tells us nothing the newer one did not. The cost is that
+// two acknowledgements arriving out of order retire only the newer, which is the stronger
+// evidence of the two and refreshes the same deadline.
+//
+// The wrap is not handled here, and neither is it in `issued`: both read the counter as
+// monotonic, which at one Keepalive per TIME_P1 is true for longer than any connection
+// lives. Stated so that the assumption is visible rather than implied.
+func (c *keepaliveCounter) accept(seq uint32) bool {
+	if seq >= c.issued() {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.answered && seq <= c.highest {
+		return false
+	}
+	c.answered, c.highest = true, seq
+
+	return true
 }
 
 // The specification's own timers, clause 6.2.4: "by default TIME_P1 shall be 60
@@ -431,13 +478,13 @@ func (c *Client) handleInbound(st *connState, p *PDU) bool {
 	switch p.Type {
 	case PDUTypeKeepaliveAck:
 		seq, ok := KeepaliveSequence(p)
-		if !ok || seq >= st.seq.issued() {
-			// **An acknowledgement carrying no number this connection issued does not
-			// answer the question TIME_P2 asks.** It was not sent in reply to anything
-			// this element sent: either it carries no usable sequence number at all, or
-			// one beyond what has been handed out. Clause 6.2.4 numbers the
-			// acknowledgement from the Keepalive it answers, so this is the only evidence
-			// available that the peer is answering *us* rather than emitting traffic.
+		if !ok || !st.seq.accept(seq) {
+			// **An acknowledgement this connection cannot act on does not answer the
+			// question TIME_P2 asks.** Either it carries no usable sequence number, or one
+			// beyond what has been handed out, or one that was already answered — see
+			// keepaliveCounter.accept. Clause 6.2.4 numbers the acknowledgement from the
+			// Keepalive it answers, so this is the only evidence available that the peer is
+			// answering *us*, now, rather than emitting traffic or repeating itself.
 			//
 			// It used to refresh the deadline anyway, on the reasoning that something is
 			// alive at the other end. That is true and is not the property: a peer stuck

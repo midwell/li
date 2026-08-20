@@ -1934,6 +1934,19 @@ func malformedTaskIdentifiers(td TaskDetails) error {
 		if err := malformedTargetValue(ti); err != nil {
 			return err
 		}
+		// **A choice with no arm populated is deliberately *not* refused here as a schema
+		// error**, and the asymmetry with the case below is the point rather than an
+		// oversight.
+		//
+		// This element cannot tell a message that genuinely populated no arm from one that
+		// carried an identifier TS 103 221-1 defines and this element does not model:
+		// encoding/xml drops an element no field claims, so both arrive as the same empty
+		// struct. Answering 1010 would tell an ADMF its message violated the schema when the
+		// commoner cause is a conformant message this element cannot act on — sending an
+		// operator to correct something that is correct. So it falls through to mapTarget and
+		// is refused with the operation's own code, which says what is true of both: the task
+		// cannot be applied here. TestRefuseCriteriaOutsideTheTable pins that, and pinned it
+		// against a change that tried to make this a schema error.
 		if n := populatedArms(ti); n > 1 {
 			// The schema defines TargetIdentifier as an xs:choice, so a message
 			// populating two arms is invalid against it and no reading of it is

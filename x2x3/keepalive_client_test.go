@@ -361,6 +361,85 @@ func TestKeepaliveToleratesTwoMissedAcknowledgements(t *testing.T) {
 //
 // So the outcome is the fail-safe doing its job: the connection ends at TIME_P2, and the
 // fault says so rather than naming a protocol error.
+// TestAReplayedAcknowledgementDoesNotPostponeTheDeadline is the same fail-safe against
+// material that is genuine rather than invented.
+//
+// The test above answers with a number this element never sent, which is the easy half: an
+// acknowledgement of nothing acknowledges nothing. The hard half is a number it *did* send,
+// returned again — a middlebox that repeats, a peer stuck in a loop, a recorded exchange
+// replayed. Every one of those satisfies "something is answering", and clause 6.2.4's list of
+// what may not refresh the deadline names a duplicate for exactly that reason.
+//
+// It went uncovered because the guard tested only `seq >= issued()`, which a replay of a real
+// acknowledgement passes. The failure message on the test above already named "a replaying
+// middlebox" as the harm, over a check that could not see one.
+//
+// The MDF here answers the first Keepalive correctly and then repeats that first
+// acknowledgement for every Keepalive after it. So the peer is answering, continuously, with
+// something it was genuinely given — and the element must still let TIME_P2 expire.
+func TestAReplayedAcknowledgementDoesNotPostponeTheDeadline(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		first []byte
+	)
+
+	m := startMDF(t, func(c net.Conn, p *PDU) {
+		if p.Type != PDUTypeKeepalive {
+			return
+		}
+
+		mu.Lock()
+		if first == nil {
+			seq, ok := KeepaliveSequence(p)
+			if !ok {
+				mu.Unlock()
+
+				return
+			}
+			b, err := KeepaliveAck(seq).Marshal()
+			if err != nil {
+				mu.Unlock()
+
+				return
+			}
+			first = b
+		}
+		replay := first
+		mu.Unlock()
+
+		//nolint:errcheck // test MDF; a failed write is the connection going away
+		_, _ = c.Write(replay)
+	})
+
+	faults := make(chan error, 4)
+	c := clientTo(t, m.addr, fastKeepalive(func(err error) {
+		select {
+		case faults <- err:
+		default:
+		}
+	}))
+
+	if err := c.Send(product()); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	select {
+	case err := <-faults:
+		if !strings.Contains(err.Error(), "TIME_P2") {
+			t.Errorf("the connection ended with %v, want the TIME_P2 fail-safe", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("an MDF replaying one genuine acknowledgement held the fail-safe open " +
+			"indefinitely: the numbers were real, so the never-issued check let them through, " +
+			"and a mediation function that has stopped taking product looks alive for as long " +
+			"as something repeats itself")
+	}
+
+	if !c.Unreachable() {
+		t.Error("the destination is still reported reachable after TIME_P2 expired over it")
+	}
+}
+
 func TestKeepaliveWrongSequenceDoesNotPostponeTheDeadline(t *testing.T) {
 	m := startMDF(t, func(c net.Conn, p *PDU) {
 		if p.Type != PDUTypeKeepalive {
