@@ -124,6 +124,41 @@ var (
 		reflect.TypeOf(MNC("")): {2, 3},
 	}
 
+	// mandatoryEnums are the enumerated types for which zero is *wrong* rather than absent.
+	//
+	// The check below exempts zero everywhere else, and correctly: an unset optional member
+	// reads as zero in Go and the codec omits it, so refusing zero would refuse every record
+	// that legitimately leaves one out.
+	//
+	// **That exemption is what let two defects reach a mediation function.** Both were an
+	// element casting a neighbouring protocol's value straight into a record: `handoverCause`
+	// emitted as NGAP's `unspecified(0)`, and `handoverType` emitted as NGAP's `intra5gs(0)`.
+	// A mandatory member emitted as zero is indistinguishable, to this check, from an optional
+	// one omitted — so the one value that proved the mapping was missing was the one value the
+	// check was told to ignore.
+	//
+	// The second was found by *decoding a delivered record* against the published module, which
+	// refused it outright: `handoverType` is mandatory, so a zero is not a wrong value but an
+	// unreadable record, and every intra-5GS handover record was discarded on receipt.
+	//
+	// A type belongs here when it is mandatory in every record that carries it, so zero can
+	// only mean the element wrote a value its own definition does not have. Being wrong in this
+	// direction costs a record the receiver would have refused anyway; being wrong in the other
+	// costs every record that omits an optional member, which is why the default stays the
+	// exemption and entries are added deliberately.
+	mandatoryEnums = map[reflect.Type]bool{
+		reflect.TypeOf(HandoverType(0)): true,
+
+		// The HandoverCause arms. A cause is mandatory in both records that carry one, and the
+		// mapping that produces it cannot yield zero — so a zero here is the mapping having
+		// been bypassed, which is precisely the defect this guard exists to notice.
+		reflect.TypeOf(CauseRadioNetwork(0)): true,
+		reflect.TypeOf(CauseTransport(0)):    true,
+		reflect.TypeOf(CauseNas(0)):          true,
+		reflect.TypeOf(CauseProtocol(0)):     true,
+		reflect.TypeOf(CauseMisc(0)):         true,
+	}
+
 	// enumConstraints are the ENUMERATED types whose permitted values this module declares.
 	//
 	// Separate from intConstraints because the refusal has to say something different: an
@@ -267,10 +302,14 @@ func constraintOf(v reflect.Value, path string) error {
 		// refusing that would refuse every record that legitimately leaves the member out. A
 		// member that is mandatory and absent is the codec's to refuse, and it does.
 		//
-		// It costs the guard exactly one value, and not one that carries the risk: what this
-		// check is for is a value a peer chose — an NGAP cause or handover type cast straight
-		// out of a gNB's message — and those are numbered from one when present.
-		if n == 0 {
+		// **Except where the member is mandatory wherever it appears**, in which case zero
+		// cannot be an omission and the exemption was hiding the one value that mattered. The
+		// paragraph beside mandatoryEnums says what that cost: two defects, one of which made
+		// every intra-5GS handover record undecodable, and neither of which this check could
+		// see. The comment that used to stand here claimed the exemption cost "exactly one
+		// value, and not one that carries the risk" — the risk was exactly that value, because
+		// a peer's enumeration numbered from zero puts its *first* member there.
+		if n == 0 && !mandatoryEnums[t] {
 			return nil
 		}
 		if n < c.min || n > c.max {

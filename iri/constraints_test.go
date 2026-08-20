@@ -124,6 +124,37 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 		// Each of these encoded cleanly before, against a definition written two lines above
 		// the field.
 		{
+			// The defect a delivered record exposed: NGAP numbers handoverType from zero and
+			// TS 33.128 from one, so an intra-5GS handover was emitted as 0 — a value the arm's
+			// enumeration does not define, in a member the record makes mandatory. The published
+			// decoder refuses the whole record, so every such record was discarded on receipt
+			// while this element believed it had delivered.
+			//
+			// Zero used to be exempt here as "absent". That exemption is why nothing caught it.
+			name: "a mandatory enumerated member carrying its source protocol's first value",
+			event: AMFRANHandoverRequest{
+				UserIdentifiers: sampleIdentifiers(),
+				AMFUENGAPID:     1,
+				RANUENGAPID:     2,
+				HandoverType:    HandoverType(0),
+				HandoverCause:   CauseRadioNetwork(1),
+			},
+			want: "HandoverType is an ENUMERATED with values 1..4",
+		},
+		{
+			// And the same rule for the cause arms, which are mandatory wherever they appear.
+			// The mapping cannot produce zero, so a zero is the mapping having been bypassed.
+			name: "a cause arm carrying zero, which the mapping cannot produce",
+			event: AMFRANHandoverRequest{
+				UserIdentifiers: sampleIdentifiers(),
+				AMFUENGAPID:     1,
+				RANUENGAPID:     2,
+				HandoverType:    HandoverIntra5GS,
+				HandoverCause:   CauseNas(0),
+			},
+			want: "CauseNas is an ENUMERATED with values 1..4",
+		},
+		{
 			name: "a slice differentiator that is not three octets",
 			event: SMFPDUSessionEstablishment{
 				SUPI:         IMSI("262019876543210"),
