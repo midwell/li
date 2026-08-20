@@ -251,3 +251,55 @@ func TestAnElementScopedConditionIsNotAttributedToATask(t *testing.T) {
 		}
 	}
 }
+
+// TestConditionScopesAreDisjoint is what makes "the choice is made once" enforceable.
+//
+// A condition reported at both scopes is one an ADMF sees twice and cannot reconcile: it has to
+// decide whether one element is losing traffic or N of its warrants are separately broken, and
+// the two need different responses. A condition in neither table is one nothing can classify,
+// which is how a per-author decision gets made again at the next call site.
+func TestConditionScopesAreDisjoint(t *testing.T) {
+	if len(taskScoped) == 0 {
+		t.Fatal("no task-scoped conditions are declared, so this test asserts nothing")
+	}
+	for condition := range taskScoped {
+		if _, alsoElement := neIssueEncodings[condition]; alsoElement {
+			t.Errorf("%q is declared at both element and task scope; an ADMF receiving it twice "+
+				"cannot tell one element losing traffic from several warrants separately broken",
+				condition)
+		}
+	}
+
+	// And every declared NEIssue constant is element-scoped, which is the other direction: a
+	// condition added to report.go and to neither table would be classified by whichever call
+	// site reached it first.
+	for _, condition := range declaredNEIssues(t) {
+		if taskScoped[condition] {
+			t.Errorf("%q is declared as an NE issue and as task-scoped", condition)
+		}
+	}
+}
+
+// TestATaskFaultMustNameADeclaredCondition: the constructor is where the scope decision is
+// enforced, because it is the one place every supplier's answer passes through.
+func TestATaskFaultMustNameADeclaredCondition(t *testing.T) {
+	good := TaskFault(TaskIssueNoTrafficSelected, "nothing selects this task's traffic")
+	if !strings.HasPrefix(good.ErrorDescription, TaskIssueNoTrafficSelected+": ") {
+		t.Errorf("a declared condition does not lead its description: %q", good.ErrorDescription)
+	}
+	if good.ErrorCode == 0 {
+		t.Error("a task fault carries no issue code, so it cannot be correlated with a pushed report")
+	}
+
+	// An element-scoped condition, answered against a task. Refused, and the refusal says whose
+	// defect it is: a description naming the element rather than the task is the honest answer
+	// when the element has misclassified its own condition.
+	bad := TaskFault(NEIssueMDFUnreachable, "every mediation function is unreachable")
+	if strings.Contains(bad.ErrorDescription, "unreachable") {
+		t.Errorf("an element-scoped condition was carried into a task's answer: %q",
+			bad.ErrorDescription)
+	}
+	if !strings.Contains(bad.ErrorDescription, "does not declare as task-scoped") {
+		t.Errorf("the refusal does not say what went wrong: %q", bad.ErrorDescription)
+	}
+}

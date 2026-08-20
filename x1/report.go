@@ -565,6 +565,50 @@ var reportTemplate = template.Must(template.New("x1report").Funcs(x1TemplateFunc
   </ns1:x1RequestMessage>
 </ns1:X1Request>`))
 
+// Task-scoped conditions: the ones an element answers *about one task* when its status is
+// asked for, or reports against one task over ReportTaskIssue.
+//
+// **Declared here, beside the element-scoped conditions, and with their scope recorded in a
+// table rather than decided at each call site.** The scope of a condition is a property of the
+// condition — "the mediation functions I deliver to are unreachable" is true of every task this
+// element holds; "the datapath is not duplicating what this task requires" is true of one — and
+// deciding it per author is how a condition ends up reported at a scope that cannot act on it.
+// That is not hypothetical: `triggerFaulty` existed for a year and was raised at element scope,
+// which told a provisioning function that something among its warrants had stopped and left it
+// unable to say which.
+//
+// The description a POI sends is prose because that is the only free-form field a task's fault
+// list has — errorCode and errorDescription, nothing else — so the condition name leads it, as
+// NEFault does for the element's own faults. An ADMF correlating a pushed report against an
+// interrogation answer then has a token to match on rather than two sentences.
+const (
+	// TaskIssueDuplicationNotProgrammed: the datapath is not duplicating traffic this task
+	// selects. Covers a rule the datapath refused, a push that was lost, and a rule never
+	// programmed at all — the element cannot tell them apart and does not need to, because
+	// what it reports is that no copy is being made.
+	TaskIssueDuplicationNotProgrammed = "duplicationNotProgrammed"
+	// TaskIssueNoTrafficSelected: nothing this element holds carries traffic this task selects.
+	// For a triggered POI, whose task was installed against traffic that existed, this is an
+	// interception producing nothing.
+	TaskIssueNoTrafficSelected = "noTrafficSelected"
+	// TaskIssueTriggerNotRunning: a point of interception this element triggered reports the
+	// task as not running. Raised by a triggering function, which is the only party that can
+	// see it — the POI answers to it and not to the ADMF.
+	TaskIssueTriggerNotRunning = "triggerNotRunning"
+)
+
+// taskScoped is the set of conditions that concern one task rather than the element.
+//
+// It exists so the choice is made once. TestConditionScopesAreDisjoint asserts that no
+// condition is in both this and neIssueEncodings: a condition reported at both scopes is one
+// an ADMF sees twice and cannot reconcile, and a condition in neither is one nothing can
+// classify.
+var taskScoped = map[string]bool{
+	TaskIssueDuplicationNotProgrammed: true,
+	TaskIssueNoTrafficSelected:        true,
+	TaskIssueTriggerNotRunning:        true,
+}
+
 // TS 103 221-1 TaskReportType values (clause 6.5.2 / the published XSD
 // enumeration). A Triggering Function uses these to tell the LIPF what became of
 // an interception it was asked to arrange.

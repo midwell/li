@@ -364,8 +364,23 @@ func NEFault(condition, detail string) *X1Error {
 // the subject: the task is already identified by the answer the fault appears in, so a target
 // identity here would be an identity on the X1 interface that the answer did not need. The
 // supplier signature is the structural half of that — it is handed an XID and nothing else.
-func TaskFault(detail string) X1Error {
-	return X1Error{ErrorCode: issueCodeNonTerminatingFault, ErrorDescription: detail}
+// The condition must be one report.go declares as task-scoped. A condition that is not is
+// refused rather than sent: an element-scoped condition answered against a task is the defect
+// this scoping exists to prevent, in the direction that is harder to notice — the answer looks
+// like an answer.
+func TaskFault(condition, detail string) X1Error {
+	if !taskScoped[condition] {
+		return X1Error{
+			ErrorCode: issueCodeNonTerminatingFault,
+			ErrorDescription: "this element reported a condition it does not declare as " +
+				"task-scoped, which is a defect in the element rather than in the task",
+		}
+	}
+
+	return X1Error{
+		ErrorCode:        issueCodeNonTerminatingFault,
+		ErrorDescription: condition + ": " + detail,
+	}
 }
 
 // MDFUnreachableProbe returns the probe every POI registers: whether the mediation functions
