@@ -549,7 +549,17 @@ fault state, and the answer was to compute the state when asked.
 
   Also closed by that: the note that **no end-to-end section could exercise it**. The condition
   no longer rests on interoperation with a third-party POI — this project's own CC-POI populates
-  a task's `listOfFaults`, so a suite that refuses a duplication rule can drive it end to end.
+  a task's `listOfFaults`. `tests/e2e-li/sections/31_task_scoped_faults.sh` drives it against
+  the deployed CC-POI, using the condition arrangeable from outside: a content task whose
+  criterion selects no session the element holds. It asserts the attribution as well as the
+  presence, since an element answering one condition for every task would satisfy a presence
+  check and leave the triggering function exactly where it was.
+
+  Named here rather than left as "a suite could": a disposition that claims a condition is
+  drivable end to end, with nothing driving it, is the same defect as one that claims a
+  constraint is checked. The remaining condition — a duplication rule the datapath refuses —
+  needs a datapath that can be made to refuse one on demand, which this deployment cannot do;
+  it is covered by `pfcpiface.TestATaskTheDatapathIsNotDuplicatingReportsAFault`.
 
 - **`ReportDestinationIssue` was not implemented (clause 6.5.3)**, so an issue relating
   specifically to one DID was reported at network-element scope instead. The information
