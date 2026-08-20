@@ -167,6 +167,21 @@ const (
 	// interception is running but its product is not correlatable — a fault the ADMF
 	// must know about even though content keeps flowing.
 	NEIssueX3TagInvalid = "x3TagInvalid"
+	// NEIssueRecordValueSubstituted: the network gave this element a value for a
+	// record's field that the record's own definition has no value for, so the field
+	// carries the nearest value the definition permits instead.
+	//
+	// It happens where two specifications enumerate the same concept and one has been
+	// extended since the other: an NGAP handover cause the release of TS 33.128 this
+	// element targets does not enumerate, for instance. The record is delivered,
+	// because the field is mandatory and a procedure that went unreported is a larger
+	// gap than one whose reason is imprecise — but the substituted value is itself a
+	// legitimate reading, so without this report an agency cannot tell a network that
+	// gave no reason from one that gave a reason this element could not carry.
+	//
+	// Non-terminating and element-scoped: it says something about what this element can
+	// express, not about any warrant, and interception continues unaffected.
+	NEIssueRecordValueSubstituted = "recordValueSubstituted"
 	// NEIssueContentTaskOverlap: more than one interception task covers the same
 	// session, and this element delivers each duplicated packet under exactly one of
 	// them. The task with the lowest XID receives the session's content in full and
@@ -246,19 +261,20 @@ type neIssueEncoding struct {
 // nothing is the "database cleared" the specification lists among the reasons to
 // send this message at all (10000).
 var neIssueEncodings = map[string]neIssueEncoding{
-	NEIssueX1ListenFailed:     {neIssueFaultReport, issueCodeTerminatingFault},
-	NEIssueX3EgressDown:       {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueMDFUnreachable:     {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueInvalidConfig:      {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueContentUntasked:    {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3PuntLost:         {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3FramingLost:      {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3DeliveryLost:     {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX2DeliveryLost:     {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueX3TagInvalid:       {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueDuplicationRefused: {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueReconcileFailed:    {neIssueFaultReport, issueCodeNonTerminatingFault},
-	NEIssueTriggerFaulty:      {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX1ListenFailed:         {neIssueFaultReport, issueCodeTerminatingFault},
+	NEIssueX3EgressDown:           {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueMDFUnreachable:         {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueInvalidConfig:          {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueContentUntasked:        {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3PuntLost:             {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3FramingLost:          {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3DeliveryLost:         {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX2DeliveryLost:         {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueX3TagInvalid:           {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueRecordValueSubstituted: {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueDuplicationRefused:     {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueReconcileFailed:        {neIssueFaultReport, issueCodeNonTerminatingFault},
+	NEIssueTriggerFaulty:          {neIssueFaultReport, issueCodeNonTerminatingFault},
 	// A withdrawal that has not landed yet is a fault this element is working on:
 	// it is retrying, and the trigger is still in its bookkeeping.
 	NEIssueTaskingWithdrawalFailed: {neIssueFaultReport, issueCodeNonTerminatingFault},

@@ -33,8 +33,16 @@ named with enough detail that a reader can tell whether it matters to them.
    function holds the datum and the record does not report it — and **4 BLOCKED**, where the
    codec cannot express the value. A further **9 are UNTRACED**, which that disposition labels
    "an admission, not a conclusion". These counts are as of the IRI disposition of
-   **2026-08-14**; `iri/CONFORMANCE.md` carries the same date, so a reader arriving there can
+   **2026-08-20**; `iri/CONFORMANCE.md` carries the same date, so a reader arriving there can
    tell whether the numbers quoted here are still its own.
+
+   The 2026-08-20 review added one finding and closed it in the same pass — **`handoverCause`
+   carried NGAP's numbering rather than TS 33.128's**, so every handover record delivered
+   before that date named a cause one along from the one that occurred. It is listed here
+   because it is not a conditional-field defect and so is in none of the counts above, and
+   because it is the only finding in this document that changes what an agency receives for
+   an event it has already been sent product about. `iri/CONFORMANCE.md` finding 5 has the
+   detail.
 
 ### X2/X3
 

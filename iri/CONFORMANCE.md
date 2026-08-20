@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 published with it. Both are cited below; where they disagree, that disagreement is itself
 recorded, because one of the findings here lives exactly in the gap between them.
 
-**This disposition was last reviewed 2026-08-14.** The specification revision above says
+**This disposition was last reviewed 2026-08-20.** The specification revision above says
 what was read; this says when. Any count quoted from here — in `../CONFORMANCE.md`, or on a
 public compliance page — is a count as of that date, and carrying the date in the document
 the count came from is what lets a reader check it from this end rather than only from the
@@ -212,3 +212,53 @@ mark it conditional on availability. The underlying gap is the deliberately defe
 `userLocation` subtree — the AMF has no reportable location detail to put there — so this is
 recorded as an inconsistency to resolve alongside that deferral rather than as a separate
 defect. Whichever way it is resolved, the five records should agree.
+
+### 5. `handoverCause` carried NGAP's numbering, not TS 33.128's — FIXED 2026-08-20
+
+**Every handover record this project delivered before 2026-08-20 carried the wrong cause
+value, and no party could have noticed.**
+
+The five `HandoverCause` arms are `ENUMERATED`s that TS 33.128 numbers from 1. NGAP numbers
+the same five groups from 0. `iri.go` said so, and said the mapping between them "is done
+where the record is built" — but the place it is built, the AMF's `handoverCause`, cast the
+NGAP value straight into the record type. Nothing in this project performed the mapping. So
+each cause was delivered one below its defined value, and NGAP's `unspecified(0)` was
+delivered as a zero the arm's own enumeration does not define.
+
+**Why it survived.** The wrong value is a plausible member of the right enumeration: it
+decodes, it validates against the published module, and it names a real cause. A mediation
+function receiving `handoverDesirableForRadioReasons` cannot tell that the network said
+`tXnRelocOverallExpiry`. Neither could this element. The constraint check added in
+`li v0.9.2` could not see it either — it treats zero as absence, correctly, because an unset
+optional `ENUMERATED` member reads as zero in Go, so the one value that was out of range
+passed unremarked.
+
+**What changed.** The correspondence is now established member by member, by name, in
+`amf/ngap/licause.go`, and asserted in both directions against two machine-readable
+definitions — this module for TS 33.128, the pinned `ngap` module for NGAP — so a value that
+stops corresponding when either side is upgraded fails a test rather than reaching an agency.
+The values themselves are named constants here (`causevalues.go`), asserted against the
+module, and `enumConstraints` now carries each arm's real upper bound instead of an open one.
+
+**What an agency will see.** Product delivered from 2026-08-20 differs from product delivered
+before it for the same event: a handover that read `unspecified` may now read a specific
+reason, and one that read a specific reason may now read the reason one along. **Records
+already delivered cannot be corrected from here** — this project retains no product, by
+design, so there is nothing to reissue. The date above is the boundary.
+
+**One cause in nine is still not carried.** NGAP defines nine values across
+`CauseRadioNetwork` and `CauseNas` that TS 33.128 V18.16.0 has no equivalent for — six of
+them causes NGAP added after this release. Those are delivered as the group's own
+`unspecified` and reported over X1 as `recordValueSubstituted` at element scope, because the
+field is mandatory and an unreported handover is a larger gap than an imprecise one. The
+report is the only thing distinguishing that `unspecified` from one the network gave itself;
+the record cannot.
+
+**A discrepancy between the module and the tables, recorded rather than resolved.**
+`CauseRadioNetwork` in `TS33128Payloads.asn` runs 1..52 with **no value 28**, so it defines
+51 causes where NGAP defines 58. Three of its names are also misspelled relative to NGAP's
+(`iMSVoiceeEPSFallbackOrRATFallbackTriggered`, `uPIntegrityProtectioNotPossible`, and
+`nPMAccessDenied` for NPN access). Each sits at the position its NGAP counterpart predicts,
+so all three are read as the same cause and the aliases are listed explicitly in the mapping
+test. `enumConstraints` admits 28 because a range cannot express a hole; nothing this project
+builds can produce it, which is asserted.
