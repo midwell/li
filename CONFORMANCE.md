@@ -56,15 +56,23 @@ named with enough detail that a reader can tell whether it matters to them.
 
 ### X1
 
-**None open.**
+**None open**, as of 2026-08-20 — and this line was already saying so while one was.
 
-Six X1 gaps were found by writing that disposition and have since been closed: an X1 response
+Seven X1 gaps were found by writing that disposition and have since been closed: an X1 response
 was not bound to the request that produced it, a nested LI_T3 criteria list was narrowed to its
 first member, a target identifier populating more than one arm of the schema's choice was
 accepted rather than refused, `TopLevelError` was unimplemented, an issue relating to one
-delivery destination was reported at network-element scope, and no fault was ever reported as
-cleared. Each is recorded there with what the behaviour was, because a closed gap is evidence
-about how this implementation is audited and not merely history.
+delivery destination was reported at network-element scope, no fault was ever reported as
+cleared, and `triggerFaulty` could not be raised against a point of interception. Each is
+recorded there with what the behaviour was, because a closed gap is evidence about how this
+implementation is audited and not merely history.
+
+**The last of those is why this section carries a date.** It stood in `x1/CONFORMANCE.md` under
+*Known gaps* while this line read "None open", so the summary and the disposition it summarises
+disagreed about whether anything was outstanding — and the summary is the one a reader arrives
+at first. Neither was lying; the count was written once and the list it counted went on
+changing. Every count in this document now names the date of the disposition it came from, which
+is the only way a reader at this end can tell whether it is still that disposition's own.
 
 ## Capabilities declared unsupported, which are not gaps
 

@@ -505,44 +505,51 @@ plainly, so nobody mistakes its scope for a clean bill of health:
 
 ## Known gaps, in order of consequence
 
-**`triggerFaulty` cannot be raised against a point of interception by this project.** The
-condition is declared, encoded and reportable (`NEIssueTriggerFaulty`), and the SMF's CC
-Triggering Function is the element that would raise it — but the fault it names has to come
-from the POI's own answer about the task, and this library's POIs cannot give one. `taskStatus`
-answers `provisioningStatus: complete` with an empty `listOfFaults` for every task in the
-store, unconditionally, because a task reaches the store only after activation has established
-that this element can carry it out (see *Tasks — clause 6.2*). There is no per-task fault state
-to report, so a POI that has been triggered, has acknowledged, and is producing nothing answers
-exactly as one that is working.
+**No known gap remains at the top of this list.** The entry that stood here — that
+`triggerFaulty` could not be raised against a point of interception by this project — was closed
+on 2026-08-20 and is recorded among the closures below, since a gap that has been closed belongs
+with the others rather than at the head of a list ordered by consequence.
 
-The consequence is bounded and worth stating precisely, because the surrounding remedies make
-it look larger than it is:
-
-- The **destination** half of this is no longer part of it. `destinationDeliveryStatus` now
-  answers from the delivery layer (see *Interrogation*), so a POI whose X3 delivery has failed
-  says so when interrogated. That was the reachable half, and it is closed.
-- What remains is a POI whose *duplication* is not in place while its task is held — the
-  datapath refused a rule, or the trigger was installed against a session that has gone. Those
-  conditions **are** reported, at element scope, by the POI's own `ReportNEIssue`
-  (`duplicationRefused`, `contentUntasked`, `x3EgressDown`). So the information reaches the
-  triggering function; what it does not do is arrive as a *per-task* fault the triggering
-  function can turn into `triggerFaulty` for one warrant.
-- Therefore **no end-to-end section can exercise `triggerFaulty`**, and none claims to. The
-  condition rests entirely on interoperation with a POI implementation that populates a task's
-  `listOfFaults` — which is a conformant thing for a POI to do and not something this project's
-  POIs do. Its encoding is unit-tested; its being raised is not, and cannot be by anything in
-  this repository.
-
-Closing it means giving a held task a fault state, which is a change to what every POI here
-tracks per task rather than a change to this package. It is recorded here rather than
-implemented so that the compliance claim does not read as covering a condition nothing can
-reach.
-
-**Closed since this disposition was written**, in order. Six of the seven were found by
-writing it, and none of those six could have been found by the schema checks — that is the
-class this document exists for. The seventh, at the end, was found by review rather than by
+**Closed since this disposition was written**, most consequential first. Six of the eight were
+found by writing it, and none of those six could have been found by the schema checks — that is
+the class this document exists for. One, near the end, was found by review rather than by
 writing, and it is the same class: a field whose value validated against the schema and
 contradicted what the element was reporting elsewhere.
+
+The eighth is the `triggerFaulty` entry that heads the list, and it is the only one that was
+found by *writing this document* and then took four further changes to close — it was recorded
+as a known gap three times before the mechanism that closes it existed. What it needed was not
+a bigger effort but a different one: every attempt assumed a held task would have to carry a
+fault state, and the answer was to compute the state when asked.
+
+- **`triggerFaulty` could not be raised against a point of interception (2026-08-20).** The
+  condition was declared, encoded and reportable, and the SMF's CC Triggering Function was the
+  element that would raise it — but the fault it names has to come from the POI's own answer
+  about the task, and this library's POIs could not give one. `taskStatus` answered
+  `provisioningStatus: complete` with an empty `listOfFaults` for every task in the store,
+  unconditionally, because a task reaches the store only after activation has established that
+  the element can carry it out. So a POI that had been triggered, had acknowledged, and was
+  producing nothing answered exactly as one that was working.
+
+  **The destination half had already been closed** — `destinationDeliveryStatus` answers from the
+  delivery layer, so a POI whose X3 delivery has failed says so when interrogated. What remained
+  was a POI whose *duplication* was not in place while its task was held. Those conditions were
+  reported, at element scope, by the POI's own `ReportNEIssue`; the information reached the
+  triggering function and the attribution did not, which is precisely what `triggerFaulty` is
+  for.
+
+  Closed by `WithTaskFaults`, an element-supplied answer consulted when `taskStatus` is
+  rendered, and by the CC-POI supplying it from datapath state it already holds. **Asked rather
+  than stored**, which is what the note here expected to be the obstacle: giving a held task a
+  fault *state* would have required every POI to track one and to clear it, and a stored fault
+  goes stale — the answer is instead computed from the record of what the datapath was last told,
+  compared against what the task's criteria select. The SMF then reports the condition against
+  the warrant rather than against itself; it had been reading the POI's `taskStatus` all along and
+  reporting at element scope, because there was nothing per-task to attribute.
+
+  Also closed by that: the note that **no end-to-end section could exercise it**. The condition
+  no longer rests on interoperation with a third-party POI — this project's own CC-POI populates
+  a task's `listOfFaults`, so a suite that refuses a duplication rule can drive it end to end.
 
 - **`ReportDestinationIssue` was not implemented (clause 6.5.3)**, so an issue relating
   specifically to one DID was reported at network-element scope instead. The information

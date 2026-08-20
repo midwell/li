@@ -122,6 +122,10 @@ type Server struct {
 	// element is asked for its status, never cached, so no answer can go stale — which is the
 	// failure mode every retaining design shares. See WithFaultProbes.
 	faultProbes []FaultProbe
+	// taskFaults answers what is wrong with one task, now. Consulted when a task's status is
+	// rendered; nil means this element supplies none, and every task then answers with an
+	// empty fault list as it always did. See WithTaskFaults.
+	taskFaults func(types.XID) []X1Error
 	// destinationReachable answers whether this element can currently deliver to one
 	// address. Consulted when a destination's details are assembled, never cached, for the
 	// same reason the probes are not.
@@ -342,6 +346,28 @@ func NEFault(condition, detail string) *X1Error {
 	}
 }
 
+// TaskFault is one condition an element reports against a task it holds, for a WithTaskFaults
+// supplier to return.
+//
+// It exists so the code is chosen once rather than by each element: it is the same
+// non-terminating-fault code the pushed ReportNEIssue carries for a condition of this kind, so a
+// provisioning function correlating the interrogation answer against the report it already
+// received sees one condition and not two. The destination answers make the same choice for the
+// same reason.
+//
+// Non-terminating, because every condition an element can say this about leaves the task
+// installed and the element running: what has stopped is the interception's product, not the
+// element's willingness to carry it out. A terminating code would tell an ADMF to re-provision
+// an element that has nothing wrong with its provisioning.
+//
+// The description is free text and is the only free-form field in the answer. It must not name
+// the subject: the task is already identified by the answer the fault appears in, so a target
+// identity here would be an identity on the X1 interface that the answer did not need. The
+// supplier signature is the structural half of that — it is handed an XID and nothing else.
+func TaskFault(detail string) X1Error {
+	return X1Error{ErrorCode: issueCodeNonTerminatingFault, ErrorDescription: detail}
+}
+
 // MDFUnreachableProbe returns the probe every POI registers: whether the mediation functions
 // this element delivers to can be reached right now.
 //
@@ -375,6 +401,69 @@ func MDFUnreachableProbe(count func() (unreachable, inUse int)) FaultProbe {
 // questions, "what just went wrong" and "what is wrong now", and neither replaces the other.
 func WithFaultProbes(probes ...FaultProbe) Option {
 	return func(s *Server) { s.faultProbes = append(s.faultProbes, probes...) }
+}
+
+// faultsForTasks asks the element what is wrong with each task it is about to report.
+//
+// Returns nil when no supplier is registered, so the answer is byte-identical to what this
+// element sent before there was one — an element that supplies nothing must not start
+// answering differently.
+//
+// The supplier is called outside the server's lock, once per task in the answer. A supplier
+// that is slow makes an interrogation slow, which is the same trade WithFaultProbes takes and
+// is stated there: the alternative is caching, and a cached fault is the stale answer this
+// design exists to avoid.
+func (s *Server) faultsForTasks(tasks []types.InterceptTask) map[types.XID][]X1Error {
+	if s.taskFaults == nil || len(tasks) == 0 {
+		return nil
+	}
+
+	out := make(map[types.XID][]X1Error, len(tasks))
+	for _, t := range tasks {
+		if f := s.taskFaults(t.XID); len(f) > 0 {
+			out[t.XID] = f
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+
+	return out
+}
+
+// WithTaskFaults supplies the answer to "is there anything wrong with *that task*", for the
+// task status a provisioning function can ask for.
+//
+// Without it, every task this element holds answers `provisioningStatus: complete` with an
+// empty fault list — which is true of provisioning and silent about operation. Activation is
+// what establishes that a task can be carried out, and nothing after that point revises the
+// answer, so a task whose duplication the datapath has since refused, or whose session has
+// gone, answers exactly as one producing product.
+//
+// **The party that cannot see anything else is a triggering function.** It tasks a point of
+// interception over an interface the provisioning function cannot reach, so the POI's own
+// answer is the only account of that interception available to it. Conditions of this kind
+// *are* reported — at element scope, by the POI's issue reports — so what is missing is not
+// the information but the attribution: `triggerFaulty` exists to raise one of these against
+// one warrant, and cannot be raised by a function that cannot tell which warrant a fault
+// concerned.
+//
+// **Asked, not stored**, which is the same choice WithFaultProbes and
+// WithDestinationReachability make and for the reason this project has now learned twice: a
+// recorded fault goes stale, needs an expiry or an explicit clear, and gets reported after the
+// condition has ended. Every condition here is re-observable from state the element already
+// holds, so the honest answer is computed when the question is asked.
+//
+// The supplier is keyed by XID and returns codes and descriptions only. It cannot be handed a
+// target identity because it is never given one: a task-scoped answer already names the
+// warrant, and adding the subject would put a target identifier into an answer that does not
+// need one.
+//
+// It is called without the server's lock and may be called concurrently. Returning nil is the
+// answer "nothing is wrong with this task", which is what an element that supplies no faults
+// says for every task.
+func WithTaskFaults(faults func(types.XID) []X1Error) Option {
+	return func(s *Server) { s.taskFaults = faults }
 }
 
 // WithDestinationReachability supplies the answer to "can this element deliver to that
@@ -1253,6 +1342,12 @@ func (s *Server) apply(m X1RequestMessage) X1ResponseMessage {
 		err = fmt.Errorf("unsupported request type %q", localType(m.Type))
 		code = errCodeUnsupportedRequest
 	}
+
+	// Every answer that reports a task reports its faults, filled here rather than at the four
+	// sites that set rm.Tasks — the same argument GetAllTaskDetails makes about projecting one
+	// task state through one renderer. An ADMF that asked two ways and got two answers could
+	// not tell which to trust, and a site added later inherits this instead of remembering it.
+	rm.TaskFaults = s.faultsForTasks(rm.Tasks)
 
 	if err != nil {
 		rm.Type = errorResponse

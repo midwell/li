@@ -37,7 +37,7 @@ func responseBody(m X1ResponseMessage) string {
 	case "GetAllTaskDetailsResponse":
 		return listBody(m, "listOfTaskResponseDetails", func(b *strings.Builder) {
 			for _, t := range m.Tasks {
-				b.WriteString(taskResponseDetails(6, t))
+				b.WriteString(taskResponseDetails(6, t, m.TaskFaults[t.XID]))
 			}
 		})
 	case "GetAllDestinationDetailsResponse":
@@ -103,7 +103,7 @@ func allDetailsBody(m X1ResponseMessage) string {
 
 	b.WriteString(open(4, "listOfTaskResponseDetails"))
 	for _, t := range m.Tasks {
-		b.WriteString(taskResponseDetails(6, t))
+		b.WriteString(taskResponseDetails(6, t, m.TaskFaults[t.XID]))
 	}
 	b.WriteString(close(4, "listOfTaskResponseDetails"))
 
@@ -165,12 +165,12 @@ func taskDetailsBody(m X1ResponseMessage) string {
 		return ""
 	}
 
-	return taskResponseDetails(4, m.Tasks[0])
+	return taskResponseDetails(4, m.Tasks[0], m.TaskFaults[m.Tasks[0].XID])
 }
 
 // taskResponseDetails renders one task as the element reports it: what was provisioned, plus
 // its status.
-func taskResponseDetails(ind int, t types.InterceptTask) string {
+func taskResponseDetails(ind int, t types.InterceptTask, faults []X1Error) string {
 	var b strings.Builder
 	b.WriteString(open(ind, "taskResponseDetails"))
 
@@ -198,7 +198,7 @@ func taskResponseDetails(ind int, t types.InterceptTask) string {
 	b.WriteString(close(ind+4, "listOfDIDs"))
 	b.WriteString(close(ind+2, "taskDetails"))
 
-	b.WriteString(taskStatus(ind+2, t))
+	b.WriteString(taskStatus(ind+2, t, faults))
 	b.WriteString(close(ind, "taskResponseDetails"))
 
 	return b.String()
@@ -210,7 +210,7 @@ func taskResponseDetails(ind int, t types.InterceptTask) string {
 // What the schema asks for is `provisioningStatus`: whether the element has *provisioned*
 // the task, not whether it is switched on. A task this element holds has been applied, so it
 // is `complete`. The optional counters are omitted rather than guessed.
-func taskStatus(ind int, _ types.InterceptTask) string {
+func taskStatus(ind int, _ types.InterceptTask, faults []X1Error) string {
 	// Always `complete`, and the alternatives are unreachable rather than unhandled.
 	//
 	// A task in the store has been applied: activation refuses anything this element cannot
@@ -226,7 +226,7 @@ func taskStatus(ind int, _ types.InterceptTask) string {
 	var b strings.Builder
 	b.WriteString(open(ind, "taskStatus"))
 	b.WriteString(el(ind+2, "provisioningStatus", "complete"))
-	b.WriteString(listOfFaults(ind+2, nil))
+	b.WriteString(listOfFaults(ind+2, faults))
 	b.WriteString(close(ind, "taskStatus"))
 
 	return b.String()

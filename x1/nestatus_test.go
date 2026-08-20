@@ -112,8 +112,10 @@ func TestTaskFaultsStayOutOfTheElementStatus(t *testing.T) {
 	srv := NewServer(st, "neID")
 	srv.now = func() time.Time { return zeroTailInstant }
 
-	// A perfectly deliverable task, plus a per-task fault reported elsewhere over
-	// ReportTaskIssue. Nothing about it belongs in the element's own status.
+	// A perfectly deliverable task, and no task-fault supplier registered — which is the
+	// configuration this assertion is about. Nothing task-level belongs in the element's own
+	// status, and an element that says nothing about a task must still say it in the form the
+	// schema defines.
 	st.Activate(types.InterceptTask{
 		XID:      testXID,
 		Targets:  []types.TargetIdentifier{{Type: types.TargetSUPI, Value: "262019876543210"}},
@@ -127,8 +129,9 @@ func TestTaskFaultsStayOutOfTheElementStatus(t *testing.T) {
 		t.Errorf("a task-level concern must not make the element faulty\ngot:\n%s", got)
 	}
 
-	// And the task's own fault list stays empty in what the element reports about the task:
-	// task faults travel per XID, not in taskStatus.
+	// And the task's own fault list is empty, because nothing supplied one. Task faults reach
+	// this list per XID when an element registers WithTaskFaults; what is asserted here is the
+	// other half — that the element's *own* status is not where they arrive.
 	resp, err := srv.Process(request("GetTaskDetailsRequest",
 		"\n    <ns1:xId>"+string(testXID)+"</ns1:xId>"), admfPeer(t))
 	if err != nil {

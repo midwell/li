@@ -444,6 +444,11 @@ type X1ResponseMessage struct {
 	// Faults are the element's own unresolved faults, for neStatusDetails: the conditions a
 	// registered probe says hold at the moment the status was asked for, never a history.
 	Faults []X1Error `xml:"-"`
+	// TaskFaults are the faults the element reports against individual tasks, keyed by XID —
+	// the answer to "what is wrong with that warrant's interception", as distinct from Faults,
+	// which answers "what is wrong with this element". A task with no entry has nothing wrong
+	// with it.
+	TaskFaults map[types.XID][]X1Error `xml:"-"`
 }
 
 // ReportedTasks returns the tasks a peer reported, whichever answer carried them.
