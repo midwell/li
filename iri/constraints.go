@@ -116,33 +116,27 @@ var (
 		reflect.TypeOf(Initiator(0)):              {1, 3},
 		reflect.TypeOf(HandoverType(0)):           {1, 4},
 
-		// The five HandoverCause arms are bounded below and **not above**, and the asymmetry
-		// is deliberate rather than an omission.
+		// The five HandoverCause arms, bounded from the module rather than from memory.
 		//
-		// Each mirrors an NGAP Cause group from TS 38.413 clause 9.3.1.2, "numbered from 1 in
-		// the order the module lists them" — so zero and below are outside every one of them,
-		// whichever group is in play, and that is checkable here. The upper bound is the
-		// number of values in a specific group of a specific release of a specification this
-		// module does not restate, and writing a number here from memory would be inventing a
-		// constraint: a bound that is wrong in the tight direction refuses records the
-		// specification permits, which on this interface means losing product that should
-		// have been delivered.
+		// Each mirrors an NGAP Cause group, and the two number the same concepts differently —
+		// so the values here are TS 33.128's, transcribed from
+		// `testdata/asn1/TS33128Payloads.asn` and asserted against it by
+		// TestCauseBoundsMatchTheModule. An element that reads a cause from NGAP is
+		// responsible for mapping it into this vocabulary before building the record; see
+		// causevalues.go, which names the values it maps to.
 		//
-		// So the lower bound is enforced and the upper one is an evidence gap, recorded as
-		// such in the change that added this table rather than closed by a guess. Closing it
-		// means transcribing the five groups' value counts from TS 38.413 against the release
-		// this project targets, and pinning them to that citation.
-		reflect.TypeOf(CauseRadioNetwork(0)): {1, maxInt64},
-		reflect.TypeOf(CauseTransport(0)):    {1, maxInt64},
-		reflect.TypeOf(CauseNas(0)):          {1, maxInt64},
-		reflect.TypeOf(CauseProtocol(0)):     {1, maxInt64},
-		reflect.TypeOf(CauseMisc(0)):         {1, maxInt64},
+		// `CauseRadioNetwork` admits one value the module does not define. Its enumeration
+		// runs 1..52 with 28 absent, and a range check cannot express the hole; a set per
+		// group would, and earns its complexity for exactly one group. The looser bound costs
+		// nothing in practice, because no mapping entry yields 28 — asserted where the mapping
+		// lives, so the claim is checked rather than assumed.
+		reflect.TypeOf(CauseRadioNetwork(0)): {1, 52},
+		reflect.TypeOf(CauseTransport(0)):    {1, 2},
+		reflect.TypeOf(CauseNas(0)):          {1, 4},
+		reflect.TypeOf(CauseProtocol(0)):     {1, 7},
+		reflect.TypeOf(CauseMisc(0)):         {1, 6},
 	}
 )
-
-// maxInt64 stands for "this module states no upper bound", so an entry that bounds only one
-// end says so in the table rather than by being absent from it.
-const maxInt64 = int64(^uint64(0) >> 1)
 
 // validateConstraints walks a record and refuses any value that violates the restriction its
 // own type carries.
@@ -242,11 +236,6 @@ func constraintOf(v reflect.Value, path string) error {
 			return nil
 		}
 		if n < c.min || n > c.max {
-			if c.max == maxInt64 {
-				return fmt.Errorf("iri: %s is %d, and %s is an ENUMERATED numbered from %d",
-					path, n, t.Name(), c.min)
-			}
-
 			return fmt.Errorf("iri: %s is %d, and %s is an ENUMERATED with values %d..%d",
 				path, n, t.Name(), c.min, c.max)
 		}

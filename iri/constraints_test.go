@@ -79,9 +79,9 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 			want: "HandoverType is an ENUMERATED with values 1..4",
 		},
 		{
-			// The five HandoverCause arms are numbered from one and this module states no
-			// upper bound for them, so the lower one is what can be checked. A negative
-			// cause is outside every group whichever group is in play.
+			// The HandoverCause arms are bounded at both ends now that the module supplies the
+			// upper one, so a negative cause is refused against the range rather than against
+			// a lower bound standing on its own.
 			name: "a cause below the first value of every group",
 			event: AMFRANHandoverRequest{
 				UserIdentifiers: sampleIdentifiers(),
@@ -90,7 +90,34 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 				HandoverType:    HandoverIntra5GS,
 				HandoverCause:   CauseRadioNetwork(-1),
 			},
-			want: "CauseRadioNetwork is an ENUMERATED numbered from 1",
+			want: "CauseRadioNetwork is an ENUMERATED with values 1..52",
+		},
+		{
+			// The upper bound, which is the half that was open until the module was read. This
+			// is the direction a value from another protocol arrives from: NGAP's radio-network
+			// group runs to 57 and TS 33.128's to 52, so a value mapped carelessly lands here.
+			name: "a cause above its group's last value",
+			event: AMFRANHandoverRequest{
+				UserIdentifiers: sampleIdentifiers(),
+				AMFUENGAPID:     1,
+				RANUENGAPID:     2,
+				HandoverType:    HandoverIntra5GS,
+				HandoverCause:   CauseRadioNetwork(53),
+			},
+			want: "CauseRadioNetwork is an ENUMERATED with values 1..52",
+		},
+		{
+			// And a group whose bound differs, so the table is being consulted per type rather
+			// than one bound standing for all five. NGAP's CauseNas runs to 5; TS 33.128's to 4.
+			name: "a NAS cause NGAP defines and TS 33.128 does not",
+			event: AMFRANHandoverRequest{
+				UserIdentifiers: sampleIdentifiers(),
+				AMFUENGAPID:     1,
+				RANUENGAPID:     2,
+				HandoverType:    HandoverIntra5GS,
+				HandoverCause:   CauseNas(5),
+			},
+			want: "CauseNas is an ENUMERATED with values 1..4",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
