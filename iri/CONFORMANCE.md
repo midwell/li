@@ -262,3 +262,51 @@ the record cannot.
 so all three are read as the same cause and the aliases are listed explicitly in the mapping
 test. `enumConstraints` admits 28 because a range cannot express a hole; nothing this project
 builds can produce it, which is asserted.
+
+### 6. `UEPolicy`'s size constraint forbids the containers 5G actually carries — OPEN, declared against TS 33.128
+
+**TS 33.128 mandates a record this project cannot conformantly encode for most real
+traffic, and the two halves of the specification contradict each other.**
+
+`AMFUEPolicyTransfer` (clause 6.2.2.2.12) makes `uEPolicy` mandatory, and the trigger for the
+record is the AMF transferring a UE policy container. The type is defined as:
+
+```
+UEPolicy ::= OCTET STRING (SIZE(16..65540))
+```
+
+A UE policy container is a UE POLICY DELIVERY SERVICE message (TS 24.501 / TS 24.587). The
+shortest ones are three octets — extended protocol discriminator, PTI, message identity — and
+`MANAGE UE POLICY COMPLETE` is exactly that. Measured against `li v0.9.6`: 3, 5 and 15 octets are
+refused; 16 is accepted.
+
+So the element must produce the record, and must not encode it. Both cannot hold.
+
+**What this project does: follows the schema, and says so.** The constraint is enforced, the
+record is not delivered, and the condition is reported — since `li v0.9.7` — as a task-scoped
+`recordNotEncoded` naming the warrant and the record type, alongside the element-scoped delivery
+loss it already raised.
+
+**Why not relax the lower bound.** That was considered and rejected. A mediation function
+validating against the published module discards a 3-octet `UEPolicy` exactly as this encoder
+does, so relaxing it would not deliver the record — it would only move the discard to the far
+end, where this element cannot see it. That is the unattributable-record failure arriving
+through the payload instead of the header, and closing it is what the constraint checking in
+`li v0.9.2` exists for. An element that believes it delivered is worse than one that knows it
+did not.
+
+**Why not pad.** Padding invents wire content. The receiver cannot distinguish the invented
+octets from the subject's own policy container, which is a populated field asserting something
+false.
+
+**What an agency loses, stated plainly.** For a tasked subject, the short half of a policy
+exchange is not delivered — typically the UE's `MANAGE UE POLICY COMPLETE`. The downlink
+command, which carries the policy itself, is normally long enough to encode. The agency
+therefore receives the substantive half and a fault naming the warrant and the missing record
+type, rather than silence.
+
+**What would resolve it.** A correction to TS 33.128's `UEPolicy` bounds, or a clause stating
+that the field carries something other than the NAS container verbatim. Until then this is
+recorded as a defect against the specification rather than against this codec, and the choice
+of which half to follow is stated here rather than left to be inferred from behaviour.
+

@@ -595,6 +595,16 @@ const (
 	// task as not running. Raised by a triggering function, which is the only party that can
 	// see it — the POI answers to it and not to the ADMF.
 	TaskIssueTriggerNotRunning = "triggerNotRunning"
+	// TaskIssueRecordNotEncoded: a record this warrant's interception produced could not be
+	// encoded, so it was not delivered. The product an agency receives for this warrant is
+	// incomplete by exactly that record.
+	//
+	// Task-scoped because the element-scoped delivery-loss report may name neither the warrant
+	// nor the record type, and on its own says only that *something* did not encode — the same
+	// signal an unreachable mediation function produces, which admits the same wrong diagnosis.
+	// An agency missing one side of an exchange needs to know which product is absent and for
+	// which warrant.
+	TaskIssueRecordNotEncoded = "recordNotEncoded"
 )
 
 // taskScoped is the set of conditions that concern one task rather than the element.
@@ -607,6 +617,7 @@ var taskScoped = map[string]bool{
 	TaskIssueDuplicationNotProgrammed: true,
 	TaskIssueNoTrafficSelected:        true,
 	TaskIssueTriggerNotRunning:        true,
+	TaskIssueRecordNotEncoded:         true,
 }
 
 // TS 103 221-1 TaskReportType values (clause 6.5.2 / the published XSD
@@ -723,6 +734,34 @@ func (r *Reporter) NotifyTask(xid, reportType, details string) {
 	}
 	//nolint:errcheck // fire-and-forget by design; see the doc comment
 	_ = r.ReportTaskIssue(xid, reportType, details)
+}
+
+// NotifyTaskAsync reports a per-task issue without blocking the caller — the task-scoped
+// counterpart to NotifyAsync, and for the same reason.
+//
+// NotifyTask is fire-and-forget about the *outcome* but not about the *call*: it performs the mTLS
+// round trip on the caller's goroutine, bounded only by the client timeout. That is safe on a
+// triggering function's own loops, which is where it is used, and unsafe on a subscriber's
+// signalling path — a synchronous POST there is a delay the target can observe, which is precisely
+// what undetectability forbids.
+//
+// condition is the token the throttle keys on, separate from details so that two different
+// conditions about one task cannot suppress each other. As in NotifyAsync the reservation is taken
+// *before* the goroutine is spawned, so a condition recurring quickly costs a lock acquisition
+// rather than a goroutine.
+func (r *Reporter) NotifyTaskAsync(xid, reportType, condition, details string) {
+	if r == nil || xid == "" {
+		return
+	}
+
+	k := reportKey{scope: scopeTask, id: xid, condition: condition}
+	if !r.reserve(k) {
+		return
+	}
+
+	go func() {
+		r.settle(k, r.ReportTaskIssue(xid, reportType, details))
+	}()
 }
 
 // ReportTaskIssue POSTs a ReportTaskIssueRequest to the ADMF for a specific
