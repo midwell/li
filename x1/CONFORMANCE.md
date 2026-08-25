@@ -214,6 +214,42 @@ Two properties of the answers matter more than the coverage:
 used, across all fifteen identifier types, so an ADMF can compare what the element holds
 against what it believes it sent.
 
+### What the status answer does not cover — declared 2026-08-25
+
+`GetNEStatus` answering "the conditions the element can currently observe" is only half a
+statement. **The conditions it does not answer for are named here**, so that "no faults" is a
+stated answer rather than an omission. Until now it was an omission.
+
+**The CC-POI does not answer for a disagreement between its record of what it programmed and what
+the datapath actually holds.** It cannot: the BESS `ExactMatch` module carrying each FAR's
+duplication flag accepts `add`, `delete`, `clear` and `set_default_gate` and offers no read, so the
+element's own record is the only copy of that state on the control-plane side. There is no peer to
+ask, and so no path that could ask again.
+
+The consequence is stated rather than left to be inferred. Where a rule is programmed into the
+datapath but not recorded — the case `omec-project/upf#1219` exists to remove — content can be
+duplicated with no task covering it, and **an interrogation of this element will answer that no
+fault holds**, because by its own record none does. The copies are dropped as unattributable rather
+than delivered, so no agency receives them; the condition is invisible from both ends.
+
+Three things bound it, and none of them makes it observable:
+
+- A monotone set of every FAR ever told to duplicate means that whenever duplication is
+  re-derived, "off" is pushed for such a FAR whatever the record claims.
+- A re-derivation is triggered by any session event touching such a FAR, not only by a tasking
+  change, so an ordinary session event corrects it.
+- The correction is **blind**: it pushes defensively and never learns whether the datapath had
+  diverged. So this condition cannot be reported as an event either — the element cannot detect
+  the moment it is corrected any more than it can observe the condition holding.
+
+A divergence therefore persists until the next event touching that session. For an idle,
+long-lived session there may be none.
+
+Closing this needs a read path into the datapath, which needs a command the BESS module does not
+have. It is declared here rather than deferred silently because the requirement is on the element
+regardless of whether the capability exists: a condition whose observation and classification
+cannot be made to agree must be named, not omitted.
+
 ## Issue reporting — clause 6.5
 
 | Message | Disposition |
