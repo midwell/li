@@ -320,3 +320,77 @@ func TestAnAbsentOptionalLeafIsNotTooShort(t *testing.T) {
 		t.Errorf("a record omitting an optional constrained leaf was refused: %v", err)
 	}
 }
+
+// The SUCI and TAI leaves are registered before any record carries them, so nothing
+// in the table above reaches them yet. This checks the registration itself is live —
+// including through a pointer, which is a shape the constraint tables had never seen
+// before li/asn1 gained pointer support.
+//
+// A malformed SUCI is a wrong target identity in a well-formed record, so these are
+// the constraints where a dead registration would cost the most.
+func TestTheNewIdentityLeafConstraintsAreLive(t *testing.T) {
+	four := RoutingIndicatorLength(4)
+	five := RoutingIndicatorLength(5)
+
+	base := func() SUCI {
+		return SUCI{
+			MCC: "262", MNC: "01",
+			RoutingIndicator:       1,
+			ProtectionSchemeID:     0,
+			HomeNetworkPublicKeyID: []byte{0x00},
+			SchemeOutput:           []byte{0xDE, 0xAD},
+			RoutingIndicatorLength: &four,
+		}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"a routing indicator above its range", func() SUCI {
+			s := base()
+			s.RoutingIndicator = 10000
+
+			return s
+		}(), "RoutingIndicator is defined as INTEGER (0..9999)"},
+		{"a protection scheme above its range", func() SUCI {
+			s := base()
+			s.ProtectionSchemeID = 16
+
+			return s
+		}(), "ProtectionSchemeID is defined as INTEGER (0..15)"},
+		{"a routing-indicator length above its range, behind a pointer", func() SUCI {
+			s := base()
+			s.RoutingIndicatorLength = &five
+
+			return s
+		}(), "RoutingIndicatorLength is defined as INTEGER (1..4)"},
+		{"a tracking area code that is too short", TAI{
+			PLMNID: PLMNID{MCC: "262", MNC: "01"},
+			TAC:    TAC{0x01},
+		}, "TAC is defined as SIZE(2..3)"},
+		{"a network identifier that is not eleven characters", TAI{
+			PLMNID: PLMNID{MCC: "262", MNC: "01"},
+			TAC:    TAC{0x01, 0x02},
+			NID:    "tooshort",
+		}, "NID is defined as"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateConstraints(tc.value)
+			if err == nil {
+				t.Fatalf("accepted a value its definition forbids; the constraint for this leaf "+
+					"is registered but never reached (%+v)", tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("refusal does not name the leaf and its definition.\n got: %v\nwant substring: %s",
+					err, tc.want)
+			}
+		})
+	}
+
+	// The conformant value must pass, or the cases above prove nothing.
+	if err := validateConstraints(base()); err != nil {
+		t.Errorf("a conformant SUCI was refused: %v", err)
+	}
+}

@@ -371,6 +371,112 @@ type FiveGGUTI struct {
 	FiveGTMSI   FiveGTMSI   `asn1:"tag:6"`
 }
 
+// The SUCI leaves. TS 33.128 SUCI ::= SEQUENCE carries the subscription concealed
+// identifier the UE presented, and every member is a named type in the module with a
+// restriction of its own. Like the FiveGGUTI leaves, these arrive from a NAS message
+// rather than from a task, so nothing in li/x1 has validated them by the time they
+// reach a record — which is the argument for naming them here.
+type (
+	RoutingIndicator       int    // INTEGER (0..9999)
+	ProtectionSchemeID     int    // INTEGER (0..15)
+	HomeNetworkPublicKeyID []byte // OCTET STRING, unconstrained
+	SchemeOutput           []byte // OCTET STRING, unconstrained
+	SUPIType               int    // INTEGER (0..7)
+	RoutingIndicatorLength int    // INTEGER (1..4)
+	HomeNetworkIdentifier  string // UTF8String, unconstrained
+)
+
+// SUCI ::= SEQUENCE. All members are IMPLICIT context-tagged.
+//
+// routingIndicatorLength is the member most easily lost: the module says it "shall be
+// included if different from the number of meaningful digits given in routingIndicator",
+// so a routing indicator of "0123" must carry a length of 4 that the INTEGER 123 cannot
+// express. Nothing on the wire reveals its absence, which puts it in the same class as
+// the conditional fields this package's CONFORMANCE.md exists to track.
+type SUCI struct {
+	MCC                    MCC                     `asn1:"tag:1"`
+	MNC                    MNC                     `asn1:"tag:2"`
+	RoutingIndicator       RoutingIndicator        `asn1:"tag:3"`
+	ProtectionSchemeID     ProtectionSchemeID      `asn1:"tag:4"`
+	HomeNetworkPublicKeyID HomeNetworkPublicKeyID  `asn1:"tag:5"`
+	SchemeOutput           SchemeOutput            `asn1:"tag:6"`
+	RoutingIndicatorLength *RoutingIndicatorLength `asn1:"tag:7,optional"`
+	SUPIType               *SUPIType               `asn1:"tag:8,optional"`
+	HomeNetworkIdentifier  HomeNetworkIdentifier   `asn1:"tag:9,optional"`
+}
+
+// The TAI leaves. TAC is the tracking area code and NID the network identifier of a
+// stand-alone non-public network.
+type (
+	TAC []byte // OCTET STRING (SIZE(2..3))
+	NID string // UTF8String (SIZE(11))
+)
+
+// PLMNID ::= SEQUENCE, the MCC/MNC pair the module uses wherever a PLMN appears in its
+// own right rather than inline.
+type PLMNID struct {
+	MCC MCC `asn1:"tag:1"`
+	MNC MNC `asn1:"tag:2"`
+}
+
+// TAI ::= SEQUENCE and TAIList ::= SEQUENCE OF TAI.
+//
+// fiveGSTAIList is the *registration area* — TS 33.128 asks for "tracking areas
+// associated with the registration area within which the UE is current registered",
+// per access type, not the single serving TAI the AMF also holds.
+type TAI struct {
+	PLMNID PLMNID `asn1:"tag:1"`
+	TAC    TAC    `asn1:"tag:2"`
+	NID    NID    `asn1:"tag:3,optional"`
+}
+
+// TAIList ::= SEQUENCE OF TAI.
+type TAIList []TAI
+
+// SMFServingNetwork ::= SEQUENCE, the serving PLMN of a PDU session.
+type SMFServingNetwork struct {
+	PLMNID PLMNID `asn1:"tag:1"`
+	NID    NID    `asn1:"tag:2,optional"`
+}
+
+// AMFID ::= SEQUENCE, the AMF Identifier of TS 23.003 clause 2.10.1 — the AMF half of a
+// GUAMI. Its three leaves are the same named types FiveGGUTI already uses, so they are
+// already range-checked by constraints.go.
+type AMFID struct {
+	AMFRegionID AMFRegionID `asn1:"tag:1"`
+	AMFSetID    AMFSetID    `asn1:"tag:2"`
+	AMFPointer  AMFPointer  `asn1:"tag:3"`
+}
+
+// RATType ::= ENUMERATED. Only the values a 5G core can report are named; the module
+// also defines EPS and wireline arms this project never produces.
+//
+// It is OPTIONAL in every record that carries it, so zero means absent and it is
+// deliberately not in constraints.go's mandatoryEnums.
+type RATType int
+
+const (
+	RATNR          RATType = 1
+	RATEUTRA       RATType = 2
+	RATWLAN        RATType = 3
+	RATVirtual     RATType = 4
+	RATNBIOT       RATType = 5
+	RATLTEM        RATType = 9
+	RATNRU         RATType = 10
+	RATEUTRAU      RATType = 11
+	RATTrustedN3GA RATType = 12
+	RATTrustedWLAN RATType = 13
+)
+
+// SUPIUnauthenticatedIndication ::= BOOLEAN.
+//
+// Declared as a pointer wherever it appears, because false is its meaningful ordinary
+// value — the SUPI *was* authenticated — and an OPTIONAL field whose value equals its
+// type's zero is otherwise indistinguishable from an absent one. li/asn1 gained pointer
+// support for exactly this. Absent means the record carries no SUPI, so the condition
+// governing the field does not hold; it does not mean "authenticated".
+type SUPIUnauthenticatedIndication bool
+
 // AMFRegistration is a slice of TS 33.128 AMFRegistration: the four mandatory
 // members (registrationType, registrationResult, sUPI, gUTI) plus the PEI/GPSI
 // target-identifier optionals. The CHOICE-typed members (sUPI/pEI/gPSI) are
@@ -393,7 +499,7 @@ type AMFDeregistration struct {
 	SUPI                    any          `asn1:"tag:3,explicit,choice:supi,optional"`
 	PEI                     any          `asn1:"tag:5,explicit,choice:pei,optional"`
 	GPSI                    any          `asn1:"tag:6,explicit,choice:gpsi,optional"`
-	GUTI                    FiveGGUTI    `asn1:"tag:7,optional"` // value+optional: zero-value omitted (lib has no pointer support)
+	GUTI                    FiveGGUTI    `asn1:"tag:7,optional"` // value+optional: an all-zero GUTI reads as absent
 }
 
 // AMFStartOfInterceptionWithRegisteredUE is a slice of the same-named record,

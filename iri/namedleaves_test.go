@@ -97,6 +97,13 @@ func TestEveryRestrictedLeafIsNamed(t *testing.T) {
 // records is not what this test is looking for.
 func typeExprString(e ast.Expr) string {
 	switch t := e.(type) {
+	case *ast.StarExpr:
+		// A pointer field is how an OPTIONAL member says "present, and equal to my
+		// type's zero value" (see li/asn1's pointer support). The pointer expresses
+		// presence, not a type, so *int is as bare as int and its restriction is
+		// enforced by exactly as little. Without this arm the scan would have a hole
+		// the moment the first pointer field was added — which is when it was.
+		return typeExprString(t.X)
 	case *ast.Ident:
 		return t.Name
 	case *ast.ArrayType:

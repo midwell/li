@@ -85,6 +85,10 @@ var (
 		// where it meant to send the SST has nothing else to trip over.
 		reflect.TypeOf(SliceDifferentiator(nil)): {3, 3},
 		reflect.TypeOf(ServiceType(nil)):         {1, 1},
+
+		// The tracking-area code of a TAI. homeNetworkPublicKeyID and schemeOutput are
+		// OCTET STRINGs the module leaves unconstrained, so they are deliberately absent.
+		reflect.TypeOf(TAC(nil)): {2, 3},
 	}
 
 	intConstraints = map[reflect.Type]intRange{
@@ -104,10 +108,24 @@ var (
 		reflect.TypeOf(AMFSetID(0)):    {0, 1023},
 		reflect.TypeOf(AMFPointer(0)):  {0, 63},
 		reflect.TypeOf(FiveGTMSI(0)):   {0, 4294967295},
+
+		// The SUCI members with a range. These arrive from a NAS message the UE sent, so
+		// unlike the identity leaves nothing in li/x1 has looked at them before they reach
+		// a record — a malformed SUCI is a wrong target identity, which is the failure this
+		// table exists to make loud.
+		reflect.TypeOf(RoutingIndicator(0)):       {0, 9999},
+		reflect.TypeOf(ProtectionSchemeID(0)):     {0, 15},
+		reflect.TypeOf(SUPIType(0)):               {0, 7},
+		reflect.TypeOf(RoutingIndicatorLength(0)): {1, 4},
 	}
 
 	utf8Constraints = map[reflect.Type]utf8Size{
 		reflect.TypeOf(LCSCorrelationID("")): {1, 255},
+
+		// The network identifier of a stand-alone non-public network, carried by TAI and
+		// SMFServingNetwork. homeNetworkIdentifier is a UTF8String the module leaves
+		// unconstrained and is deliberately absent.
+		reflect.TypeOf(NID("")): {11, 11},
 	}
 
 	// numericConstraints are the NumericString leaves, whose restriction is a length *and* an
