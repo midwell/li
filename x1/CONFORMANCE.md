@@ -239,11 +239,30 @@ Three things bound it, and none of them makes it observable:
 - A re-derivation is triggered by any session event touching such a FAR, not only by a tasking
   change, so an ordinary session event corrects it.
 - The correction is **blind**: it pushes defensively and never learns whether the datapath had
-  diverged. So this condition cannot be reported as an event either — the element cannot detect
-  the moment it is corrected any more than it can observe the condition holding.
+  diverged, so the element cannot report the moment a divergence *ends*.
 
 A divergence therefore persists until the next event touching that session. For an idle,
 long-lived session there may be none.
+
+**Corrected 2026-08-26 — the divergence itself is detectable, and this entry first said it was
+not.** Two different events were conflated. The *recovery* is unobservable, for the reason above.
+The *onset* is not: it happens when a batch of rule writes fails to complete within its deadline,
+and at that point the element holds both facts it needs — that the batch was not confirmed, and
+whether the rules in it carried duplication. Nothing in the datapath has to be read to know this;
+it is the element's own send path.
+
+So of the two reporting routes, only one is closed:
+
+| Route | Available | State |
+|---|---|---|
+| Answer for it in `GetNEStatus` — a condition that currently holds | **no** — needs a read the BESS module does not offer | declared here |
+| Report the onset when it happens — an event, over the push mechanism | **yes** | **not implemented** |
+
+The second is a gap, not a limitation, and it is the one that matters: an unconfirmed write of a
+duplicating rule is precisely the moment over-collection may begin. Until it is reported, the
+element is silent about a condition it is able to detect. Recorded so the distinction is not lost
+again — declaring a condition unobservable when only half of it is unobservable understates what
+the element owes.
 
 Closing this needs a read path into the datapath, which needs a command the BESS module does not
 have. It is declared here rather than deferred silently because the requirement is on the element
