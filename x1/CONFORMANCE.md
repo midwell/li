@@ -251,18 +251,29 @@ and at that point the element holds both facts it needs — that the batch was n
 whether the rules in it carried duplication. Nothing in the datapath has to be read to know this;
 it is the element's own send path.
 
-So of the two reporting routes, only one is closed:
+So of the two reporting routes, only one is closed. **Updated 2026-08-26 — the open one is now
+implemented, and the closed one turns out to be narrower than first declared:**
 
 | Route | Available | State |
 |---|---|---|
-| Answer for it in `GetNEStatus` — a condition that currently holds | **no** — needs a read the BESS module does not offer | declared here |
-| Report the onset when it happens — an event, over the push mechanism | **yes** | **not implemented** |
+| Answer at **element** scope in `GetNEStatus` — a record/datapath disagreement in general | **no** — needs a read the BESS module does not offer | declared, still open |
+| Answer at **task** scope, where this element itself created the uncertainty | **yes** | **implemented** — `duplicationNotProgrammed` |
+| Report the onset when it happens, over the push mechanism | **yes** | **implemented** — `duplicationRefused` |
 
-The second is a gap, not a limitation, and it is the one that matters: an unconfirmed write of a
-duplicating rule is precisely the moment over-collection may begin. Until it is reported, the
-element is silent about a condition it is able to detect. Recorded so the distinction is not lost
-again — declaring a condition unobservable when only half of it is unobservable understates what
-the element owes.
+The element still cannot answer for the general case: where the datapath diverged for a reason this
+element never observed, its record is the only copy and there is nothing to compare it against.
+
+**But where the element itself could not confirm a write, it has always held the facts**, and the
+first version of this entry was wrong to declare that unobservable. A refused rule write is the
+element's own send path: it knows the batch was unconfirmed and knows whether the rules carried
+duplication. It now records such a write as *not* duplicating rather than as the value it intended,
+which has two consequences — the next re-derivation rewrites the rules instead of skipping them, and
+an interrogation of the task answers `duplicationNotProgrammed` instead of claiming the task is
+faultless. The onset is additionally reported as `duplicationRefused` when it happens.
+
+Recorded at this length because the mistake is instructive: declaring a condition unobservable when
+only part of it is unobservable understates what the element owes, and the part that *was*
+observable was the part that mattered.
 
 Closing this needs a read path into the datapath, which needs a command the BESS module does not
 have. It is declared here rather than deferred silently because the requirement is on the element
