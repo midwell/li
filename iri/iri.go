@@ -466,6 +466,15 @@ const (
 	RATEUTRAU      RATType = 11
 	RATTrustedN3GA RATType = 12
 	RATTrustedWLAN RATType = 13
+	// The NR satellite arms. This deployment serves non-terrestrial access — AmfUe
+	// has an IsNtn() built on exactly these four — so leaving them unmapped would
+	// report no RAT type at all for an NTN session, which is the silent kind of gap
+	// this package's CONFORMANCE.md exists to track.
+	RATNRLEO      RATType = 16
+	RATNRMEO      RATType = 17
+	RATNRGEO      RATType = 18
+	RATNROtherSat RATType = 19
+	RATNRRedCap   RATType = 20
 )
 
 // SUPIUnauthenticatedIndication ::= BOOLEAN.
