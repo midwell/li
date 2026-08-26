@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -107,6 +108,7 @@ func goldenSamples() map[string]any {
 			GTPTunnelID:    fteid,
 			PDUSessionType: PDUSessionTypeIPv4,
 			SNSSAI:         snssai,
+			UEEndpoint:     UEEndpoint(net.IPv4(10, 45, 0, 7)),
 			DNN:            DNN("internet"),
 			RequestType:    SMRequestInitial,
 			AccessType:     AccessThreeGPP,
@@ -152,6 +154,7 @@ func goldenSamples() map[string]any {
 			PEI:                 IMEISV("3534250000000151"),
 			GPSI:                MSISDN("4915123456789"),
 			PDUSessionID:        5,
+			UEEndpoint:          UEEndpoint(net.IPv4(10, 45, 0, 7)),
 			DNN:                 DNN("internet"),
 			RequestType:         SMRequestInitial,
 			AccessType:          AccessThreeGPP,
@@ -160,6 +163,7 @@ func goldenSamples() map[string]any {
 			UserIdentifiers:        ids,
 			ServiceMessageIdentity: ServiceAcceptIdentity{0x4E},
 			ServiceType:            []byte{0x01},
+			FiveGTMSI:              3735928559,
 		},
 		"AMFUEPolicyTransfer": AMFUEPolicyTransfer{
 			SUPI: IMSI("262019876543210"),
@@ -205,29 +209,77 @@ func goldenSamples() map[string]any {
 // expectedUnchanged names the records whose encoding this change must not alter.
 // Everything in goldenSamples that is not listed here is expected to change, and
 // TestGoldenEncodings reports it as such rather than failing.
+//
+// **Reset this list at the start of each change.** It is a statement about one
+// change's intended blast radius, not a standing property, and a stale list is
+// worse than none — it silently blesses whatever the previous change expected.
+//
+// For fix-li-iri-unreported-conditional-fields, phase 1: three samples left a
+// modelled field unpopulated, so the baseline could not have shown a codec change
+// disturbing them. Completing the fixtures moves their vectors. Nothing else may
+// move — no encoding rule changed here, only what the samples carry.
+//
+//   - SMFPDUSessionEstablishment gains uEEndpoint [9]
+//   - SMFUnsuccessfulProcedure gains uEEndpoint [10]
+//   - AMFUEServiceAccept gains fiveGTMSI [4]
+//
+// The first two are populated by the SMF in production and were absent from the
+// baseline only; the third is modelled and optional, and is covered here because
+// the baseline exists to pin the codec, not to mirror what a builder happens to
+// set today.
 var expectedUnchanged = map[string]bool{
-	"AMFRegistration":                        true,
-	"AMFDeregistration":                      true,
-	"AMFLocationUpdate":                      true,
-	"AMFStartOfInterceptionWithRegisteredUE": true,
-	"AMFUnsuccessfulProcedure":               true,
-	"AMFIdentifierAssociation":               true,
-	"AMFIdentifierDeassociation":             true,
-	"SMFPDUSessionRelease":                   true,
-	"SMFUnsuccessfulProcedure":               true,
-	"AMFUEServiceAccept":                     true,
-	// AMFUEPolicyTransfer is deliberately absent, and its vector moves in this change.
-	//
-	// **The encoding rule did not change; the sample did.** The sample carried a three-octet
-	// uEPolicy against a definition of SIZE(16..65540), which encoded cleanly because nothing
-	// checked — the evidence, in this suite, that a record violating its own definition would
-	// go out and be discarded by a conformant receiver while this element believed it had
-	// delivered. The encoder now refuses it, so the sample is corrected to the shortest
-	// permitted length and the vector is regenerated with it. A future reader comparing
-	// vectors should read the difference as a fixture correction and nothing else.
-	"AMFPositioningInfoTransfer": true,
-	"AMFRANHandoverCommand":      true,
-	"AMFRANHandoverRequest":      true,
+	"AMFRegistration":                                 true,
+	"AMFDeregistration":                               true,
+	"AMFLocationUpdate":                               true,
+	"AMFStartOfInterceptionWithRegisteredUE":          true,
+	"AMFUnsuccessfulProcedure":                        true,
+	"AMFIdentifierAssociation":                        true,
+	"AMFIdentifierDeassociation":                      true,
+	"AMFUEPolicyTransfer":                             true,
+	"AMFPositioningInfoTransfer":                      true,
+	"AMFRANHandoverCommand":                           true,
+	"AMFRANHandoverRequest":                           true,
+	"SMFPDUSessionModification":                       true,
+	"SMFPDUSessionRelease":                            true,
+	"SMFStartOfInterceptionWithEstablishedPDUSession": true,
+}
+
+// TestGoldenSamplesArePopulated is what keeps this file's claim true.
+//
+// The samples are the inertness baseline for the shared li/asn1 codec: a change
+// there has to show which records it altered, and a record can only show that for
+// the fields its sample actually carries. A modelled field left unset is absent
+// from the comparison, and on the wire it is indistinguishable from a field the
+// record does not have — so the baseline reports an inertness it never measured.
+//
+// That is not hypothetical. Three samples were incomplete when this test was
+// written, two of them (uEEndpoint on SMFPDUSessionEstablishment and on
+// SMFUnsuccessfulProcedure) for fields the SMF populates in production. The
+// comment above goldenSamples already said "one fully-populated value per
+// alternative", which is exactly why nobody checked: a reader looking for whether
+// the property was recorded found that it was.
+//
+// Top-level record fields only. Nested members legitimately carry zero — a GUTI's
+// aMFPointer of 0 is a value, not an omission — and the tag-level presence this
+// baseline pins is decided at the top level.
+func TestGoldenSamplesArePopulated(t *testing.T) {
+	for name, sample := range goldenSamples() {
+		v := reflect.ValueOf(sample)
+		if v.Kind() != reflect.Struct {
+			continue
+		}
+		for i := range v.NumField() {
+			f := v.Type().Field(i)
+			if _, tagged := f.Tag.Lookup("asn1"); !tagged {
+				continue
+			}
+			if v.Field(i).IsZero() {
+				t.Errorf("%s/%s is modelled but the golden sample leaves it unset, so a codec "+
+					"change touching it would not appear in the comparison. Populate it with a "+
+					"distinguishable value and regenerate.", name, f.Name)
+			}
+		}
+	}
 }
 
 func encodeGolden(t *testing.T, event any) string {
