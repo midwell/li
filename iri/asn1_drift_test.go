@@ -86,11 +86,6 @@ var declaredAbsent = map[string]map[string]string{
 	},
 	"AMFPositioningInfoTransfer": {
 		"additionalUserIdentifiers": "C, table 6.2.2.2.8-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
-		// Not a defect against this element: no POI emits this record. All four of clause
-		// 6.2.2.2.8's trigger events are exchanges with an LMF, and this AMF has none — see
-		// README.md. The field is modelled so the record is complete against the module, but
-		// there is no builder to populate it from, so the condition cannot arise.
-		"sUCI": "C, table 6.2.2.2.8-1: N/A: the condition cannot arise; this AMF has no LMF, so the record is never emitted",
 	},
 	"AMFRANHandoverRequest": {
 		"locationReportingRequestType": "C, table 6.2.2.2.9.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
@@ -387,15 +382,27 @@ func TestASN1RecordDrift(t *testing.T) {
 					"knownConditionalDefects, or model it", name, fld)
 			}
 		}
+		// A defect is separately tracked, because the two lists are stale for different
+		// reasons. declaredAbsent says "this package does not model the field, and need
+		// not" — modelling it makes that declaration false. knownConditionalDefects says
+		// the project meets the condition "and does not populate" it, which is a statement
+		// about the emitter, not about this package: a field can be modelled and still not
+		// reported, and that is the whole of CONFORMANCE.md finding 3.
+		//
+		// Treating the two alike is what let uEEndpoint on SMFUnsuccessfulProcedure sit in
+		// finding 3 as an open gap for weeks after the SMF had started reporting it — the
+		// modelled-but-unpopulated class had nowhere to live, so it lived in prose and rotted.
+		defects := map[string]bool{}
 		for fld, why := range knownConditionalDefects[name] {
 			declared[fld] = why
+			defects[fld] = true
 		}
 
 		for _, f := range fields {
 			_, isModelled := modelled[f.tag]
 			_, isDeclared := declared[f.name]
 			switch {
-			case isModelled && isDeclared:
+			case isModelled && isDeclared && !defects[f.name]:
 				staleDeclarations = append(staleDeclarations, fmt.Sprintf(
 					"%s/%s is declared absent but is now modelled — remove the declaration", name, f.name))
 			case !isModelled && !isDeclared:
@@ -465,23 +472,46 @@ func TestASN1DriftAuditDetectsAnOmission(t *testing.T) {
 		t.Error("SMFPDUSessionModification no longer models gTPTunnelInfo, which table 6.2.3-2 marks mandatory")
 	}
 
-	// sUPIUnauthenticated is still absent, so it stands in as the proof that the
-	// audit can see an omission at all. When it is implemented, this assertion
-	// fails and should be repointed at whatever is unmodelled then — a sentinel
-	// that has nothing left to detect is worse than none.
+	// The sentinel: a field that is unmodelled, standing in as proof that the audit
+	// can see an omission at all. It used to be sUPIUnauthenticated, which is modelled
+	// now, so it is repointed here — a sentinel with nothing left to detect is worse
+	// than none.
+	//
+	// ePSPDNConnectionModification is a deliberately stable choice. It reports an
+	// EPS/5GS interworking case this project does not implement, so unlike a deferral
+	// it is not waiting on anything and will not quietly become modelled.
+	tag, ok = byName["ePSPDNConnectionModification"]
+	if !ok {
+		t.Fatal("the module no longer defines SMFPDUSessionModification/ePSPDNConnectionModification")
+	}
+	if _, present := modelled[tag]; present {
+		t.Error("ePSPDNConnectionModification is now modelled: repoint this sentinel at a field " +
+			"that is not, and check whether the N/A disposition still holds")
+	}
+	if _, declared := declaredAbsent["SMFPDUSessionModification"]["ePSPDNConnectionModification"]; !declared {
+		t.Error("the sentinel field is not declared absent, so the audit above would already be " +
+			"failing on it — this test and that one disagree")
+	}
+
+	// sUPIUnauthenticated is modelled now and still not populated, which is the
+	// distinction the two lists exist to keep. It stays in knownConditionalDefects
+	// until the SMF sets it: the defect is that the record does not carry the value,
+	// and modelling the field did not change that.
+	//
+	// Reaching this state is what the codec's pointer support was for — false is the
+	// field's ordinary value, and an OPTIONAL field equal to its type's zero could not
+	// previously be emitted at all.
 	tag, ok = byName["sUPIUnauthenticated"]
 	if !ok {
 		t.Fatal("the module no longer defines SMFPDUSessionModification/sUPIUnauthenticated")
 	}
-	if _, present := modelled[tag]; present {
-		t.Error("sUPIUnauthenticated is now modelled: repoint this sentinel at a field that is not, " +
-			"and update CONFORMANCE.md, which records it as a finding")
+	if _, present := modelled[tag]; !present {
+		t.Error("SMFPDUSessionModification no longer models sUPIUnauthenticated")
 	}
-	// It belongs in the defect list, not the disposition list: the condition holds
-	// whenever a SUPI is reported, so this is a field we should populate.
 	if _, known := knownConditionalDefects["SMFPDUSessionModification"]["sUPIUnauthenticated"]; !known {
-		t.Error("sUPIUnauthenticated is not recorded as a known conditional defect, which the audit " +
-			"above should already have caught — this test and that one disagree")
+		t.Error("sUPIUnauthenticated left the defect list. Modelling the field is not the fix — " +
+			"the defect is that the emitted record does not carry the value, so this entry goes " +
+			"only when the SMF populates it")
 	}
 	if _, misfiled := declaredAbsent["SMFPDUSessionModification"]["sUPIUnauthenticated"]; misfiled {
 		t.Error("sUPIUnauthenticated is filed as a disposition; its condition is one this project " +

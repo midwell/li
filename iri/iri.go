@@ -485,9 +485,12 @@ type AMFRegistration struct {
 	RegistrationType   AMFRegistrationType   `asn1:"tag:1"`
 	RegistrationResult AMFRegistrationResult `asn1:"tag:2"`
 	SUPI               any                   `asn1:"tag:4,explicit,choice:supi"`
+	SUCI               SUCI                  `asn1:"tag:5,optional"`
 	PEI                any                   `asn1:"tag:6,explicit,choice:pei,optional"`
 	GPSI               any                   `asn1:"tag:7,explicit,choice:gpsi,optional"`
 	GUTI               FiveGGUTI             `asn1:"tag:8"`
+	FiveGSTAIList      TAIList               `asn1:"tag:11,optional"`
+	RATType            RATType               `asn1:"tag:18,optional"`
 }
 
 // AMFDeregistration is a slice of TS 33.128 AMFDeregistration: the mandatory
@@ -497,6 +500,7 @@ type AMFDeregistration struct {
 	DeregistrationDirection AMFDirection `asn1:"tag:1"`
 	AccessType              AccessType   `asn1:"tag:2"`
 	SUPI                    any          `asn1:"tag:3,explicit,choice:supi,optional"`
+	SUCI                    SUCI         `asn1:"tag:4,optional"`
 	PEI                     any          `asn1:"tag:5,explicit,choice:pei,optional"`
 	GPSI                    any          `asn1:"tag:6,explicit,choice:gpsi,optional"`
 	GUTI                    FiveGGUTI    `asn1:"tag:7,optional"` // value+optional: an all-zero GUTI reads as absent
@@ -509,9 +513,11 @@ type AMFStartOfInterceptionWithRegisteredUE struct {
 	RegistrationResult AMFRegistrationResult `asn1:"tag:1"`
 	RegistrationType   AMFRegistrationType   `asn1:"tag:2,optional"`
 	SUPI               any                   `asn1:"tag:4,explicit,choice:supi"`
+	SUCI               SUCI                  `asn1:"tag:5,optional"`
 	PEI                any                   `asn1:"tag:6,explicit,choice:pei,optional"`
 	GPSI               any                   `asn1:"tag:7,explicit,choice:gpsi,optional"`
 	GUTI               FiveGGUTI             `asn1:"tag:8"`
+	FiveGSTAIList      TAIList               `asn1:"tag:12,optional"`
 }
 
 // SMFPDUSessionEstablishment is a slice of the same-named TS 33.128 record.
@@ -520,31 +526,39 @@ type AMFStartOfInterceptionWithRegisteredUE struct {
 // distinct from gTPTunnelID, which is the serving UPF's tunnel endpoint.
 // Deferred optionals (deeper subtrees): location [11] and the long tail.
 type SMFPDUSessionEstablishment struct {
-	SUPI           any                `asn1:"tag:1,explicit,choice:supi,optional"`
-	PEI            any                `asn1:"tag:3,explicit,choice:pei,optional"`
-	GPSI           any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
-	PDUSessionID   PDUSessionID       `asn1:"tag:5"`
-	GTPTunnelID    FTEID              `asn1:"tag:6"`
-	PDUSessionType PDUSessionType     `asn1:"tag:7"`
-	SNSSAI         SNSSAI             `asn1:"tag:8,optional"`
-	UEEndpoint     []any              `asn1:"tag:9,choice:ueEndpointAddress,optional"`
-	DNN            DNN                `asn1:"tag:12"`
-	RequestType    FiveGSMRequestType `asn1:"tag:15"`
-	AccessType     AccessType         `asn1:"tag:16,optional"`
-	GTPTunnelInfo  GTPTunnelInfo      `asn1:"tag:25,optional"`
+	SUPI                any                            `asn1:"tag:1,explicit,choice:supi,optional"`
+	SUPIUnauthenticated *SUPIUnauthenticatedIndication `asn1:"tag:2,optional"`
+	PEI                 any                            `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI                any                            `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	PDUSessionID        PDUSessionID                   `asn1:"tag:5"`
+	GTPTunnelID         FTEID                          `asn1:"tag:6"`
+	PDUSessionType      PDUSessionType                 `asn1:"tag:7"`
+	SNSSAI              SNSSAI                         `asn1:"tag:8,optional"`
+	UEEndpoint          []any                          `asn1:"tag:9,choice:ueEndpointAddress,optional"`
+	DNN                 DNN                            `asn1:"tag:12"`
+	AMFID               AMFID                          `asn1:"tag:13,optional"` // all-zero reads as absent, as GUTI does
+	RequestType         FiveGSMRequestType             `asn1:"tag:15"`
+	AccessType          AccessType                     `asn1:"tag:16,optional"`
+	RATType             RATType                        `asn1:"tag:17,optional"`
+	ServingNetwork      SMFServingNetwork              `asn1:"tag:22,optional"`
+	GTPTunnelInfo       GTPTunnelInfo                  `asn1:"tag:25,optional"`
 }
 
 // SMFPDUSessionModification is a slice of the same-named record. Only
 // requestType is mandatory.
 type SMFPDUSessionModification struct {
-	SUPI          any                `asn1:"tag:1,explicit,choice:supi,optional"`
-	PEI           any                `asn1:"tag:3,explicit,choice:pei,optional"`
-	GPSI          any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
-	SNSSAI        SNSSAI             `asn1:"tag:5,optional"`
-	RequestType   FiveGSMRequestType `asn1:"tag:8"`
-	AccessType    AccessType         `asn1:"tag:9,optional"`
-	PDUSessionID  PDUSessionID       `asn1:"tag:11,optional"` // note: value 0 indistinguishable from absent
-	GTPTunnelInfo GTPTunnelInfo      `asn1:"tag:16,optional"`
+	SUPI                any                            `asn1:"tag:1,explicit,choice:supi,optional"`
+	SUPIUnauthenticated *SUPIUnauthenticatedIndication `asn1:"tag:2,optional"`
+	PEI                 any                            `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI                any                            `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	SNSSAI              SNSSAI                         `asn1:"tag:5,optional"`
+	RequestType         FiveGSMRequestType             `asn1:"tag:8"`
+	AccessType          AccessType                     `asn1:"tag:9,optional"`
+	RATType             RATType                        `asn1:"tag:10,optional"`
+	PDUSessionID        PDUSessionID                   `asn1:"tag:11,optional"` // note: value 0 indistinguishable from absent
+	UEEndpoint          []any                          `asn1:"tag:13,choice:ueEndpointAddress,optional"`
+	ServingNetwork      SMFServingNetwork              `asn1:"tag:14,optional"`
+	GTPTunnelInfo       GTPTunnelInfo                  `asn1:"tag:16,optional"`
 }
 
 // SMFPDUSessionRelease is a slice of the same-named record. Mandatory: sUPI,
@@ -563,6 +577,7 @@ type SMFPDUSessionRelease struct {
 // location (a minimal Location for now — see Location).
 type AMFLocationUpdate struct {
 	SUPI     any       `asn1:"tag:1,explicit,choice:supi"`
+	SUCI     SUCI      `asn1:"tag:2,optional"`
 	PEI      any       `asn1:"tag:3,explicit,choice:pei,optional"`
 	GPSI     any       `asn1:"tag:4,explicit,choice:gpsi,optional"`
 	GUTI     FiveGGUTI `asn1:"tag:5,optional"`
@@ -575,6 +590,7 @@ type AMFUnsuccessfulProcedure struct {
 	FailedProcedureType AMFFailedProcedureType `asn1:"tag:1"`
 	FailureCause        any                    `asn1:"tag:2,explicit,choice:amfFailureCause"`
 	SUPI                any                    `asn1:"tag:4,explicit,choice:supi,optional"`
+	SUCI                SUCI                   `asn1:"tag:5,optional"`
 	PEI                 any                    `asn1:"tag:6,explicit,choice:pei,optional"`
 	GPSI                any                    `asn1:"tag:7,explicit,choice:gpsi,optional"`
 	GUTI                FiveGGUTI              `asn1:"tag:8,optional"`
@@ -588,6 +604,7 @@ type AMFUnsuccessfulProcedure struct {
 // (EPS5GGUTI), additionalUserIdentifiers [7], relatedAMFUENGAPID [8].
 type AMFIdentifierAssociation struct {
 	SUPI any       `asn1:"tag:1,explicit,choice:supi"`
+	SUCI SUCI      `asn1:"tag:2,optional"`
 	PEI  any       `asn1:"tag:3,explicit,choice:pei,optional"`
 	GPSI any       `asn1:"tag:4,explicit,choice:gpsi,optional"`
 	GUTI FiveGGUTI `asn1:"tag:5"`
@@ -596,7 +613,8 @@ type AMFIdentifierAssociation struct {
 	// made every association record fail schema validation. The minimal Location
 	// the other records use satisfies the requirement; filling in the detail
 	// remains the deferred increment.
-	Location Location `asn1:"tag:6"`
+	Location      Location `asn1:"tag:6"`
+	FiveGSTAIList TAIList  `asn1:"tag:7,optional"`
 }
 
 // AMFIdentifierDeassociation is a slice of the same-named TS 33.128 record,
@@ -609,6 +627,9 @@ type AMFIdentifierAssociation struct {
 // mandatory gUTI missing.
 type AMFIdentifierDeassociation struct {
 	SUPI any       `asn1:"tag:1,explicit,choice:supi"`
+	SUCI SUCI      `asn1:"tag:2,optional"`
+	PEI  any       `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI any       `asn1:"tag:4,explicit,choice:gpsi,optional"`
 	GUTI FiveGGUTI `asn1:"tag:5"`
 }
 
@@ -669,18 +690,22 @@ func UEEndpoint(ip net.IP) []any {
 // empty list asserts that an established session has no endpoint address. Build
 // it with UEEndpoint.
 type SMFStartOfInterceptionWithEstablishedPDUSession struct {
-	SUPI           any                `asn1:"tag:1,explicit,choice:supi,optional"`
-	PEI            any                `asn1:"tag:3,explicit,choice:pei,optional"`
-	GPSI           any                `asn1:"tag:4,explicit,choice:gpsi,optional"`
-	PDUSessionID   PDUSessionID       `asn1:"tag:5"`
-	GTPTunnelID    FTEID              `asn1:"tag:6"`
-	PDUSessionType PDUSessionType     `asn1:"tag:7"`
-	SNSSAI         SNSSAI             `asn1:"tag:8,optional"`
-	UEEndpoint     []any              `asn1:"tag:9,choice:ueEndpointAddress"`
-	DNN            DNN                `asn1:"tag:12"`
-	RequestType    FiveGSMRequestType `asn1:"tag:15"`
-	AccessType     AccessType         `asn1:"tag:16,optional"`
-	GTPTunnelInfo  GTPTunnelInfo      `asn1:"tag:23,optional"`
+	SUPI                any                            `asn1:"tag:1,explicit,choice:supi,optional"`
+	SUPIUnauthenticated *SUPIUnauthenticatedIndication `asn1:"tag:2,optional"`
+	PEI                 any                            `asn1:"tag:3,explicit,choice:pei,optional"`
+	GPSI                any                            `asn1:"tag:4,explicit,choice:gpsi,optional"`
+	PDUSessionID        PDUSessionID                   `asn1:"tag:5"`
+	GTPTunnelID         FTEID                          `asn1:"tag:6"`
+	PDUSessionType      PDUSessionType                 `asn1:"tag:7"`
+	SNSSAI              SNSSAI                         `asn1:"tag:8,optional"`
+	UEEndpoint          []any                          `asn1:"tag:9,choice:ueEndpointAddress"`
+	DNN                 DNN                            `asn1:"tag:12"`
+	AMFID               AMFID                          `asn1:"tag:13,optional"` // all-zero reads as absent, as GUTI does
+	RequestType         FiveGSMRequestType             `asn1:"tag:15"`
+	AccessType          AccessType                     `asn1:"tag:16,optional"`
+	RATType             RATType                        `asn1:"tag:17,optional"`
+	ServingNetwork      SMFServingNetwork              `asn1:"tag:22,optional"`
+	GTPTunnelInfo       GTPTunnelInfo                  `asn1:"tag:23,optional"`
 }
 
 // SMFUnsuccessfulProcedure is a slice of the same-named record (XIRIEvent [10]),
@@ -691,17 +716,20 @@ type SMFStartOfInterceptionWithEstablishedPDUSession struct {
 // session is of little use. Deferred optionals: the EPS tail, requestedSlice,
 // location, and the long list beyond.
 type SMFUnsuccessfulProcedure struct {
-	FailedProcedureType SMFFailedProcedureType `asn1:"tag:1"`
-	FailureCause        FiveGSMCause           `asn1:"tag:2"`
-	Initiator           Initiator              `asn1:"tag:3"`
-	SUPI                any                    `asn1:"tag:5,explicit,choice:supi,optional"`
-	PEI                 any                    `asn1:"tag:7,explicit,choice:pei,optional"`
-	GPSI                any                    `asn1:"tag:8,explicit,choice:gpsi,optional"`
-	PDUSessionID        PDUSessionID           `asn1:"tag:9,optional"` // value 0 indistinguishable from absent
-	UEEndpoint          []any                  `asn1:"tag:10,choice:ueEndpointAddress,optional"`
-	DNN                 DNN                    `asn1:"tag:12,optional"`
-	RequestType         FiveGSMRequestType     `asn1:"tag:15,optional"`
-	AccessType          AccessType             `asn1:"tag:16,optional"`
+	FailedProcedureType SMFFailedProcedureType         `asn1:"tag:1"`
+	FailureCause        FiveGSMCause                   `asn1:"tag:2"`
+	Initiator           Initiator                      `asn1:"tag:3"`
+	SUPI                any                            `asn1:"tag:5,explicit,choice:supi,optional"`
+	SUPIUnauthenticated *SUPIUnauthenticatedIndication `asn1:"tag:6,optional"`
+	PEI                 any                            `asn1:"tag:7,explicit,choice:pei,optional"`
+	GPSI                any                            `asn1:"tag:8,explicit,choice:gpsi,optional"`
+	PDUSessionID        PDUSessionID                   `asn1:"tag:9,optional"` // value 0 indistinguishable from absent
+	UEEndpoint          []any                          `asn1:"tag:10,choice:ueEndpointAddress,optional"`
+	DNN                 DNN                            `asn1:"tag:12,optional"`
+	AMFID               AMFID                          `asn1:"tag:13,optional"` // all-zero reads as absent, as GUTI does
+	RequestType         FiveGSMRequestType             `asn1:"tag:15,optional"`
+	AccessType          AccessType                     `asn1:"tag:16,optional"`
+	RATType             RATType                        `asn1:"tag:17,optional"`
 }
 
 // AMFUEServiceAccept is a slice of the same-named record (XIRIEvent [147]),
@@ -719,6 +747,7 @@ type AMFUEServiceAccept struct {
 // Mandatory: sUPI, uEPolicy. The policy is copied opaquely (design D6).
 type AMFUEPolicyTransfer struct {
 	SUPI     any       `asn1:"tag:1,explicit,choice:supi"`
+	SUCI     SUCI      `asn1:"tag:2,optional"`
 	PEI      any       `asn1:"tag:3,explicit,choice:pei,optional"`
 	GPSI     any       `asn1:"tag:4,explicit,choice:gpsi,optional"`
 	GUTI     FiveGGUTI `asn1:"tag:5,optional"`
@@ -729,7 +758,12 @@ type AMFUEPolicyTransfer struct {
 // (XIRIEvent [111]), generated when the AMF relays an NRPPa or LPP message for a
 // target. Mandatory: sUPI, lcsCorrelationId. Both payloads are copied opaquely.
 type AMFPositioningInfoTransfer struct {
-	SUPI             any              `asn1:"tag:1,explicit,choice:supi"`
+	SUPI any `asn1:"tag:1,explicit,choice:supi"`
+	// Modelled so the record is complete against the module, and populated by nobody:
+	// no POI emits this record. All four of clause 6.2.2.2.8's trigger events are
+	// exchanges with an LMF and this AMF has none, so the condition cannot arise. In
+	// scope the day an LMF is deployed — see README.md.
+	SUCI             SUCI             `asn1:"tag:2,optional"`
 	PEI              any              `asn1:"tag:3,explicit,choice:pei,optional"`
 	GPSI             any              `asn1:"tag:4,explicit,choice:gpsi,optional"`
 	GUTI             FiveGGUTI        `asn1:"tag:5,optional"`

@@ -44,6 +44,25 @@ func goldenSamples() map[string]any {
 	tunnelInfo := GTPTunnelInfo{FiveGSGTPTunnels: FiveGSGTPTunnels{ULNGUUPTunnelInformation: fteid}}
 	snssai := SNSSAI{SliceServiceType: 1, SliceDifferentiator: []byte{0x00, 0x00, 0x7B}}
 	ids := Identifiers(IMSI("262019876543210"), IMEISV("3534250000000151"), MSISDN("4915123456789"))
+	// The conditional identity members added for CONFORMANCE.md findings 2 and 3.
+	// riLen is carried explicitly because the routing indicator "0123" has four
+	// meaningful digits and the INTEGER 123 has three — the case the module's
+	// routingIndicatorLength exists for.
+	riLen := RoutingIndicatorLength(4)
+	suci := SUCI{
+		MCC: "262", MNC: "01",
+		RoutingIndicator:       123,
+		ProtectionSchemeID:     1,
+		HomeNetworkPublicKeyID: []byte{0x1B},
+		SchemeOutput:           []byte{0xDE, 0xAD, 0xBE, 0xEF},
+		RoutingIndicatorLength: &riLen,
+	}
+	taiList := TAIList{{PLMNID: PLMNID{MCC: "262", MNC: "01"}, TAC: TAC{0x00, 0x2A}}}
+	servingNet := SMFServingNetwork{PLMNID: PLMNID{MCC: "262", MNC: "01"}}
+	amfID := AMFID{AMFRegionID: 200, AMFSetID: 1, AMFPointer: 3}
+	// false is the point: it is the ordinary value, and the value the encoder could
+	// not express before li/asn1 gained pointer support.
+	supiAuthenticated := SUPIUnauthenticatedIndication(false)
 
 	return map[string]any{
 		"AMFRegistration": AMFRegistration{
@@ -53,6 +72,9 @@ func goldenSamples() map[string]any {
 			PEI:                IMEI("35342500000001"),
 			GPSI:               MSISDN("4915123456789"),
 			GUTI:               guti,
+			SUCI:               suci,
+			FiveGSTAIList:      taiList,
+			RATType:            RATNR,
 		},
 		"AMFDeregistration": AMFDeregistration{
 			DeregistrationDirection: DirUEInitiated,
@@ -61,6 +83,7 @@ func goldenSamples() map[string]any {
 			PEI:                     IMEI("35342500000001"),
 			GPSI:                    MSISDN("4915123456789"),
 			GUTI:                    guti,
+			SUCI:                    suci,
 		},
 		"AMFLocationUpdate": AMFLocationUpdate{
 			SUPI:     IMSI("262019876543210"),
@@ -68,6 +91,7 @@ func goldenSamples() map[string]any {
 			GPSI:     MSISDN("4915123456789"),
 			GUTI:     guti,
 			Location: loc,
+			SUCI:     suci,
 		},
 		"AMFStartOfInterceptionWithRegisteredUE": AMFStartOfInterceptionWithRegisteredUE{
 			RegistrationResult: RegResult3GPPAccess,
@@ -76,6 +100,8 @@ func goldenSamples() map[string]any {
 			PEI:                IMEI("35342500000001"),
 			GPSI:               MSISDN("4915123456789"),
 			GUTI:               guti,
+			SUCI:               suci,
+			FiveGSTAIList:      taiList,
 		},
 		"AMFUnsuccessfulProcedure": AMFUnsuccessfulProcedure{
 			FailedProcedureType: FailedRegistration,
@@ -85,44 +111,58 @@ func goldenSamples() map[string]any {
 			GPSI:                MSISDN("4915123456789"),
 			GUTI:                guti,
 			Location:            loc,
+			SUCI:                suci,
 		},
 		"AMFIdentifierAssociation": AMFIdentifierAssociation{
-			SUPI:     IMSI("262019876543210"),
-			PEI:      IMEI("35342500000001"),
-			GPSI:     MSISDN("4915123456789"),
-			GUTI:     guti,
-			Location: loc,
+			SUPI:          IMSI("262019876543210"),
+			PEI:           IMEI("35342500000001"),
+			GPSI:          MSISDN("4915123456789"),
+			GUTI:          guti,
+			Location:      loc,
+			SUCI:          suci,
+			FiveGSTAIList: taiList,
 		},
 		"AMFIdentifierDeassociation": AMFIdentifierDeassociation{
 			SUPI: IMSI("262019876543210"),
 			GUTI: guti,
+			SUCI: suci,
+			PEI:  IMEISV("3534250000000151"),
+			GPSI: MSISDN("4915123456789"),
 		},
 		// The three records below gain gTPTunnelInfo, which the TS 33.128 payload
 		// tables mark mandatory and which was omitted. Their encodings therefore
 		// change, and expectedUnchanged no longer names them.
 		"SMFPDUSessionEstablishment": SMFPDUSessionEstablishment{
-			SUPI:           IMSI("262019876543210"),
-			PEI:            IMEI("35342500000001"),
-			GPSI:           MSISDN("4915123456789"),
-			PDUSessionID:   5,
-			GTPTunnelID:    fteid,
-			PDUSessionType: PDUSessionTypeIPv4,
-			SNSSAI:         snssai,
-			UEEndpoint:     UEEndpoint(net.IPv4(10, 45, 0, 7)),
-			DNN:            DNN("internet"),
-			RequestType:    SMRequestInitial,
-			AccessType:     AccessThreeGPP,
-			GTPTunnelInfo:  tunnelInfo,
+			SUPI:                IMSI("262019876543210"),
+			PEI:                 IMEI("35342500000001"),
+			GPSI:                MSISDN("4915123456789"),
+			PDUSessionID:        5,
+			GTPTunnelID:         fteid,
+			PDUSessionType:      PDUSessionTypeIPv4,
+			SNSSAI:              snssai,
+			UEEndpoint:          UEEndpoint(net.IPv4(10, 45, 0, 7)),
+			DNN:                 DNN("internet"),
+			RequestType:         SMRequestInitial,
+			AccessType:          AccessThreeGPP,
+			GTPTunnelInfo:       tunnelInfo,
+			SUPIUnauthenticated: &supiAuthenticated,
+			AMFID:               amfID,
+			RATType:             RATNR,
+			ServingNetwork:      servingNet,
 		},
 		"SMFPDUSessionModification": SMFPDUSessionModification{
-			SUPI:          IMSI("262019876543210"),
-			PEI:           IMEI("35342500000001"),
-			GPSI:          MSISDN("4915123456789"),
-			SNSSAI:        snssai,
-			RequestType:   SMRequestModification,
-			AccessType:    AccessThreeGPP,
-			PDUSessionID:  5,
-			GTPTunnelInfo: tunnelInfo,
+			SUPI:                IMSI("262019876543210"),
+			PEI:                 IMEI("35342500000001"),
+			GPSI:                MSISDN("4915123456789"),
+			SNSSAI:              snssai,
+			RequestType:         SMRequestModification,
+			AccessType:          AccessThreeGPP,
+			PDUSessionID:        5,
+			GTPTunnelInfo:       tunnelInfo,
+			SUPIUnauthenticated: &supiAuthenticated,
+			RATType:             RATNR,
+			UEEndpoint:          UEEndpoint(net.IPv4(10, 45, 0, 7)),
+			ServingNetwork:      servingNet,
 		},
 		"SMFPDUSessionRelease": SMFPDUSessionRelease{
 			SUPI:           IMSI("262019876543210"),
@@ -133,18 +173,22 @@ func goldenSamples() map[string]any {
 			DownlinkVolume: 654321,
 		},
 		"SMFStartOfInterceptionWithEstablishedPDUSession": SMFStartOfInterceptionWithEstablishedPDUSession{
-			SUPI:           IMSI("262019876543210"),
-			PEI:            IMEI("35342500000001"),
-			GPSI:           MSISDN("4915123456789"),
-			PDUSessionID:   5,
-			GTPTunnelID:    fteid,
-			PDUSessionType: PDUSessionTypeIPv4,
-			SNSSAI:         snssai,
-			UEEndpoint:     UEEndpoint(net.ParseIP("10.45.0.2")),
-			DNN:            DNN("internet"),
-			RequestType:    SMRequestExisting,
-			AccessType:     AccessThreeGPP,
-			GTPTunnelInfo:  tunnelInfo,
+			SUPI:                IMSI("262019876543210"),
+			PEI:                 IMEI("35342500000001"),
+			GPSI:                MSISDN("4915123456789"),
+			PDUSessionID:        5,
+			GTPTunnelID:         fteid,
+			PDUSessionType:      PDUSessionTypeIPv4,
+			SNSSAI:              snssai,
+			UEEndpoint:          UEEndpoint(net.ParseIP("10.45.0.2")),
+			DNN:                 DNN("internet"),
+			RequestType:         SMRequestExisting,
+			AccessType:          AccessThreeGPP,
+			GTPTunnelInfo:       tunnelInfo,
+			SUPIUnauthenticated: &supiAuthenticated,
+			AMFID:               amfID,
+			RATType:             RATNR,
+			ServingNetwork:      servingNet,
 		},
 		"SMFUnsuccessfulProcedure": SMFUnsuccessfulProcedure{
 			FailedProcedureType: SMFFailedPDUSessionEstablishment,
@@ -158,6 +202,9 @@ func goldenSamples() map[string]any {
 			DNN:                 DNN("internet"),
 			RequestType:         SMRequestInitial,
 			AccessType:          AccessThreeGPP,
+			SUPIUnauthenticated: &supiAuthenticated,
+			AMFID:               amfID,
+			RATType:             RATNR,
 		},
 		"AMFUEServiceAccept": AMFUEServiceAccept{
 			UserIdentifiers:        ids,
@@ -176,6 +223,7 @@ func goldenSamples() map[string]any {
 				0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 				0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
 			},
+			SUCI: suci,
 		},
 		"AMFPositioningInfoTransfer": AMFPositioningInfoTransfer{
 			SUPI:             IMSI("262019876543210"),
@@ -185,6 +233,7 @@ func goldenSamples() map[string]any {
 			NRPPaMessage:     []byte{0xAA, 0xBB},
 			LPPMessage:       []byte{0xCC},
 			LCSCorrelationID: LCSCorrelationID("corr-1"),
+			SUCI:             suci,
 		},
 		"AMFRANHandoverCommand": AMFRANHandoverCommand{
 			UserIdentifiers:         ids,
@@ -214,31 +263,18 @@ func goldenSamples() map[string]any {
 // change's intended blast radius, not a standing property, and a stale list is
 // worse than none — it silently blesses whatever the previous change expected.
 //
-// For fix-li-iri-unreported-conditional-fields, phase 2 — the codec gains pointer
-// support so an OPTIONAL field can say "present, and equal to my type's zero
-// value". **Every record is listed, because that change must be completely inert.**
-// It is reachable only from a field declared as a pointer, and no field in li/iri
-// is one yet, so a single moved byte here means the branch is firing where it
-// should not. This is the proof D2 asks for, and it is a proof rather than an
-// assertion only because the list below is exhaustive.
+// For fix-li-iri-unreported-conditional-fields, phase 4 — thirteen records gain the
+// conditional identity members of CONFORMANCE.md findings 2 and 3, so thirteen
+// vectors move. These four are every record that gained nothing, and they are the
+// check that the additions stayed where they were aimed.
+//
+// Phase 2's list was every record, because the codec change had to be inert. That
+// distinction is the reason this list is rewritten rather than appended to.
 var expectedUnchanged = map[string]bool{
-	"AMFDeregistration":                               true,
-	"AMFIdentifierAssociation":                        true,
-	"AMFIdentifierDeassociation":                      true,
-	"AMFLocationUpdate":                               true,
-	"AMFPositioningInfoTransfer":                      true,
-	"AMFRANHandoverCommand":                           true,
-	"AMFRANHandoverRequest":                           true,
-	"AMFRegistration":                                 true,
-	"AMFStartOfInterceptionWithRegisteredUE":          true,
-	"AMFUEPolicyTransfer":                             true,
-	"AMFUEServiceAccept":                              true,
-	"AMFUnsuccessfulProcedure":                        true,
-	"SMFPDUSessionEstablishment":                      true,
-	"SMFPDUSessionModification":                       true,
-	"SMFPDUSessionRelease":                            true,
-	"SMFStartOfInterceptionWithEstablishedPDUSession": true,
-	"SMFUnsuccessfulProcedure":                        true,
+	"AMFUEServiceAccept":    true,
+	"AMFRANHandoverCommand": true,
+	"AMFRANHandoverRequest": true,
+	"SMFPDUSessionRelease":  true,
 }
 
 // TestGoldenSamplesArePopulated is what keeps this file's claim true.
