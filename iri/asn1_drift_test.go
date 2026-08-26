@@ -86,6 +86,11 @@ var declaredAbsent = map[string]map[string]string{
 	},
 	"AMFPositioningInfoTransfer": {
 		"additionalUserIdentifiers": "C, table 6.2.2.2.8-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
+		// Not a defect against this element: no POI emits this record. All four of clause
+		// 6.2.2.2.8's trigger events are exchanges with an LMF, and this AMF has none — see
+		// README.md. The field is modelled so the record is complete against the module, but
+		// there is no builder to populate it from, so the condition cannot arise.
+		"sUCI": "C, table 6.2.2.2.8-1: N/A: the condition cannot arise; this AMF has no LMF, so the record is never emitted",
 	},
 	"AMFRANHandoverRequest": {
 		"locationReportingRequestType": "C, table 6.2.2.2.9.3-1: NOT HELD: the network function does not hold this datum, so the condition is not met",
@@ -226,7 +231,7 @@ var knownConditionalDefects = map[string]map[string]string{
 		"sUCI": "C, table 6.2.2.2.3-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFIdentifierAssociation": {
-		"fiveGSTAIList": "C, table 6.2.2.2.7-1: MET (finding): the AMF holds the UE's TAI list",
+		"fiveGSTAIList": "C, table 6.2.2.2.7-1: MET (finding): the registration area, not the serving TAI — the table says \"tracking areas associated with the registration area within which the UE is current registered\"; the AMF holds AmfUe.RegistrationArea[accessType]",
 		"sUCI":          "C, table 6.2.2.2.7-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFIdentifierDeassociation": {
@@ -237,16 +242,13 @@ var knownConditionalDefects = map[string]map[string]string{
 	"AMFLocationUpdate": {
 		"sUCI": "C, table 6.2.2.2.4-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
-	"AMFPositioningInfoTransfer": {
-		"sUCI": "C, table 6.2.2.2.8-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
-	},
 	"AMFRegistration": {
-		"fiveGSTAIList": "C, table 6.2.2.2.2-1: MET (finding): the AMF holds the UE's TAI list",
-		"rATType":       "C, table 6.2.2.2.2-1: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
+		"fiveGSTAIList": "C, table 6.2.2.2.2-1: MET (finding): the registration area, not the serving TAI — the table says \"tracking areas associated with the registration area within which the UE is current registered\"; the AMF holds AmfUe.RegistrationArea[accessType]",
+		"rATType":       "C, table 6.2.2.2.2-1: MET (finding): the AMF holds AmfUe.RatType",
 		"sUCI":          "C, table 6.2.2.2.2-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFStartOfInterceptionWithRegisteredUE": {
-		"fiveGSTAIList": "C, table 6.2.2.2.5-1: MET (finding): the AMF holds the UE's TAI list",
+		"fiveGSTAIList": "C, table 6.2.2.2.5-1: MET (finding): the registration area, not the serving TAI — the table says \"tracking areas associated with the registration area within which the UE is current registered\"; the AMF holds AmfUe.RegistrationArea[accessType]",
 		"sUCI":          "C, table 6.2.2.2.5-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"AMFUEPolicyTransfer": {
@@ -256,27 +258,27 @@ var knownConditionalDefects = map[string]map[string]string{
 		"sUCI": "C, table 6.2.2.2.6-1: MET (finding): the AMF holds AmfUe.Suci, but its LI identity snapshot (UeIdentity) does not carry it, so the POI cannot report it",
 	},
 	"SMFPDUSessionEstablishment": {
-		"aMFID":               "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
+		"aMFID":               "C, table 6.2.3-1: MET (finding): TS 23.003 clause 2.10.1 makes this the AMF region/set/pointer, which SMContext.ServingNfId (an NF instance UUID) cannot yield; the AMF sends its GUAMI on N11 and SetCreateData drops it",
 		"rATType":             "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
-		"sUPIUnauthenticated": "C, table 6.2.3-1: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+		"sUPIUnauthenticated": "C, table 6.2.3-1: BLOCKED on two counts: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field, and SetCreateData drops the SmContextCreateData.UnauthenticatedSupi the AMF sends — fixing only the codec leaves it unpopulatable — see CONFORMANCE.md finding 2",
 		"servingNetwork":      "C, table 6.2.3-1: MET (finding): the SMF holds SMContext.ServingNetwork",
 	},
 	"SMFPDUSessionModification": {
 		"rATType":             "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
-		"sUPIUnauthenticated": "C, table 6.2.3-2: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+		"sUPIUnauthenticated": "C, table 6.2.3-2: BLOCKED on two counts: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field, and SetCreateData drops the SmContextCreateData.UnauthenticatedSupi the AMF sends — fixing only the codec leaves it unpopulatable — see CONFORMANCE.md finding 2",
 		"servingNetwork":      "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.ServingNetwork",
 		"uEEndpoint":          "C, table 6.2.3-2: MET (finding): the SMF holds SMContext.PDUAddress and already reports it in the session records",
 	},
 	"SMFStartOfInterceptionWithEstablishedPDUSession": {
-		"aMFID":               "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
+		"aMFID":               "C, table 6.2.3-4: MET (finding): TS 23.003 clause 2.10.1 makes this the AMF region/set/pointer, which SMContext.ServingNfId (an NF instance UUID) cannot yield; the AMF sends its GUAMI on N11 and SetCreateData drops it",
 		"rATType":             "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
-		"sUPIUnauthenticated": "C, table 6.2.3-4: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+		"sUPIUnauthenticated": "C, table 6.2.3-4: BLOCKED on two counts: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field, and SetCreateData drops the SmContextCreateData.UnauthenticatedSupi the AMF sends — fixing only the codec leaves it unpopulatable — see CONFORMANCE.md finding 2",
 		"servingNetwork":      "C, table 6.2.3-4: MET (finding): the SMF holds SMContext.ServingNetwork",
 	},
 	"SMFUnsuccessfulProcedure": {
-		"aMFID":               "C, table 6.2.3-5: MET (finding): the SMF holds SMContext.ServingNfId, the AMF serving the session",
+		"aMFID":               "C, table 6.2.3-5: MET (finding): TS 23.003 clause 2.10.1 makes this the AMF region/set/pointer, which SMContext.ServingNfId (an NF instance UUID) cannot yield; the AMF sends its GUAMI on N11 and SetCreateData drops it",
 		"rATType":             "C, table 6.2.3-5: MET (finding): the SMF holds SMContext.RatType, set from the CreateSMContext request",
-		"sUPIUnauthenticated": "C, table 6.2.3-5: BLOCKED: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field — see CONFORMANCE.md finding 2",
+		"sUPIUnauthenticated": "C, table 6.2.3-5: BLOCKED on two counts: the meaningful value is false, which li/asn1 cannot encode for an OPTIONAL field, and SetCreateData drops the SmContextCreateData.UnauthenticatedSupi the AMF sends — fixing only the codec leaves it unpopulatable — see CONFORMANCE.md finding 2",
 	},
 }
 
@@ -497,8 +499,14 @@ func TestASN1DriftAuditDetectsAnOmission(t *testing.T) {
 // this number is meant to be a deliberate act with a reason in the commit.
 //
 // Going *down* fails too: a defect that has been fixed should leave the list.
+//
+// A drop has two possible causes and the commit has to say which. Either a defect
+// was fixed, or an entry was reclassified because it was never a defect against
+// this element — AMFPositioningInfoTransfer/sUCI left this way, for a record no
+// POI emits, and is now an N/A in declaredAbsent. A count that moved for two
+// different reasons and does not distinguish them cannot be checked later.
 func TestKnownDefectsDoNotGrow(t *testing.T) {
-	const want = 30
+	const want = 29
 
 	got := 0
 	for _, fields := range knownConditionalDefects {
