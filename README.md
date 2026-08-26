@@ -794,6 +794,33 @@ procedures these functions perform.
 | `SMFMAUnsuccessfulProcedure` | Out of scope, as above |
 | `SMFPDUtoMAPDUSessionModification` | Out of scope, as above |
 
+### Conditional identity fields these records carry
+
+Every record above carries the conditional identities its emitter holds, as of 2026-08-26.
+Before that date a set of them was held by the AMF or SMF and reported by nobody — 26
+record-field sites across eight fields — and none of it was visible from outside: **a record
+that omits a conditional field is perfectly well formed**, so no decoder, no interoperability
+test and no mediation function could detect the omission.
+
+| Field | Where it now appears |
+|---|---|
+| `sUCI` | the 8 AMF records the AMF emits that define it. Present only when the UE registered *by* SUCI; a registration by 5G-GUTI reports it absent, which is correct and is the common case |
+| `pEI`, `gPSI` | `AMFIdentifierDeassociation`, which previously named fewer identifiers for a subject than every other record about that subject |
+| `fiveGSTAIList` | `AMFRegistration`, `AMFIdentifierAssociation`, `AMFStartOfInterceptionWithRegisteredUE`. The **registration area**, per the tables, not the serving TAI |
+| `rATType` | `AMFRegistration` and the 4 SMF session records. The NR satellite arms are mapped, since this deployment serves non-terrestrial access |
+| `servingNetwork` | `SMFPDUSessionEstablishment`, `SMFPDUSessionModification`, `SMFStartOfInterceptionWithEstablishedPDUSession` |
+| `aMFID` | `SMFPDUSessionEstablishment`, `SMFStartOfInterceptionWithEstablishedPDUSession`, `SMFUnsuccessfulProcedure`. Decomposed from the GUAMI the AMF sends on N11 — **not** from `ServingNfId`, which is an NF instance UUID and carries no AMF identifier |
+| `uEEndpoint` | `SMFPDUSessionModification`, which was the one session record missing it |
+| `sUPIUnauthenticated` | the 4 SMF records that define it. `false` where the SUPI was authenticated, `true` where it was not, absent where the record carries no SUPI |
+
+The last of those needed a codec change: `li/asn1` omitted any optional field equal to its
+type's zero value, so an optional BOOLEAN could encode `true` and never `false` — and `false`
+is the ordinary value here. Optional fields may now be declared as pointers, which
+distinguishes "absent" from "present and zero" without changing how any other field encodes.
+
+`AMFPositioningInfoTransfer` models `sUCI` and populates it from nowhere, because no point of
+interception emits that record at all. See the out-of-scope note above.
+
 ### What has not been observed on a live network
 
 **The two handover records have never been produced by a real handover.**

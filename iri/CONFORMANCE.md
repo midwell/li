@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 published with it. Both are cited below; where they disagree, that disagreement is itself
 recorded, because one of the findings here lives exactly in the gap between them.
 
-**This disposition was last reviewed 2026-08-20.** The specification revision above says
+**This disposition was last reviewed 2026-08-26.** The specification revision above says
 what was read; this says when. Any count quoted from here — in `../CONFORMANCE.md`, or on a
 public compliance page — is a count as of that date, and carrying the date in the document
 the count came from is what lets a reader check it from this end rather than only from the
@@ -110,12 +110,21 @@ so each of the 146 was judged and the verdict recorded beside it:
 | Verdict | Count | Meaning |
 |---|---|---|
 | NOT HELD | 69 | the network function does not hold the datum |
-| **MET** | **26** | **the network function holds it and does not report it — findings 3 and 4** |
-| N/A | 26 | the condition cannot arise; the feature is not implemented here |
+| **MET** | **0** | **was 26 — the network function holds it and does not report it. Closed 2026-08-26, findings 2 and 3** |
+| N/A | 27 | the condition cannot arise; the feature is not implemented here |
 | DEFERRED | 9 | held, but the subtree is deliberately not modelled |
 | UNTRACED | 9 | a similarly named context field exists and the mapping was not followed through |
-| BLOCKED | 4 | the codec cannot express the value — finding 2 |
+| BLOCKED | 0 | was 4 — the codec could not express the value. Closed 2026-08-26, finding 2 |
 | DEPRECATED | 3 | the specification no longer uses the field |
+
+The `MET` and `BLOCKED` rows are kept at zero rather than removed. A verdict that has been
+emptied is evidence about how this implementation is audited; a row that disappears reads as
+a category that never existed. `N/A` gained one: `AMFPositioningInfoTransfer/sUCI`, which was
+counted as `MET` while no point of interception emits that record at all.
+
+`location` remains open under finding 4 and is `DEFERRED`, not `MET` — the earlier version of
+this table attributed the `MET` count to "findings 3 and 4", which was wrong: every one of the
+26 belonged to finding 3.
 
 The nine `UNTRACED` verdicts are an admission, not a conclusion, and are labelled so they
 cannot be mistaken for clearance: `pCCRules`, `pCCRuleIDs`, `oldPDUSessionID`,
@@ -123,12 +132,23 @@ cannot be mistaken for clearance: `pCCRules`, `pCCRuleIDs`, `oldPDUSessionID`,
 field in a network function's context that was not followed through to the point of
 interception.
 
-**The 26 `MET` and 4 `BLOCKED` entries are held in a separate list from the rest.**
-`asn1_drift_test.go` keeps `declaredAbsent` for fields this project need not populate and
-`knownConditionalDefects` for the 30 it should and does not, and pins that count — so adding
-another is a deliberate act rather than one more line among fields that are fine. A field
-its payload table marks **M** is rejected from the disposition list outright: a mandatory
-field is either populated or a known defect, never a disposition.
+**The `MET` and `BLOCKED` entries were held in a separate list from the rest, and that list
+is now empty.** `asn1_drift_test.go` keeps `declaredAbsent` for fields this project need not
+populate and `knownConditionalDefects` for those it should and does not, and pins that count
+— so adding another is a deliberate act rather than one more line among fields that are fine.
+The pin is 0, and the list is kept rather than deleted so the next such field has an
+established place to be recorded. A field its payload table marks **M** is rejected from the
+disposition list outright: a mandatory field is either populated or a known defect, never a
+disposition.
+
+**The list's rule changed with these fixes, because it had been enforcing something other
+than what it said.** Its own comment describes fields the project "does not populate", but
+the staleness check keyed on whether the field was *modelled* — so adding a struct field
+would have emptied the list while no emitter set any of them. The check now applies that rule
+only to `declaredAbsent`, which really is a claim about modelling. That conflation is why
+finding 3's table listed `uEEndpoint` on `SMFUnsuccessfulProcedure` as an open gap for weeks
+after the SMF had begun reporting it: the modelled-but-unpopulated case had nowhere to live,
+so it lived in prose and went stale.
 
 The 26 `N/A` verdicts rest on features this deployment does not implement: EPS/5GS
 interworking over N26 and the SGW/PGW role, non-3GPP access through an N3IWF, TNGF or TWIF,
@@ -158,51 +178,87 @@ encodings of all three records changed accordingly. `additionalULNGUUPTunnelInfo
 for the single default path it manages, and the last reports PDN connection events at an
 SGW/PGW, which this project does not implement.
 
-### 2. `sUPIUnauthenticated` is never populated — OPEN, blocked on the codec
+### 2. `sUPIUnauthenticated` was never populated — FIXED 2026-08-26
 
-Absent from all four records that define it (`SMFPDUSessionEstablishment`,
-`SMFPDUSessionModification`, `SMFStartOfInterceptionWithEstablishedPDUSession`,
-`SMFUnsuccessfulProcedure`) under a condition this project routinely meets: table 6.2.3-1
-says it "shall be present if a SUPI is present in the message", `true` when the SUPI has not
-been authenticated and `false` when it has.
+Absent from all four records that define it and that this project emits
+(`SMFPDUSessionEstablishment`, `SMFPDUSessionModification`,
+`SMFStartOfInterceptionWithEstablishedPDUSession`, `SMFUnsuccessfulProcedure`) under a
+condition this project routinely meets: table 6.2.3-1 says it "shall be present if a SUPI is
+present in the message", `true` when the SUPI has not been authenticated and `false` when it
+has.
 
-**It is not fixed here because the shared codec cannot express it.** The field is
-`SUPIUnauthenticatedIndication ::= BOOLEAN`, and the meaningful value in the ordinary case is
-`false` — the SUPI *was* authenticated. `li/asn1` omits any `optional` field whose value
-equals its type's zero value (`isEmpty` in `encode.go`), so an optional BOOLEAN can encode
-`true` and can never encode `false`; and Go pointers, the usual way to distinguish absent
-from false, are not handled by the encoder at all. Marking the field non-optional instead
-would emit it even when no SUPI is present, asserting an authentication status for an
-identity that is not in the record.
+**It was blocked on two things, and the disposition recorded only one.** The codec could not
+express it: the field is `SUPIUnauthenticatedIndication ::= BOOLEAN`, the meaningful value in
+the ordinary case is `false` — the SUPI *was* authenticated — and `li/asn1` omitted any
+`optional` field whose value equalled its type's zero. The second was found only when the fix
+was attempted: `SMContext.SetCreateData` retains fifteen fields of the N11 request and dropped
+`UnauthenticatedSupi`, which the AMF had been sending all along. Fixing the codec alone would
+have left the field unpopulatable while every test passed.
 
-Doing it properly means teaching the codec to distinguish "absent" from "present and zero",
-which changes how every field of every record decides emptiness. That is a shared-codec
-change with its own blast radius and belongs in its own piece of work, not folded into an
-audit.
+`li/asn1` now supports pointer fields. A nil pointer is absent; a non-nil one is present and
+encodes its pointee even when that pointee is the type's zero. The mechanism is opt-in at the
+field, which is what made it provable: no field in `li/iri` was a pointer, so the golden
+vectors for all seventeen record types were byte-identical across the codec change. Changing
+`isEmpty` itself was rejected for exactly that reason — it is on the path of every field of
+every record, and two `PDUSessionID` fields annotated *"value 0 indistinguishable from
+absent"* would have started emitting.
 
-### 3. Identity a POI holds and does not report — OPEN
+Marking the field mandatory was also rejected: it would emit an authentication status in
+records carrying no SUPI, asserting something about an identity that is not there. Absent now
+means the record carries no SUPI, and `false` means the SUPI was authenticated.
 
-Eight fields are held by the emitting network function and reported by nobody. These are the
-"quieter half" this audit went looking for: no decoder can see them, because a record that
-omits a conditional field is perfectly well formed.
+### 3. Identity a POI holds and does not report — FIXED 2026-08-26
 
-| Field | Records | Where the data already is |
+Fields held by the emitting network function and reported by nobody. These are the "quieter
+half" this audit went looking for: no decoder can see them, because a record that omits a
+conditional field is perfectly well formed.
+
+**The table below is the version this finding was written with, kept because it was wrong in
+six places and the disagreement is the useful part.** It was prose; the enforced list is
+`asn1_drift_test.go`'s `knownConditionalDefects`, which is re-derived against the module and
+counted by a test. Where the two disagreed, the list was right.
+
+| Field | Records, as first written | What the audited list held |
 |---|---|---|
-| `sUCI` | 6 AMF records | `AmfUe.Suci`. The AMF holds it; `UeIdentity`, the snapshot the POI reads, does not carry it. |
-| `pEI`, `gPSI` | `AMFIdentifierDeassociation` | The AMF reports both in **every other record it emits** — this one record omits them. |
-| `fiveGSTAIList` | `AMFRegistration`, `AMFIdentifierAssociation` | The AMF holds the UE's TAI list. |
-| `rATType` | 3 SMF records | `SMContext.RatType`, set from the CreateSMContext request. |
-| `servingNetwork` | 3 SMF records | `SMContext.ServingNetwork`. |
-| `aMFID` | 3 SMF records | `SMContext.ServingNfId`. |
-| `uEEndpoint` | `SMFUnsuccessfulProcedure` | `SMContext.PDUAddress`, already reported in the other session records. |
+| `sUCI` | 6 AMF records | **9** — every AMF record the module defines it on |
+| `pEI`, `gPSI` | `AMFIdentifierDeassociation` | the same |
+| `fiveGSTAIList` | `AMFRegistration`, `AMFIdentifierAssociation` | **3** — also `AMFStartOfInterceptionWithRegisteredUE` |
+| `rATType` | 3 SMF records | **5** — four SMF records **and `AMFRegistration`** |
+| `servingNetwork` | 3 SMF records | 3, but not `SMFUnsuccessfulProcedure`, which has no such field |
+| `aMFID` | 3 SMF records | 3, but not `SMFPDUSessionModification`, which has no such field |
+| `uEEndpoint` | `SMFUnsuccessfulProcedure` | **`SMFPDUSessionModification`** — see below |
 
-`sUCI` and the `AMFIdentifierDeassociation` pair matter most: they are **target identities**.
-An agency correlating product across records gets less to correlate on than the AMF holds,
-and the deassociation record — which reports that an identifier is no longer associated with
-a subject — omits two of the identifiers it is about.
+Eight field names, twenty-six record-field sites. A remedy scoped to the eight would have left
+eighteen of them open with every test green.
 
-None of these is fixed here. Each is a plumbing change in a network function rather than a
-correction to this module, and `sUCI` needs a field added to the AMF's identity snapshot.
+**`uEEndpoint` on `SMFUnsuccessfulProcedure` was already reported when this finding was
+written.** The SMF has populated it from `SMContext.PDUAddress` since the commit that
+introduced the record. The real gap was `SMFPDUSessionModification`, which had no such field —
+the one site the prose did not name. The row was stale because the drift test could not see
+modelled-but-unpopulated fields, so that class lived only in this document.
+
+**Two of the recorded sources were wrong, and neither would have worked.** `aMFID` was
+recorded as coming from `SMContext.ServingNfId`, which is an NF instance UUID; TS 33.128
+defines the field via TS 23.003 clause 2.10.1 as the AMF region, set and pointer — the AMF
+half of a GUAMI. The AMF sends its GUAMI on N11 and `SetCreateData` dropped it, the same
+defect as finding 2's second half. And `fiveGSTAIList` was recorded as "the UE's TAI list";
+the tables ask for the *registration area* — "tracking areas associated with the registration
+area within which the UE is current registered" — not the serving TAI the AMF also holds.
+
+**`sUCI` is built from the NAS octets, not from `AmfUe.Suci`.** That string is what
+`nasConvert.SuciToString` produced, and parsing it back into the record's six members is lossy
+three ways: the routing indicator's `f` padding is stripped so leading zeros are gone, the
+home network public key identifier is rendered with `%d` against an OCTET STRING, and a
+null-scheme scheme output is nibble-swapped with a trailing `f` removed so it need not be an
+even number of hex digits. The AMF now retains the raw mobile identity and the point of
+interception reads the members from it. A SUCI that does not yield clean members produces no
+`sUCI` at all: a missing target identity is a gap an audit can find, a wrong one is a record
+an agency acts on.
+
+**`AMFPositioningInfoTransfer/sUCI` was never a defect against this element.** No point of
+interception emits that record — all four of clause 6.2.2.2.8's trigger events are exchanges
+with an LMF, and this AMF has none. It is `N/A`, and the field is modelled so the record stays
+complete against the module.
 
 ### 4. `location` is inconsistent across the AMF's records — OPEN
 

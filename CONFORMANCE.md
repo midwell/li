@@ -14,7 +14,7 @@ index that duplicates goes stale, which is the failure it exists to stop one lev
 The review dates matter wherever a count travels. A gap below stated as a number is a number
 as of the disposition it came from, and the two dates differ — so anything quoting a count,
 here or on a public page, names the disposition and its date rather than a single date for
-all three. **This index was last reviewed 2026-08-15.**
+all three. **This index was last reviewed 2026-08-26.**
 
 | Interface | Disposition | Made against | What it covers |
 |---|---|---|---|
@@ -29,12 +29,23 @@ named with enough detail that a reader can tell whether it matters to them.
 
 ### IRI records
 
-1. **30 known conditional-field defects**, of 146 conditions judged: **26 MET** — the network
-   function holds the datum and the record does not report it — and **4 BLOCKED**, where the
-   codec cannot express the value. A further **9 are UNTRACED**, which that disposition labels
-   "an admission, not a conclusion". These counts are as of the IRI disposition of
-   **2026-08-20**; `iri/CONFORMANCE.md` carries the same date, so a reader arriving there can
-   tell whether the numbers quoted here are still its own.
+1. **No known conditional-field defects, of 146 conditions judged** — down from 30. The 26
+   `MET` (the network function holds the datum and the record does not report it) and 4
+   `BLOCKED` (the codec could not express the value) were closed on **2026-08-26**; one of the
+   26 turned out never to have been a defect against this element and is now `N/A`, for a
+   record no point of interception emits. **9 remain UNTRACED**, which that disposition labels
+   "an admission, not a conclusion", and that is now the only conditional-field number here
+   above zero. These counts are as of the IRI disposition of **2026-08-26**;
+   `iri/CONFORMANCE.md` carries the same date, so a reader arriving there can tell whether the
+   numbers quoted here are still its own.
+
+   Closing them took a codec change: an OPTIONAL field whose meaningful value is its type's
+   zero could not be emitted at all, so `sUPIUnauthenticated` could encode `true` and never
+   `false`. Two of the gaps were also not where the audit said — `aMFID` came from a GUAMI the
+   SMF was discarding rather than from the NF instance UUID recorded against it, and
+   `fiveGSTAIList` is the registration area rather than the serving TAI. **The prose summary of
+   those gaps disagreed with the enforced list in six places**, which is the same failure this
+   page's own dating rule exists to catch, one level down.
 
    The 2026-08-20 review added one finding and closed it in the same pass — **`handoverCause`
    carried NGAP's numbering rather than TS 33.128's**, so every handover record delivered
