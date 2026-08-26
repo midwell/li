@@ -214,34 +214,31 @@ func goldenSamples() map[string]any {
 // change's intended blast radius, not a standing property, and a stale list is
 // worse than none — it silently blesses whatever the previous change expected.
 //
-// For fix-li-iri-unreported-conditional-fields, phase 1: three samples left a
-// modelled field unpopulated, so the baseline could not have shown a codec change
-// disturbing them. Completing the fixtures moves their vectors. Nothing else may
-// move — no encoding rule changed here, only what the samples carry.
-//
-//   - SMFPDUSessionEstablishment gains uEEndpoint [9]
-//   - SMFUnsuccessfulProcedure gains uEEndpoint [10]
-//   - AMFUEServiceAccept gains fiveGTMSI [4]
-//
-// The first two are populated by the SMF in production and were absent from the
-// baseline only; the third is modelled and optional, and is covered here because
-// the baseline exists to pin the codec, not to mirror what a builder happens to
-// set today.
+// For fix-li-iri-unreported-conditional-fields, phase 2 — the codec gains pointer
+// support so an OPTIONAL field can say "present, and equal to my type's zero
+// value". **Every record is listed, because that change must be completely inert.**
+// It is reachable only from a field declared as a pointer, and no field in li/iri
+// is one yet, so a single moved byte here means the branch is firing where it
+// should not. This is the proof D2 asks for, and it is a proof rather than an
+// assertion only because the list below is exhaustive.
 var expectedUnchanged = map[string]bool{
-	"AMFRegistration":                                 true,
 	"AMFDeregistration":                               true,
-	"AMFLocationUpdate":                               true,
-	"AMFStartOfInterceptionWithRegisteredUE":          true,
-	"AMFUnsuccessfulProcedure":                        true,
 	"AMFIdentifierAssociation":                        true,
 	"AMFIdentifierDeassociation":                      true,
-	"AMFUEPolicyTransfer":                             true,
+	"AMFLocationUpdate":                               true,
 	"AMFPositioningInfoTransfer":                      true,
 	"AMFRANHandoverCommand":                           true,
 	"AMFRANHandoverRequest":                           true,
+	"AMFRegistration":                                 true,
+	"AMFStartOfInterceptionWithRegisteredUE":          true,
+	"AMFUEPolicyTransfer":                             true,
+	"AMFUEServiceAccept":                              true,
+	"AMFUnsuccessfulProcedure":                        true,
+	"SMFPDUSessionEstablishment":                      true,
 	"SMFPDUSessionModification":                       true,
 	"SMFPDUSessionRelease":                            true,
 	"SMFStartOfInterceptionWithEstablishedPDUSession": true,
+	"SMFUnsuccessfulProcedure":                        true,
 }
 
 // TestGoldenSamplesArePopulated is what keeps this file's claim true.

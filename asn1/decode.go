@@ -361,12 +361,27 @@ func (ctx *Context) getExpectedFieldElements(value reflect.Value) ([]expectedFie
 			// CHOICE alternatives as candidate tags for the *field*, when the field
 			// carries the sequence's own tag and the alternatives appear inside it.
 			opts = splitElementChoice(field.Type(), opts)
+			// LOCAL PATCH (omec/li): a pointer field carries its pointee's tag. The
+			// pointer expresses presence, not a type — see the encoder's pointer
+			// support — so tags and decoders are resolved from the pointee, and the
+			// pointer is allocated only once the element is actually matched. Reaching
+			// the wrapper below means the field was on the wire; a field that is absent
+			// is never matched, so its pointer stays nil and reads as absent.
+			fieldType := field.Type()
+			isOptionalPtr := fieldType.Kind() == reflect.Ptr && fieldType != bigIntType
+			if isOptionalPtr {
+				fieldType = fieldType.Elem()
+				opts = splitElementChoice(fieldType, opts)
+			}
 			// Expand choices
 			raw := &rawValue{}
 			if opts.choice == nil {
-				elem, err := ctx.getExpectedElement(raw, field.Type(), opts)
+				elem, err := ctx.getExpectedElement(raw, fieldType, opts)
 				if err != nil {
 					return nil, err
+				}
+				if isOptionalPtr {
+					elem.decoder = allocThenDecode(elem.decoder)
 				}
 				expectedValues = append(expectedValues,
 					expectedFieldElement{elem, field, opts})
@@ -415,6 +430,24 @@ func (ctx *Context) getRawValuesFromBytes(data []byte, max int) ([]*rawValue, er
 		return nil, parseError("too many items for Sequence")
 	}
 	return rawValues, nil
+}
+
+// allocThenDecode adapts a decoder written for T so it can be handed the *T field
+// it belongs to: it allocates the pointee and decodes into that. It runs only when
+// the element was matched on the wire, which is exactly when the field is present.
+func allocThenDecode(inner decoderFunction) decoderFunction {
+	return func(data []byte, value reflect.Value) error {
+		if value.Kind() == reflect.Ptr {
+			if value.IsNil() {
+				if !value.CanSet() {
+					return syntaxError("cannot allocate pointer for %s", value.Type())
+				}
+				value.Set(reflect.New(value.Type().Elem()))
+			}
+			value = value.Elem()
+		}
+		return inner(data, value)
+	}
 }
 
 // matchExpectedValues tries to decode a sequence of raw values based on the

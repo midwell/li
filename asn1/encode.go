@@ -63,8 +63,46 @@ func (ctx *Context) encode(value reflect.Value, opts *fieldOptions) (*rawValue, 
 		return nil, syntaxError("missing value for mandatory field")
 	}
 
+	// LOCAL PATCH (omec/li): pointer support, which is how an OPTIONAL field says
+	// "present, and equal to my type's zero value".
+	//
+	// isEmpty below cannot draw that distinction: it compares against the zero value,
+	// so an OPTIONAL BOOLEAN can encode true and can never encode false. TS 33.128's
+	// sUPIUnauthenticated is exactly that field, and false -- the SUPI *was*
+	// authenticated -- is its ordinary value. Marking it mandatory instead would emit
+	// an authentication status in records carrying no SUPI, asserting something about
+	// an identity that is not there.
+	//
+	// A nil pointer is absent. A non-nil pointer is present and encodes its pointee
+	// even when the pointee is zero. Nothing else changes: this branch is reachable
+	// only from a field declared as a pointer, and a field that is not one takes
+	// exactly the path it did before. That is what makes the fix opt-in, and what lets
+	// the golden vectors show it inert rather than merely assert it.
+	//
+	// One pointer type is excluded: *big.Int, which encodeValue already handles as a
+	// special type below. Dereferencing it here would strip the very type that
+	// dispatch keys on, and an INTEGER would silently encode as an empty SEQUENCE.
+	// The existing suite catches it, which is why this exclusion is a line of code
+	// and not a paragraph of hindsight.
+	pointerPresent := false
+	if value.Kind() == reflect.Ptr && value.Type() != bigIntType {
+		if value.IsNil() {
+			if opts.optional || opts.defaultValue != nil {
+				return nil, nil
+			}
+			return nil, syntaxError("missing value for mandatory field")
+		}
+		value = value.Elem()
+		pointerPresent = true
+	}
+
 	// If a value is missing the default value is used
 	empty := isEmpty(value)
+	// An explicitly-set pointer is never empty, so it is neither omitted below nor
+	// replaced by a DEFAULT: the author said which value they meant.
+	if pointerPresent {
+		empty = false
+	}
 	if opts.defaultValue != nil {
 		if empty && !ctx.der.encoding {
 			defaultValue, err := ctx.newDefaultValue(value.Type(), opts)
