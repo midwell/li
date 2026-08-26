@@ -275,6 +275,22 @@ Recorded at this length because the mistake is instructive: declaring a conditio
 only part of it is unobservable understates what the element owes, and the part that *was*
 observable was the part that mattered.
 
+**One asymmetry is declared rather than fixed, and it is load-bearing.** The pass that re-derives
+duplication distrusts its own record **only when the answer is "off"**: a rule recorded as not
+duplicating, which this element has ever turned on, is re-pushed whatever the record claims. A rule
+recorded as *duplicating*, where the tasking agrees, is skipped.
+
+That is deliberate and it is the right way round — over-collection is the graver harm and must never
+be permanent. The cost is that the opposite failure is not self-correcting from the record alone: an
+element that records a rule as duplicating when it does not know whether the write landed will skip
+that rule on every later pass, for the life of the session, and answer that the task is faultless
+throughout.
+
+This element closes that on the path where it arises, by recording an unconfirmed write as *not*
+duplicating. **The asymmetry itself remains**, so a future path that records what it intended rather
+than what the datapath confirmed reintroduces the condition, and nothing in the pass will catch it.
+Any new caller recording a write it could not confirm must record it as not duplicating.
+
 Closing this needs a read path into the datapath, which needs a command the BESS module does not
 have. It is declared here rather than deferred silently because the requirement is on the element
 regardless of whether the capability exists: a condition whose observation and classification
