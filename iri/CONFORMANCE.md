@@ -379,3 +379,110 @@ that the field carries something other than the NAS container verbatim. Until th
 recorded as a defect against the specification rather than against this codec, and the choice
 of which half to follow is stated here rather than left to be inferred from behaviour.
 
+### 7. The zero exemption in the constraint check had never been swept — FIXED 2026-08-27
+
+**Two of the defects above were delivered through the same hole, and the hole was left open
+after each one.**
+
+`constraints.go` exempts zero from the enumeration range check, and correctly for optional
+members: an unset one reads as zero in Go and the codec omits it, so refusing zero would refuse
+every record that legitimately leaves one out. Finding 5 records what that cost —
+`handoverCause` as NGAP's `unspecified(0)` — and `handoverType` cost the same again: it is
+mandatory, so a zero is not a wrong value but an unreadable record, and every intra-5GS handover
+record was discarded on receipt. Both were found by decoding a delivered record against the
+published module.
+
+The escape hatch, `mandatoryEnums`, held exactly the two entries those two defects had forced.
+The rule beside it said what belonged there — "a type belongs here when it is mandatory in every
+record that carries it" — and nobody had run it. **Two entries added on two occasions are two
+defects delivered, not a list being kept.**
+
+**The sweep.** Every `ENUMERATED` in `TS33128Payloads.asn` numbered from one, in a field an
+emitted record carries without `OPTIONAL`: fifteen sites across eleven types, of which two were
+guarded. The nine that were not:
+
+| Type | Mandatory in | Guarded by |
+|---|---|---|
+| `AMFDirection` | AMFDeregistration | type |
+| `AMFRegistrationResult` | AMFRegistration, AMFStartOfInterceptionWithRegisteredUE | type |
+| `AMFFailedProcedureType` | AMFUnsuccessfulProcedure | type |
+| `SMFFailedProcedureType` | SMFUnsuccessfulProcedure | type |
+| `PDUSessionType` | SMFPDUSessionEstablishment, SMFStartOfInterceptionWithEstablishedPDUSession | type |
+| `Initiator` | SMFUnsuccessfulProcedure | type |
+| `AccessType` | AMFDeregistration | record and field |
+| `FiveGSMRequestType` | SMFPDUSessionEstablishment, SMFPDUSessionModification, SMFStartOfInterceptionWithEstablishedPDUSession | record and field |
+| `AMFRegistrationType` | AMFRegistration | record and field |
+
+**Two mechanisms, because the exception has two shapes.** The last three are mandatory in one
+record and `OPTIONAL` in another — `AccessType` in four SMF records, `FiveGSMRequestType` in
+`SMFUnsuccessfulProcedure`, `AMFRegistrationType` in
+`AMFStartOfInterceptionWithRegisteredUE`. `validateConstraints` runs before the codec, so it sees
+an unset optional member as zero before the codec would have omitted it: guarding those by type
+would refuse four SMF records their absent `accessType`, trading one silent defect for another.
+So the rule is keyed by record and field for those, and stays keyed by type for the six, where a
+named type is inherited by any record added later that reuses it.
+
+**Not guarded, and why.** The same sweep flags `PDUSessionID`, `RoutingIndicator`,
+`ProtectionSchemeID`, `AMFPointer`, `AMFRegionID`, `AMFSetID`, `FiveGMMCause` and `FiveGSMCause`.
+Every one is an `INTEGER` whose range *includes* zero — `ProtectionSchemeID(0)` is the null
+scheme and this deployment emits it on every SUCI — so guarding them would refuse conformant
+records. The distinction is the module's, not a judgement call.
+
+`FiveGSMCause` is the interesting one and is recorded rather than fixed. TS 33.128 defines it as
+`INTEGER (0..255)`, and `SMFUnsuccessfulProcedure` carries it as mandatory; TS 24.501's 5GSM
+cause values start at 8, so zero is not a cause the specification defines. But the module's range
+is what a receiver validates against, so refusing zero here would refuse a record a conformant
+mediation function accepts — moving a loss this element can see to one it cannot. A tighter range
+would be a discrepancy recorded against TS 33.128, not a fix to this codec, and no path in this
+element produces zero: the SMF's three entry points take the cause from `smferrors.ErrorCause` or
+from a `nasMessage` constant. The same reasoning covers `FiveGMMCause` in the AMF.
+
+**What was reachable.** No delivered record is known to have been wrong. Of the nine, five
+builders return constants or have a `default` arm returning a defined value; the reachable ones
+take the value as a parameter, and today's callers pass defined values. The nearest thing to a
+live path is `AMFDeregistration/accessType`: `DeregistrationScope` returns 0 for a NAS access
+type it does not recognise, and each of its two callers is expected to notice and substitute the
+access the message arrived on. A third caller written without that check would have emitted a
+mandatory zero.
+
+**What an agency will see.** Nothing, unless a builder produces a zero — in which case the record
+is refused and reported here rather than encoded and discarded at the far end. Every golden
+vector is unchanged, which is the check that no conformant record moved.
+
+**And the class is closed structurally.** The sweep is a test whose source of truth is the
+published module, so a record type added later, or a field that becomes mandatory later, cannot
+join the exemption unremarked. Three further directions are asserted: a type-keyed entry that
+starts refusing an optional carrier, a guarded type with no `enumConstraints` bounds to run under
+(the guard would never be consulted), and a stale exclusion. `AMFRegistrationResult` is the entry
+the first of those will catch — the module gives it to `AMFUEConfigurationUpdate` as `OPTIONAL`, a
+record this project does not emit.
+
+**`PDUSessionType`'s correspondence is now asserted.** `smf/lawfulintercept` built the field as
+`iri.PDUSessionType(sc.SelectedPDUSessionType)` — a direct cast from the NAS value, correct
+because TS 24.501 and TS 33.128 happen to number the concept identically, with nothing holding it
+there. That is the construct that produced both handover defects. The cast stays; the agreement
+is asserted member by member against both definitions in
+`TestPDUSessionTypeCorrespondsToTS24501`, so a later release of either fails a test rather than
+reaching an agency.
+
+**A module-versus-payload-table discrepancy, recorded.** `TS33128Payloads.asn` gives
+`SMFPDUSessionModification/requestType` no `OPTIONAL`, and table 6.2.3-2 marks only
+`gTPTunnelInfo` **M**. Both point the same way here — this project populates the field and now
+guards it — and the module is what a receiver validates against, so the module is what the guard
+follows. Listed with finding 5's `CauseRadioNetwork` discrepancy as a place the two halves of the
+specification disagree.
+
+**The conversion sites are enumerated, in both network functions.** `PDUSessionType` was found by
+reading; the two before it were found by a delivered record being wrong. None of those is a
+check, so `amf/lawfulintercept` and `smf/lawfulintercept` each carry one:
+every conversion `iri.T(x)` whose argument is not one of `li/iri`'s own constants must be
+recorded as a value *carried* (no second numbering) or *mapped* (an enumeration, naming the
+assertion that covers it, which must exist). Forty-two sites over thirty-one targets in the AMF,
+thirty-one over twenty-four in the SMF; eight of them enumerated. It keys on the shape rather
+than on a list of `li`'s enumerations, because such a list maintained in a network function is
+the thing that goes stale.
+
+It cannot see an *implicit* conversion — a function declared to return `iri.AccessType` that
+writes `return 0`, which `DeregistrationScope` deliberately does. The encode-time guard above is
+what covers those, and the two are complementary: one catches an unasserted correspondence, the
+other catches a value the enumeration does not define however it got there.
