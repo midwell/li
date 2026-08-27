@@ -436,13 +436,15 @@ func TestTheEnumSweepIsNotVacuous(t *testing.T) {
 			t.Errorf("%s is not among the parsed ENUMERATEDs and the module defines it", name)
 		}
 	}
-	// Zero-based enumerations must be excluded, or the sweep would demand a guard on fields
-	// where zero is a defined member. TS 33.128 has six.
-	for _, name := range []string{"TargetIdentifierProvenance"} {
-		if _, ok := enums[name]; ok {
-			continue
+	// And a zero-*based* enumeration must be excluded, or the sweep would demand a guard on a
+	// field where zero is a defined member — refusing a value the specification gives a meaning.
+	// TS 33.128 has six; these two are the ones a 5G core could plausibly grow a use for.
+	for _, name := range []string{"EstablishmentStatus", "RequestIndication"} {
+		if e, ok := enums[name]; ok {
+			t.Errorf("%s is numbered from %d and the sweep treated it as numbered from one; a "+
+				"field of that type would be required to be non-zero, refusing a value the "+
+				"module defines", name, e.lowest)
 		}
-		t.Logf("%s is not numbered from one, as expected", name)
 	}
 
 	sites := mandatoryEnumSweep(t)
