@@ -14,7 +14,7 @@ index that duplicates goes stale, which is the failure it exists to stop one lev
 The review dates matter wherever a count travels. A gap below stated as a number is a number
 as of the disposition it came from, and the two dates differ — so anything quoting a count,
 here or on a public page, names the disposition and its date rather than a single date for
-all three. **This index was last reviewed 2026-08-26.**
+all three. **This index was last reviewed 2026-08-27.**
 
 | Interface | Disposition | Made against | What it covers |
 |---|---|---|---|
@@ -35,9 +35,13 @@ named with enough detail that a reader can tell whether it matters to them.
    26 turned out never to have been a defect against this element and is now `N/A`, for a
    record no point of interception emits. **9 remain UNTRACED**, which that disposition labels
    "an admission, not a conclusion", and that is now the only conditional-field number here
-   above zero. These counts are as of the IRI disposition of **2026-08-26**;
+   above zero. These counts are as of the IRI disposition of **2026-08-27**;
    `iri/CONFORMANCE.md` carries the same date, so a reader arriving there can tell whether the
    numbers quoted here are still its own.
+
+   The date moved to the 27th for a correction rather than a count: the first build of the
+   `sUCI` fix reported `schemeOutput` in the wrong representation, and finding 3 records it.
+   The counts did not change.
 
    Closing them took a codec change: an OPTIONAL field whose meaningful value is its type's
    zero could not be emitted at all, so `sUPIUnauthenticated` could encode `true` and never

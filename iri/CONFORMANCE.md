@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 published with it. Both are cited below; where they disagree, that disagreement is itself
 recorded, because one of the findings here lives exactly in the gap between them.
 
-**This disposition was last reviewed 2026-08-26.** The specification revision above says
+**This disposition was last reviewed 2026-08-27.** The specification revision above says
 what was read; this says when. Any count quoted from here — in `../CONFORMANCE.md`, or on a
 public compliance page — is a count as of that date, and carrying the date in the document
 the count came from is what lets a reader check it from this end rather than only from the
@@ -207,7 +207,7 @@ Marking the field mandatory was also rejected: it would emit an authentication s
 records carrying no SUPI, asserting something about an identity that is not there. Absent now
 means the record carries no SUPI, and `false` means the SUPI was authenticated.
 
-### 3. Identity a POI holds and does not report — FIXED 2026-08-26
+### 3. Identity a POI holds and does not report — FIXED 2026-08-26, corrected 2026-08-27
 
 Fields held by the emitting network function and reported by nobody. These are the "quieter
 half" this audit went looking for: no decoder can see them, because a record that omits a
