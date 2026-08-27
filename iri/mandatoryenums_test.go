@@ -287,8 +287,10 @@ func TestEveryMandatoryEnumeratedFieldRefusesZero(t *testing.T) {
 	}
 
 	swept := map[string]bool{}
+	guarded := map[string]bool{}
 	for _, s := range sites {
 		swept[s.key()] = true
+		guarded[s.goKey()] = true
 
 		if why, excluded := unguardedMandatoryEnums[s.key()]; excluded {
 			if why == "" {
@@ -318,6 +320,20 @@ func TestEveryMandatoryEnumeratedFieldRefusesZero(t *testing.T) {
 			t.Errorf("%s is recorded as an unguarded mandatory enumerated field and the sweep "+
 				"no longer finds one; remove the entry rather than leaving an exemption lying "+
 				"where a future field can find it", key)
+		}
+	}
+
+	// And the field-keyed guard's own stale direction, which is the mechanism's failure applied
+	// to itself: an entry naming a field the module marks OPTIONAL refuses that record its
+	// absence, exactly what keying by record and field was introduced to avoid.
+	// TestAnUnsetOptionalEnumeratedFieldStillEncodes would catch it too, by encoding; this says
+	// so against the module, which is where the answer is.
+	for key := range mandatoryEnumFields {
+		if !guarded[key] {
+			t.Errorf("mandatoryEnumFields names %s and the module does not make that field "+
+				"mandatory in that record; the guard then refuses the record its absent "+
+				"optional member. Remove the entry, or the module has moved and the sweep is "+
+				"the thing to re-read", key)
 		}
 	}
 }
