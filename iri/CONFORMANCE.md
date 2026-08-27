@@ -247,13 +247,26 @@ area within which the UE is current registered" — not the serving TAI the AMF 
 
 **`sUCI` is built from the NAS octets, not from `AmfUe.Suci`.** That string is what
 `nasConvert.SuciToString` produced, and parsing it back into the record's six members is lossy
-three ways: the routing indicator's `f` padding is stripped so leading zeros are gone, the
-home network public key identifier is rendered with `%d` against an OCTET STRING, and a
-null-scheme scheme output is nibble-swapped with a trailing `f` removed so it need not be an
-even number of hex digits. The AMF now retains the raw mobile identity and the point of
-interception reads the members from it. A SUCI that does not yield clean members produces no
-`sUCI` at all: a missing target identity is a gap an audit can find, a wrong one is a record
-an agency acts on.
+two ways: the routing indicator's `f` padding is stripped so leading zeros are gone, and the
+home network public key identifier is rendered with `%d` against an OCTET STRING. The AMF now
+retains the raw mobile identity and the point of interception reads the members from it. A
+SUCI that does not yield clean members produces no `sUCI` at all: a missing target identity is
+a gap an audit can find, a wrong one is a record an agency acts on.
+
+**`schemeOutput` is not the octets, and the first implementation shipped it as though it
+were.** Table 8.3.5-1 defines the field as *"the characters resulting as the output of the
+permanent identifier with the protection scheme applied"*, and under the null scheme those
+characters are the MSIN's digits. NAS carries them nibble-swapped, so carrying the octets
+through transposes every pair: MSIN `0100007488` went out as `1000004788`, a well-formed
+record naming a subscriber who does not exist. Under any other protection scheme the output is
+ciphertext with no characters to speak of, and the octets stand.
+
+**Nothing in this project's own test suite could see that**, and that is the finding rather
+than the bug. The encoder accepted it, the record was structurally valid, the field was
+present and non-empty, and every unit test asserting "the SUCI is reported" passed. It was
+caught by decoding a delivered record against the module 3GPP publishes and reading the
+subscriber it named — which is the argument for the cluster run being part of the remedy and
+not a formality after it.
 
 **`AMFPositioningInfoTransfer/sUCI` was never a defect against this element.** No point of
 interception emits that record — all four of clause 6.2.2.2.8's trigger events are exchanges
