@@ -4,6 +4,7 @@
 package iri
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"reflect"
@@ -39,28 +40,12 @@ import (
 //
 // Keyed `Record.field` with the module's own spelling of both.
 //
-// The three entries here are all one thing: a type the module makes mandatory in one record and
-// OPTIONAL in another, which mandatoryEnums cannot express. Guarding those by type would refuse
-// the optional carriers their absence, so they wait for the rule to be keyed by record and
-// field — a change to the mechanism rather than another line in the map, and a separate commit
-// for that reason.
-var unguardedMandatoryEnums = map[string]string{
-	// AccessType ::= ENUMERATED { threeGPPAccess(1), ... } — mandatory here, OPTIONAL in the
-	// four SMF records that carry it.
-	"AMFDeregistration.accessType": "mixed carrier: OPTIONAL in SMFPDUSessionEstablishment, " +
-		"SMFPDUSessionModification, SMFStartOfInterceptionWithEstablishedPDUSession and " +
-		"SMFUnsuccessfulProcedure, so a type-keyed guard would refuse those four their absence",
-	// FiveGSMRequestType, lowest initialRequest(1) — mandatory in three SMF records, OPTIONAL
-	// in SMFUnsuccessfulProcedure.
-	"SMFPDUSessionEstablishment.requestType": "mixed carrier: OPTIONAL in SMFUnsuccessfulProcedure",
-	"SMFPDUSessionModification.requestType":  "mixed carrier: OPTIONAL in SMFUnsuccessfulProcedure",
-	"SMFStartOfInterceptionWithEstablishedPDUSession.requestType": "mixed carrier: OPTIONAL in " +
-		"SMFUnsuccessfulProcedure",
-	// AMFRegistrationType, lowest initial(1) — mandatory here, OPTIONAL in
-	// AMFStartOfInterceptionWithRegisteredUE.
-	"AMFRegistration.registrationType": "mixed carrier: OPTIONAL in " +
-		"AMFStartOfInterceptionWithRegisteredUE",
-}
+// Empty, and the emptiness is a result rather than a placeholder: every module-mandatory
+// enumerated field of every emitted record is now guarded, by type where the type is exactly
+// the right key and by record-and-field where it is not. The map stays so the next exclusion
+// has an established place to be written down, and so writing one is a deliberate act — the
+// same reason asn1_drift_test.go keeps `knownConditionalDefects` after emptying it.
+var unguardedMandatoryEnums = map[string]string{}
 
 // asn1Enum is one ENUMERATED the module declares, with the lowest value it defines.
 type asn1Enum struct {
@@ -225,6 +210,10 @@ type mandatoryEnumSite struct {
 // key is how unguardedMandatoryEnums names a site: the module's own spelling of both halves.
 func (s mandatoryEnumSite) key() string { return s.record + "." + s.field }
 
+// goKey is how mandatoryEnumFields names a site: the Go names, because that is what the
+// constraint walk has in hand when it reaches the field.
+func (s mandatoryEnumSite) goKey() string { return s.record + "." + s.goField }
+
 // mandatoryEnumSweep derives, from the module, every field of every emitted record that carries
 // no OPTIONAL and whose type is an ENUMERATED numbered from one.
 func mandatoryEnumSweep(t *testing.T) []mandatoryEnumSite {
@@ -284,8 +273,8 @@ func mandatoryEnumSweep(t *testing.T) []mandatoryEnumSite {
 // For every field the module makes mandatory in a record this package emits, whose type is an
 // ENUMERATED numbered from one: zero is a value the field's own definition does not define, and
 // there is no absence for it to mean. So the guard must reach it — through mandatoryEnums where
-// the type is mandatory in every emitted record that carries it, or through a recorded
-// exclusion where the type-keyed map cannot express it.
+// the type is mandatory in every emitted record that carries it, or through mandatoryEnumFields
+// where it is not.
 //
 // A field that reaches neither is what `handoverType` was: emitted as zero, structurally
 // well-formed, and refused outright by a receiver validating against this same module. Every
@@ -310,13 +299,14 @@ func TestEveryMandatoryEnumeratedFieldRefusesZero(t *testing.T) {
 			continue
 		}
 
-		if !mandatoryEnums[s.goType] {
+		if !mandatoryEnums[s.goType] && !mandatoryEnumFields[s.goKey()] {
 			t.Errorf("%s is %s, whose lowest defined value is %d, and the module does not mark "+
 				"the field OPTIONAL — so a zero there is a value the enumeration does not have "+
 				"in a field the record cannot omit, and a receiver validating against this "+
-				"module refuses the whole record. Add %s to mandatoryEnums; if zero is somehow "+
-				"legitimate here, record why in unguardedMandatoryEnums",
-				s.key(), s.typeName, s.lowest, s.goType.Name())
+				"module refuses the whole record. Add %s to mandatoryEnums if it is mandatory in "+
+				"every emitted record that carries it, or %q to mandatoryEnumFields if it is "+
+				"not; if zero is somehow legitimate here, record why in unguardedMandatoryEnums",
+				s.key(), s.typeName, s.lowest, s.goType.Name(), s.goKey())
 		}
 	}
 
@@ -343,8 +333,6 @@ func TestEveryMandatoryEnumeratedFieldRefusesZero(t *testing.T) {
 // which trades one silent defect for another.
 //
 // So: a type-keyed entry is only correct while no emitted record carries that type optionally.
-// The three that fail that test are recorded in unguardedMandatoryEnums until the rule can be
-// keyed by record and field.
 // `AMFRegistrationResult` is the entry this will catch first — the module gives it to
 // AMFUEConfigurationUpdate as OPTIONAL, a record this package does not emit today.
 func TestNoTypeKeyedGuardRefusesAnOptionalCarrier(t *testing.T) {
@@ -376,9 +364,9 @@ func TestNoTypeKeyedGuardRefusesAnOptionalCarrier(t *testing.T) {
 			if mandatoryEnums[sf.Type] {
 				t.Errorf("%s/%s is OPTIONAL in the module and %s is guarded by type, so this "+
 					"record can no longer omit the member: the constraint walk sees an unset "+
-					"optional field as zero, before the codec would have omitted it. Guard it "+
-					"per record and field at its mandatory sites instead",
-					record, f.name, sf.Type.Name())
+					"optional field as zero, before the codec would have omitted it. Move %s "+
+					"out of mandatoryEnums and into mandatoryEnumFields at its mandatory sites",
+					record, f.name, sf.Type.Name(), sf.Type.Name())
 			}
 		}
 	}
@@ -386,8 +374,8 @@ func TestNoTypeKeyedGuardRefusesAnOptionalCarrier(t *testing.T) {
 
 // TestEveryZeroGuardHasBoundsToRunUnder is the present-but-dead check.
 //
-// constraintOf consults mandatoryEnums *inside* the enumConstraints
-// block, so a guarded type with no entry there is never looked at: the map says the field is
+// constraintOf consults both guard maps *inside* the enumConstraints block, so a guarded type
+// with no entry there is never looked at: the map says the field is
 // guarded, the walk never reaches the guard, and the record goes out exactly as before. That is
 // the same failure as no guard at all, with the appearance of one — and `RATType` is a live
 // example of an ENUMERATED this package declares and enumConstraints does not carry.
@@ -397,6 +385,35 @@ func TestEveryZeroGuardHasBoundsToRunUnder(t *testing.T) {
 			t.Errorf("%s is in mandatoryEnums and has no enumConstraints entry, so constraintOf "+
 				"never consults the guard: the zero it is supposed to refuse is emitted exactly "+
 				"as before, and the map claims otherwise", typ.Name())
+		}
+	}
+
+	for key := range mandatoryEnumFields {
+		record, field, ok := strings.Cut(key, ".")
+		if !ok {
+			t.Errorf("mandatoryEnumFields key %q is not Record.Field, so it matches nothing the "+
+				"walk produces", key)
+
+			continue
+		}
+		sample, isEmitted := goldenSamples()[record]
+		if !isEmitted {
+			t.Errorf("mandatoryEnumFields names record %s, which this package does not emit; a "+
+				"guard on a record nothing builds is a guard that never runs", record)
+
+			continue
+		}
+		sf, ok := reflect.TypeOf(sample).FieldByName(field)
+		if !ok {
+			t.Errorf("mandatoryEnumFields names %s and %s has no such field — the key is what "+
+				"walkConstrained composes from the struct type and the field name, so a "+
+				"misspelling is a guard that silently never fires", key, record)
+
+			continue
+		}
+		if _, ok := enumConstraints[sf.Type]; !ok {
+			t.Errorf("%s is guarded and its type %s has no enumConstraints entry, so constraintOf "+
+				"never consults the guard", key, sf.Type.Name())
 		}
 	}
 }
@@ -496,5 +513,85 @@ func TestAZeroInEachMandatoryEnumeratedFieldIsRefused(t *testing.T) {
 				t.Errorf("refusal is %q, want it to name %s", err, want)
 			}
 		})
+	}
+}
+
+// TestAnUnsetOptionalEnumeratedFieldStillEncodes is the point of keying the rule by record and
+// field rather than by type, and it has to be a test rather than a comment.
+//
+// The wrong fix for the three mixed carriers is to add them to mandatoryEnums. It looks
+// identical from the map — one more line, same shape as the six — and it silently refuses every
+// record that omits an optional `accessType`, `requestType` or `registrationType`. That is not a
+// smaller version of the defect this change closes; it is a larger one, because it costs records
+// on the ordinary path rather than on a path nobody has walked.
+//
+// Derived rather than listed: every optional field of every emitted record whose type is an
+// ENUMERATED numbered from one, unset, must still encode *and* must be absent from the DER —
+// asserted as a strictly shorter encoding, since an omitted member takes its tag with it.
+func TestAnUnsetOptionalEnumeratedFieldStillEncodes(t *testing.T) {
+	ctx := NewContext()
+	enums := enumsNumberedFromOne(t)
+	sequences := sequenceFieldTypes(t)
+
+	cases := 0
+	for record, sample := range goldenSamples() {
+		fields, ok := sequences[record]
+		if !ok {
+			continue
+		}
+		goType := reflect.TypeOf(sample)
+		modelled := modelledTags(t, goType)
+		for _, f := range fields {
+			if !f.optional {
+				continue
+			}
+			if _, isEnum := enums[f.typeName]; !isEnum {
+				continue
+			}
+			goField, isModelled := modelled[f.tag]
+			if !isModelled {
+				continue
+			}
+			sf, ok := goType.FieldByName(goField)
+			if !ok || sf.Type.Kind() != reflect.Int {
+				continue
+			}
+
+			cases++
+			t.Run(record+"."+f.name, func(t *testing.T) {
+				populated := encodeGolden(t, sample)
+
+				v := reflect.New(goType).Elem()
+				v.Set(reflect.ValueOf(sample))
+				field := v.FieldByName(goField)
+				if field.Int() == 0 {
+					t.Fatalf("the golden sample already leaves %s.%s unset, so this case asserts "+
+						"nothing", record, goField)
+				}
+				field.SetInt(0)
+
+				der, err := EncodeXIRI(ctx, v.Interface())
+				if err != nil {
+					t.Fatalf("a record leaving its OPTIONAL %s unset was refused: %v — zero is "+
+						"how an unset optional enumerated member is spelled, and refusing it "+
+						"refuses every record that legitimately omits one. If %s was just added "+
+						"to mandatoryEnums, it belongs in mandatoryEnumFields at its mandatory "+
+						"sites instead", f.name, err, sf.Type.Name())
+				}
+				if got := hex.EncodeToString(der); len(got) >= len(populated) {
+					t.Errorf("%s.%s unset encoded to %d hex digits and the populated record to "+
+						"%d; an omitted member takes its tag with it, so this one was emitted as "+
+						"a zero the enumeration does not define rather than left out",
+						record, f.name, len(got), len(populated))
+				}
+			})
+		}
+	}
+
+	// The three mixed carriers account for six of these; a run that found none would pass
+	// without exercising the distinction the mechanism exists for.
+	if cases < 6 {
+		t.Errorf("found %d optional enumerated fields to unset across the emitted records; there "+
+			"were eleven when this was written, so the scan is now looking at something else", cases)
 	}
 }

@@ -211,6 +211,59 @@ var (
 		reflect.TypeOf(Initiator(0)): true,
 	}
 
+	// mandatoryEnumFields are the enumerated fields for which zero is wrong that mandatoryEnums
+	// cannot express, keyed by the record and the field rather than by the type.
+	//
+	// **The type-keyed map is not a weaker version of this one — it is the stronger one where it
+	// applies**, for the reason the file comment gives: a named type is inherited and a field
+	// name is not, so a record added later that reuses `PDUSessionType` gets the guard without
+	// anybody remembering it. What it cannot express is a type the module makes mandatory in one
+	// record and OPTIONAL in another.
+	//
+	// That distinction matters because validateConstraints runs *before* ctx.Encode. It walks
+	// the whole record and sees an unset optional member as zero, before the codec would have
+	// omitted it — so a type in mandatoryEnums refuses zero in every record carrying that type,
+	// including one where zero is how absence is spelled. `AccessType` is optional in four SMF
+	// records and mandatory in one; guarding it by type would refuse those four their absence,
+	// which trades one silent defect for another.
+	//
+	// The existing map had been adequate without anyone noticing its limit because the two
+	// defects that created it — `handoverType` and the `Cause` arms — happen to be the two cases
+	// it can express.
+	//
+	// Derived from the module and asserted against it by
+	// TestEveryMandatoryEnumeratedFieldRefusesZero, in both directions: an entry naming a field
+	// the module marks OPTIONAL fails, and so does a mandatory field named by neither map.
+	mandatoryEnumFields = map[string]bool{
+		// AccessType, lowest threeGPPAccess(1). Mandatory in AMFDeregistration (table
+		// 6.2.2.2.3-1, cardinality 1) and OPTIONAL in the four SMF records that carry it.
+		//
+		// This is the one of the three where zero is a *reachable* value rather than a
+		// hypothetical: amf/lawfulintercept's DeregistrationScope returns 0 for a NAS access
+		// type it does not recognise, and each of its two callers is expected to notice and
+		// substitute the arrival access. A caller written without that check emits a
+		// mandatory zero, and the guard is what makes that a refusal here rather than a
+		// discard at the far end.
+		"AMFDeregistration.AccessType": true,
+
+		// FiveGSMRequestType, lowest initialRequest(1). Mandatory in the three session
+		// records and OPTIONAL in SMFUnsuccessfulProcedure, where the SMF reports it when it
+		// knows the request type and omits it otherwise.
+		//
+		// SMFPDUSessionModification is a module-versus-payload-table discrepancy, recorded in
+		// CONFORMANCE.md: `TS33128Payloads.asn` gives requestType no OPTIONAL, and table
+		// 6.2.3-2 marks only gTPTunnelInfo M. The module is what a receiver validates
+		// against, so the module is what this follows.
+		"SMFPDUSessionEstablishment.RequestType":                      true,
+		"SMFPDUSessionModification.RequestType":                       true,
+		"SMFStartOfInterceptionWithEstablishedPDUSession.RequestType": true,
+
+		// AMFRegistrationType, lowest initial(1). Mandatory in AMFRegistration and OPTIONAL in
+		// AMFStartOfInterceptionWithRegisteredUE — where the AMF may be activating interception
+		// for a UE whose registration it never saw, so it has no registration type to report.
+		"AMFRegistration.RegistrationType": true,
+	}
+
 	// enumConstraints are the ENUMERATED types whose permitted values this module declares.
 	//
 	// Separate from intConstraints because the refusal has to say something different: an
@@ -270,18 +323,24 @@ var (
 // what must not be possible is adding a record that skips the check. It runs once per record
 // on the X2 path, which is per signalling event and not per packet.
 func validateConstraints(event any) error {
-	return walkConstrained(reflect.ValueOf(event), reflect.TypeOf(event).String())
+	return walkConstrained(reflect.ValueOf(event), reflect.TypeOf(event).String(), false)
 }
 
 // walkConstrained descends v, applying whatever constraint its type carries and then
 // recursing into its members. path names where a failure was found, so a refusal says which
 // field of which record rather than only that something was wrong.
-func walkConstrained(v reflect.Value, path string) error {
+//
+// zeroForbidden is what the parent struct decided about *this* field: mandatoryEnumFields
+// keyed by the enclosing type's name and the field's, for the enumerations whose meaning
+// depends on which record carries them. It is a parameter rather than a lookup inside
+// constraintOf because a value does not know which field it came from — which is the same
+// reason the type-keyed tables cannot express these three.
+func walkConstrained(v reflect.Value, path string, zeroForbidden bool) error {
 	if !v.IsValid() {
 		return nil
 	}
 
-	if err := constraintOf(v, path); err != nil {
+	if err := constraintOf(v, path, zeroForbidden); err != nil {
 		return err
 	}
 
@@ -291,7 +350,9 @@ func walkConstrained(v reflect.Value, path string) error {
 			return nil
 		}
 
-		return walkConstrained(v.Elem(), path)
+		// The flag carries through: a pointer expresses presence, so what the field said
+		// about its value still applies to the value behind it.
+		return walkConstrained(v.Elem(), path, zeroForbidden)
 
 	case reflect.Struct:
 		t := v.Type()
@@ -299,7 +360,9 @@ func walkConstrained(v reflect.Value, path string) error {
 			if !t.Field(i).IsExported() {
 				continue
 			}
-			if err := walkConstrained(v.Field(i), path+"."+t.Field(i).Name); err != nil {
+			name := t.Field(i).Name
+			if err := walkConstrained(v.Field(i), path+"."+name,
+				mandatoryEnumFields[t.Name()+"."+name]); err != nil {
 				return err
 			}
 		}
@@ -311,7 +374,8 @@ func walkConstrained(v reflect.Value, path string) error {
 			return nil
 		}
 		for i := range v.Len() {
-			if err := walkConstrained(v.Index(i), fmt.Sprintf("%s[%d]", path, i)); err != nil {
+			if err := walkConstrained(v.Index(i), fmt.Sprintf("%s[%d]", path, i),
+				zeroForbidden); err != nil {
 				return err
 			}
 		}
@@ -320,8 +384,9 @@ func walkConstrained(v reflect.Value, path string) error {
 	return nil
 }
 
-// constraintOf applies the restriction v's own type carries, if it has one.
-func constraintOf(v reflect.Value, path string) error {
+// constraintOf applies the restriction v's own type carries, if it has one. zeroForbidden is
+// the enclosing field's verdict on zero; see walkConstrained.
+func constraintOf(v reflect.Value, path string, zeroForbidden bool) error {
 	t := v.Type()
 
 	if c, ok := octetConstraints[t]; ok {
@@ -361,7 +426,11 @@ func constraintOf(v reflect.Value, path string) error {
 		// see. The comment that used to stand here claimed the exemption cost "exactly one
 		// value, and not one that carries the risk" — the risk was exactly that value, because
 		// a peer's enumeration numbered from zero puts its *first* member there.
-		if n == 0 && !mandatoryEnums[t] {
+		//
+		// Two maps rather than one because the exception has two shapes: a type mandatory
+		// wherever it appears, and a field mandatory in this record and optional in the next.
+		// See mandatoryEnumFields for why the second cannot be folded into the first.
+		if n == 0 && !mandatoryEnums[t] && !zeroForbidden {
 			return nil
 		}
 		if n < c.min || n > c.max {
