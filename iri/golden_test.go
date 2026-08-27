@@ -263,18 +263,32 @@ func goldenSamples() map[string]any {
 // change's intended blast radius, not a standing property, and a stale list is
 // worse than none — it silently blesses whatever the previous change expected.
 //
-// For fix-li-iri-unreported-conditional-fields, phase 4 — thirteen records gain the
-// conditional identity members of CONFORMANCE.md findings 2 and 3, so thirteen
-// vectors move. These four are every record that gained nothing, and they are the
-// check that the additions stayed where they were aimed.
+// For fix-li-mandatory-enum-zero-exemption it is **every record**, and that is the
+// whole of the claim: this change refuses records, and must not alter one that was
+// already valid. A moved vector here means a new zero guard is firing on a
+// conformant record — a delivered record turned into an undelivered one, which is
+// the risk the change's own design names.
 //
-// Phase 2's list was every record, because the codec change had to be inert. That
-// distinction is the reason this list is rewritten rather than appended to.
+// The previous list was four records, for a change that deliberately moved thirteen.
+// That distinction is the reason this list is rewritten rather than appended to.
 var expectedUnchanged = map[string]bool{
-	"AMFUEServiceAccept":    true,
-	"AMFRANHandoverCommand": true,
-	"AMFRANHandoverRequest": true,
-	"SMFPDUSessionRelease":  true,
+	"AMFRegistration":                                 true,
+	"AMFDeregistration":                               true,
+	"AMFLocationUpdate":                               true,
+	"AMFStartOfInterceptionWithRegisteredUE":          true,
+	"AMFUnsuccessfulProcedure":                        true,
+	"AMFIdentifierAssociation":                        true,
+	"AMFIdentifierDeassociation":                      true,
+	"AMFRANHandoverCommand":                           true,
+	"AMFRANHandoverRequest":                           true,
+	"AMFUEPolicyTransfer":                             true,
+	"AMFUEServiceAccept":                              true,
+	"AMFPositioningInfoTransfer":                      true,
+	"SMFPDUSessionEstablishment":                      true,
+	"SMFPDUSessionModification":                       true,
+	"SMFPDUSessionRelease":                            true,
+	"SMFStartOfInterceptionWithEstablishedPDUSession": true,
+	"SMFUnsuccessfulProcedure":                        true,
 }
 
 // TestGoldenSamplesArePopulated is what keeps this file's claim true.

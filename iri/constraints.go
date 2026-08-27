@@ -159,11 +159,18 @@ var (
 	// refused it outright: `handoverType` is mandatory, so a zero is not a wrong value but an
 	// unreadable record, and every intra-5GS handover record was discarded on receipt.
 	//
-	// A type belongs here when it is mandatory in every record that carries it, so zero can
-	// only mean the element wrote a value its own definition does not have. Being wrong in this
-	// direction costs a record the receiver would have refused anyway; being wrong in the other
-	// costs every record that omits an optional member, which is why the default stays the
-	// exemption and entries are added deliberately.
+	// A type belongs here when it is mandatory in every record this package emits that
+	// carries it, so zero can only mean the element wrote a value its own definition does not
+	// have. Being wrong in this direction costs a record the receiver would have refused
+	// anyway; being wrong in the other costs every record that omits an optional member, which
+	// is why the default stays the exemption and entries are added deliberately.
+	//
+	// **And the rule above had never been run.** Two entries, added once per defect, were the
+	// whole of it. Sweeping the module for every ENUMERATED numbered from one that sits in a
+	// field a record cannot omit found nine more — six here and three that this map cannot
+	// express, in mandatoryEnumFields below. The sweep is now
+	// TestEveryMandatoryEnumeratedFieldRefusesZero, so the list cannot fall behind the record
+	// definitions the way it already had.
 	mandatoryEnums = map[reflect.Type]bool{
 		reflect.TypeOf(HandoverType(0)): true,
 
@@ -175,6 +182,33 @@ var (
 		reflect.TypeOf(CauseNas(0)):          true,
 		reflect.TypeOf(CauseProtocol(0)):     true,
 		reflect.TypeOf(CauseMisc(0)):         true,
+
+		// The six the sweep found that are mandatory in every record this package emits that
+		// carries them, so the type is exactly the right key: a record added later that reuses
+		// one inherits the guard without anybody remembering it. Each names the record and the
+		// module's lowest defined value.
+		//
+		// AMFDirection ::= ENUMERATED { networkInitiated(1), uEInitiated(2) } —
+		// AMFDeregistration/deregistrationDirection.
+		reflect.TypeOf(AMFDirection(0)): true,
+		// AMFRegistrationResult, lowest threeGPPAccess(1) — AMFRegistration and
+		// AMFStartOfInterceptionWithRegisteredUE, mandatory in both. The module also gives it
+		// to AMFUEConfigurationUpdate as OPTIONAL, which this package does not emit; modelling
+		// that record moves this entry to mandatoryEnumFields, and the sweep says so.
+		reflect.TypeOf(AMFRegistrationResult(0)): true,
+		// AMFFailedProcedureType, lowest registration(1) —
+		// AMFUnsuccessfulProcedure/failedProcedureType.
+		reflect.TypeOf(AMFFailedProcedureType(0)): true,
+		// SMFFailedProcedureType, lowest pDUSessionEstablishment(1) —
+		// SMFUnsuccessfulProcedure/failedProcedureType.
+		reflect.TypeOf(SMFFailedProcedureType(0)): true,
+		// PDUSessionType, lowest iPv4(1) — SMFPDUSessionEstablishment and
+		// SMFStartOfInterceptionWithEstablishedPDUSession. This is the one of the six built by
+		// a raw cast from another protocol's enumeration, which is the construct that produced
+		// both handover defects; the correspondence is asserted in smf/lawfulintercept.
+		reflect.TypeOf(PDUSessionType(0)): true,
+		// Initiator, lowest uE(1) — SMFUnsuccessfulProcedure/initiator.
+		reflect.TypeOf(Initiator(0)): true,
 	}
 
 	// enumConstraints are the ENUMERATED types whose permitted values this module declares.

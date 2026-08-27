@@ -42,8 +42,9 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 		{
 			name: "an address whose length is not its family's",
 			event: SMFPDUSessionEstablishment{
-				SUPI:       IMSI("262019876543210"),
-				UEEndpoint: []any{IPv4Address{10, 250, 0}},
+				SUPI:           IMSI("262019876543210"),
+				PDUSessionType: PDUSessionTypeIPv4,
+				UEEndpoint:     []any{IPv4Address{10, 250, 0}},
 			},
 			want: "IPv4Address is defined as SIZE(4..4)",
 		},
@@ -157,10 +158,11 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 		{
 			name: "a slice differentiator that is not three octets",
 			event: SMFPDUSessionEstablishment{
-				SUPI:         IMSI("262019876543210"),
-				PDUSessionID: 5,
-				GTPTunnelID:  FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
-				SNSSAI:       SNSSAI{SliceServiceType: 1, SliceDifferentiator: SliceDifferentiator{0x01, 0x02}},
+				SUPI:           IMSI("262019876543210"),
+				PDUSessionID:   5,
+				GTPTunnelID:    FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
+				PDUSessionType: PDUSessionTypeIPv4,
+				SNSSAI:         SNSSAI{SliceServiceType: 1, SliceDifferentiator: SliceDifferentiator{0x01, 0x02}},
 			},
 			want: "SliceDifferentiator is defined as SIZE(3..3)",
 		},
@@ -170,9 +172,10 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 			// differentiator is spelled differently and inherits the check anyway.
 			name: "a mapped HPLMN slice differentiator of the wrong size",
 			event: SMFPDUSessionEstablishment{
-				SUPI:         IMSI("262019876543210"),
-				PDUSessionID: 5,
-				GTPTunnelID:  FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
+				SUPI:           IMSI("262019876543210"),
+				PDUSessionID:   5,
+				GTPTunnelID:    FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
+				PDUSessionType: PDUSessionTypeIPv4,
 				SNSSAI: SNSSAI{
 					SliceServiceType: 1,
 					MappedHPLMNSD:    SliceDifferentiator{0x01, 0x02, 0x03, 0x04},
@@ -183,10 +186,11 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 		{
 			name: "a slice service type above its range",
 			event: SMFPDUSessionEstablishment{
-				SUPI:         IMSI("262019876543210"),
-				PDUSessionID: 5,
-				GTPTunnelID:  FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
-				SNSSAI:       SNSSAI{SliceServiceType: 256},
+				SUPI:           IMSI("262019876543210"),
+				PDUSessionID:   5,
+				GTPTunnelID:    FTEID{TEID: 1, IPv4Address: IPv4Address{10, 250, 0, 1}},
+				PDUSessionType: PDUSessionTypeIPv4,
+				SNSSAI:         SNSSAI{SliceServiceType: 256},
 			},
 			want: "SliceServiceType is defined as INTEGER (0..255)",
 		},
