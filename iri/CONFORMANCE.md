@@ -379,7 +379,7 @@ that the field carries something other than the NAS container verbatim. Until th
 recorded as a defect against the specification rather than against this codec, and the choice
 of which half to follow is stated here rather than left to be inferred from behaviour.
 
-### 7. The zero exemption in the constraint check had never been swept — FIXED 2026-08-27
+### 7. The zero exemption in the constraint check had never been swept — FIXED 2026-08-27, released in `li v0.9.9`
 
 **Two of the defects above were delivered through the same hole, and the hole was left open
 after each one.**
@@ -447,7 +447,9 @@ mandatory zero.
 
 **What an agency will see.** Nothing, unless a builder produces a zero — in which case the record
 is refused and reported here rather than encoded and discarded at the far end. Every golden
-vector is unchanged, which is the check that no conformant record moved.
+vector is unchanged, which is the check that no conformant record moved. The boundary is
+`li v0.9.9`: product delivered by an element built against it is refused where an earlier build
+would have emitted an undefined zero, and no other record differs.
 
 **And the class is closed structurally.** The sweep is a test whose source of truth is the
 published module, so a record type added later, or a field that becomes mandatory later, cannot
