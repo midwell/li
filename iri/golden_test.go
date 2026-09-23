@@ -381,13 +381,54 @@ func goldenBareSamples() map[string]any {
 	}
 }
 
+// sparseSuffix names a record's sparse fixture in testdata/golden.txt.
+const sparseSuffix = "/sparse"
+
+// goldenSparseSamples closes the one path the two forms above cannot reach: an OPTIONAL
+// member of an OPTIONAL structure, absent while the structure itself is present. The
+// mandatory-only form drops the structure, so it never holds that state, and the
+// fully-populated form never omits the member. Each structure with optional members
+// that sits in an optional member appears here present with its mandatory members
+// only. TestGoldenMeasuresBothPathsOfEveryOptional holds the set to that.
+func goldenSparseSamples() map[string]any {
+	plmn := PLMNID{MCC: "262", MNC: "01"}
+	return map[string]any{
+		"AMFRegistration": AMFRegistration{
+			RegistrationType:   RegTypeMobility,
+			RegistrationResult: RegResult3GPPAccess,
+			SUPI:               IMSI("262019876543210"),
+			GUTI:               FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 200, AMFSetID: 1, AMFPointer: 2, FiveGTMSI: 1},
+			SUCI: SUCI{
+				MCC: "262", MNC: "01",
+				RoutingIndicator:       0,
+				ProtectionSchemeID:     0,
+				HomeNetworkPublicKeyID: []byte{0x00},
+				SchemeOutput:           []byte{0x01, 0x02},
+			},
+			FiveGSTAIList: TAIList{{PLMNID: plmn, TAC: TAC{0x00, 0x00, 0x01}}},
+		},
+		"SMFPDUSessionEstablishment": SMFPDUSessionEstablishment{
+			PDUSessionID:   6,
+			GTPTunnelID:    FTEID{TEID: 7, IPv6Address: IPv6Address(net.ParseIP("2001:db8::b").To16())},
+			PDUSessionType: PDUSessionTypeIPv6,
+			SNSSAI:         SNSSAI{SliceServiceType: 1},
+			DNN:            DNN("ims"),
+			RequestType:    SMRequestInitial,
+			ServingNetwork: SMFServingNetwork{PLMNID: plmn},
+		},
+	}
+}
+
 // goldenForms is every fixture by the name it is recorded under: each record's
-// fully-populated form under its own name, and its mandatory-only form under
-// <Record>/bare.
+// fully-populated form under its own name, its mandatory-only form under
+// <Record>/bare, and the few sparse forms under <Record>/sparse.
 func goldenForms() map[string]any {
 	forms := goldenSamples()
 	for name, sample := range goldenBareSamples() {
 		forms[name+bareSuffix] = sample
+	}
+	for name, sample := range goldenSparseSamples() {
+		forms[name+sparseSuffix] = sample
 	}
 	return forms
 }
@@ -689,7 +730,8 @@ func writeGolden(t *testing.T, encodings map[string]string) {
 	// REUSE-IgnoreEnd
 	b.WriteString("#\n")
 	b.WriteString("# DER encodings of every xIRI record type, one per line: <RecordName> <hex>.\n")
-	b.WriteString("# <RecordName>/bare is the same record with its mandatory members only.\n")
+	b.WriteString("# <RecordName>/bare is the same record with its mandatory members only, and\n")
+	b.WriteString("# <RecordName>/sparse holds optional structures present with their mandatory members.\n")
 	b.WriteString("# Regenerate with: go test ./iri/ -run TestGoldenEncodings -update-golden\n")
 	b.WriteString("# These pin the output of the shared li/asn1 codec so a codec change has to\n")
 	b.WriteString("# show which records it altered. Do not edit by hand.\n")
@@ -727,7 +769,7 @@ func TestGoldenEncodings(t *testing.T) {
 		switch {
 		case got == expected:
 			// unchanged, as required for expectedUnchanged and permitted otherwise
-		case expectedUnchanged[strings.TrimSuffix(name, bareSuffix)]:
+		case expectedUnchanged[strings.TrimSuffix(strings.TrimSuffix(name, bareSuffix), sparseSuffix)]:
 			t.Errorf("%s: encoding changed but must not\n got  %s\n want %s", name, got, expected)
 		default:
 			t.Logf("%s: encoding changed, which this change expects", name)
@@ -772,8 +814,9 @@ func TestGoldenCoversEveryRecord(t *testing.T) {
 			t.Errorf("%s has a mandatory-only sample and no fully-populated one", name)
 		}
 	}
-	if n := len(goldenForms()); n != 2*registeredRecordCount {
-		t.Errorf("golden fixtures = %d, want %d records × 2 forms", n, registeredRecordCount)
+	if n, want := len(goldenForms()), 2*registeredRecordCount+len(goldenSparseSamples()); n != want {
+		t.Errorf("golden fixtures = %d, want %d records × 2 forms plus %d sparse", n,
+			registeredRecordCount, len(goldenSparseSamples()))
 	}
 	for name, event := range goldenForms() {
 		if _, err := EncodeXIRI(event); err != nil {
@@ -836,6 +879,106 @@ func TestGoldenFormsDiffer(t *testing.T) {
 	for name, full := range goldenSamples() {
 		if got, want := encodeGolden(t, bare[name]), encodeGolden(t, full); got == want {
 			t.Errorf("%s: the fully-populated and mandatory-only forms encode identically (%s)", name, got)
+		}
+	}
+}
+
+// onlyMemberOfOptional lists the OPTIONAL members whose absent path cannot be held with
+// their structure present: each is the only modelled member of a structure that is
+// itself OPTIONAL wherever it appears, so the structure is at its zero — and omitted —
+// exactly when the member is. Their absent path is the structure's, which is measured.
+var onlyMemberOfOptional = map[string]bool{
+	"LocationInfo.CurrentLocation":              true,
+	"GTPTunnelInfo.FiveGSGTPTunnels":            true,
+	"FiveGSGTPTunnels.ULNGUUPTunnelInformation": true,
+}
+
+// TestGoldenMeasuresBothPathsOfEveryOptional is the property the fixture forms exist
+// for, checked rather than argued: every OPTIONAL member, at every depth, is held by
+// some fixture present, and by some fixture absent while the structure containing it
+// is emitted. A member with only one of the two has a presence rule no comparison can
+// see mistranslated.
+func TestGoldenMeasuresBothPathsOfEveryOptional(t *testing.T) {
+	present, absent := map[string]bool{}, map[string]bool{}
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Interface, reflect.Pointer:
+			if !v.IsNil() {
+				walk(v.Elem())
+			}
+		case reflect.Slice:
+			if v.Type().Elem().Kind() != reflect.Uint8 {
+				for i := range v.Len() {
+					walk(v.Index(i))
+				}
+			}
+		case reflect.Struct:
+			// v is emitted: it is a record, a mandatory member, a list element, or an
+			// optional member at a value.
+			for i := range v.NumField() {
+				f := v.Type().Field(i)
+				if _, tagged := f.Tag.Lookup("asn1"); !tagged {
+					continue
+				}
+				key := v.Type().Name() + "." + f.Name
+				if isOptional(f) {
+					if v.Field(i).IsZero() {
+						absent[key] = true
+						continue
+					}
+					present[key] = true
+				}
+				walk(v.Field(i))
+			}
+		}
+	}
+	for _, sample := range goldenForms() {
+		walk(reflect.ValueOf(sample))
+	}
+
+	// Every OPTIONAL member of every type reachable from a record.
+	all := map[string]bool{}
+	var collect func(typ reflect.Type)
+	visited := map[reflect.Type]bool{}
+	collect = func(typ reflect.Type) {
+		for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice {
+			typ = typ.Elem()
+		}
+		if typ.Kind() != reflect.Struct || visited[typ] {
+			return
+		}
+		visited[typ] = true
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			if isOptional(f) {
+				all[typ.Name()+"."+f.Name] = true
+			}
+			collect(f.Type)
+		}
+	}
+	for _, sample := range goldenSamples() {
+		collect(reflect.TypeOf(sample))
+	}
+	for _, arm := range []any{SubscriberSUPI{}, SubscriberPEI{}, SubscriberGPSI{}} {
+		collect(reflect.TypeOf(arm))
+	}
+	if len(all) < 100 {
+		t.Fatalf("found %d OPTIONAL members; there were 106 when this was written, so the "+
+			"collection is looking at something else", len(all))
+	}
+
+	for key := range all {
+		if !present[key] {
+			t.Errorf("%s: no fixture holds it present", key)
+		}
+		if !absent[key] && !onlyMemberOfOptional[key] {
+			t.Errorf("%s: no fixture holds it absent inside an emitted structure", key)
+		}
+	}
+	for key := range onlyMemberOfOptional {
+		if !all[key] {
+			t.Errorf("onlyMemberOfOptional names %s, which is not an OPTIONAL member", key)
 		}
 	}
 }
