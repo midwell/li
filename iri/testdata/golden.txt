@@ -5,7 +5,7 @@
 # <RecordName>/bare is the same record with its mandatory members only, and
 # <RecordName>/sparse holds optional structures present with their mandatory members.
 # Regenerate with: go test ./iri/ -run TestGoldenEncodings -update-golden
-# These pin the output of the shared li/asn1 codec so a codec change has to
+# These pin the output of the shared encoder so an encoder change has to
 # show which records it altered. Do not edit by hand.
 AMFDeregistration 3081a881050413120f01a2819ea2819b810102820101a311810f323632303139383736353433323130a44181033236328202303183017b84010185011b8604deadbeef87010488010089213567632e6d6e633030312e6d63633236322e336770706e6574776f726b2e6f7267a510810e3335333432353030303030303031a60f810d34393135313233343536373839a71a810332363282023031830200c8840101850100860500deadbeef
 AMFDeregistration/bare 301181050413120f01a208a206810102820101

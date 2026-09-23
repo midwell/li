@@ -98,10 +98,9 @@ Three network functions act as POIs:
 | `types`  | Target identifiers, tasks, product/delivery types (transport-agnostic) |
 | `store`  | Concurrency-safe active-task store, indexed by target identifier |
 | `x1`     | ETSI TS 103 221-1 X1 provisioning listener + NE-issue reporter (ADMF direction) |
-| `iri`    | 3GPP TS 33.128 xIRI record builders + BER/CHOICE encoder |
+| `iri`    | 3GPP TS 33.128 xIRI record builders + DER encoder over `encoding/asn1` (no decoder: see `docs/asn1-decoding.md`) |
 | `x2x3`   | ETSI TS 103 221-2 X2/X3 PDU framing + delivery client (see `x2x3/CONFORMANCE.md`) |
 | `mtls`   | Loads the LI PKI credentials and builds the X1/X2/X3 TLS configs |
-| `asn1`   | Bundled BER/CHOICE ASN.1 codec used by `iri` |
 
 ---
 
@@ -813,10 +812,12 @@ test and no mediation function could detect the omission.
 | `uEEndpoint` | `SMFPDUSessionModification`, which was the one session record missing it |
 | `sUPIUnauthenticated` | the 4 SMF records that define it. `false` where the SUPI was authenticated, `true` where it was not, absent where the record carries no SUPI |
 
-The last of those needed a codec change: `li/asn1` omitted any optional field equal to its
-type's zero value, so an optional BOOLEAN could encode `true` and never `false` — and `false`
-is the ordinary value here. Optional fields may now be declared as pointers, which
-distinguishes "absent" from "present and zero" without changing how any other field encodes.
+The last of those needed a codec change: the ASN.1 codec then in use omitted any optional field
+equal to its type's zero value, so an optional BOOLEAN could encode `true` and never `false` —
+and `false` is the ordinary value here. Optional fields may now be declared as pointers, which
+distinguishes "absent" from "present and zero" without changing how any other field encodes. The
+encoder has since been replaced by explicit emitters, in which a pointer member is present exactly
+when it is non-nil.
 
 `AMFPositioningInfoTransfer` models `sUCI` and populates it from nowhere, because no point of
 interception emits that record at all. See the out-of-scope note above.

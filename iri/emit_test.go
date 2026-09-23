@@ -90,7 +90,7 @@ func TestTLVLayerReturnsErrors(t *testing.T) {
 }
 
 // TestChoiceAlternatives asserts every registered CHOICE alternative. The expected
-// bytes are what the vendored li/asn1 codec produced for the same value, captured
+// bytes are what the vendored ASN.1 codec this replaced produced for the same value, captured
 // while both encoders were in the tree.
 func TestChoiceAlternatives(t *testing.T) {
 	v6 := IPv6Address(net.ParseIP("2001:db8::1").To16())

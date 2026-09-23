@@ -479,8 +479,8 @@ const (
 //
 // Declared as a pointer wherever it appears, because false is its meaningful ordinary
 // value — the SUPI *was* authenticated — and an OPTIONAL field whose value equals its
-// type's zero is otherwise indistinguishable from an absent one. li/asn1 gained pointer
-// support for exactly this. Absent means the record carries no SUPI, so the condition
+// type's zero is otherwise indistinguishable from an absent one; the emitters write a
+// pointer member exactly when it is non-nil. Absent means the record carries no SUPI, so the condition
 // governing the field does not hold; it does not mean "authenticated".
 type SUPIUnauthenticatedIndication bool
 
@@ -649,13 +649,10 @@ type AMFIdentifierDeassociation struct {
 //	}
 //
 // Distinct Go types, like the IMSI/NAI target-identifier leaves, so the CHOICE
-// codec can tell the alternatives apart by reflect.Type. They are named byte
-// slices, which the codec handles as of local patch 8 — the guards admitted the
-// shape before that but the bodies panicked on it.
+// emitter can tell the alternatives apart by type.
 //
 // A ueEndpoint field is a SEQUENCE OF this CHOICE, so it is declared as []any and
-// tagged with the choice; see local patch 7 for why the declared type is what
-// makes that mean "per element".
+// tagged with the choice, which applies to each element.
 type (
 	IPv4Address []byte // SIZE(4)
 	IPv6Address []byte // SIZE(16)

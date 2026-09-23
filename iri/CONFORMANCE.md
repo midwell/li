@@ -189,13 +189,13 @@ has.
 
 **It was blocked on two things, and the disposition recorded only one.** The codec could not
 express it: the field is `SUPIUnauthenticatedIndication ::= BOOLEAN`, the meaningful value in
-the ordinary case is `false` — the SUPI *was* authenticated — and `li/asn1` omitted any
-`optional` field whose value equalled its type's zero. The second was found only when the fix
+the ordinary case is `false` — the SUPI *was* authenticated — and the ASN.1 codec then in use
+omitted any `optional` field whose value equalled its type's zero. The second was found only when the fix
 was attempted: `SMContext.SetCreateData` retains fifteen fields of the N11 request and dropped
 `UnauthenticatedSupi`, which the AMF had been sending all along. Fixing the codec alone would
 have left the field unpopulatable while every test passed.
 
-`li/asn1` now supports pointer fields. A nil pointer is absent; a non-nil one is present and
+The codec gained pointer fields. A nil pointer is absent; a non-nil one is present and
 encodes its pointee even when that pointee is the type's zero. The mechanism is opt-in at the
 field, which is what made it provable: no field in `li/iri` was a pointer, so the golden
 vectors for all seventeen record types were byte-identical across the codec change. Changing
@@ -206,6 +206,10 @@ absent"* would have started emitting.
 Marking the field mandatory was also rejected: it would emit an authentication status in
 records carrying no SUPI, asserting something about an identity that is not there. Absent now
 means the record carries no SUPI, and `false` means the SUPI was authenticated.
+
+That codec has since been replaced by explicit emitters (`emit.go`), which state each member's
+presence where they write it. The pointer members kept their meaning — present exactly when
+non-nil — and `TestPointerMembersAreThreeState` holds every site that carries one to it.
 
 ### 3. Identity a POI holds and does not report — FIXED 2026-08-26, corrected 2026-08-27
 

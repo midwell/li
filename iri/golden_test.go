@@ -21,9 +21,9 @@ import (
 //
 //	go test ./iri/ -run TestGoldenEncodings -update-golden
 //
-// The fixtures exist so that a change to the shared li/asn1 codec has to prove
-// it did not disturb the records it does not intend to touch. The codec sits
-// under every record type on the X2 path, so "only uEEndpoint changes" is a
+// The fixtures exist so that a change to the shared encoder has to prove it did
+// not disturb the records it does not intend to touch. The encoder sits under
+// every record type on the X2 path, so "only uEEndpoint changes" is a
 // claim to be measured, not asserted. A round-trip test cannot make that claim:
 // it still passes when encode and decode change together, which is exactly the
 // failure that would corrupt a receiver while looking healthy from in here.
@@ -75,7 +75,7 @@ func goldenSamples() map[string]any {
 	servingNet := SMFServingNetwork{PLMNID: PLMNID{MCC: "262", MNC: "01"}, NID: "0000000000b"}
 	amfID := AMFID{AMFRegionID: 200, AMFSetID: 1, AMFPointer: 3}
 	// false is the point: it is the ordinary value, and the value the encoder could
-	// not express before li/asn1 gained pointer support.
+	// not express before optional members could be declared as pointers.
 	supiAuthenticated := SUPIUnauthenticatedIndication(false)
 
 	return map[string]any{
@@ -473,7 +473,7 @@ var expectedUnchanged = map[string]bool{
 
 // TestGoldenSamplesArePopulated is what keeps this file's claim true.
 //
-// The samples are the inertness baseline for the shared li/asn1 codec: a change
+// The samples are the inertness baseline for the shared encoder: a change
 // there has to show which records it altered, and a record can only show that for
 // the fields its sample actually carries. A modelled field left unset is absent
 // from the comparison, and on the wire it is indistinguishable from a field the
@@ -733,7 +733,7 @@ func writeGolden(t *testing.T, encodings map[string]string) {
 	b.WriteString("# <RecordName>/bare is the same record with its mandatory members only, and\n")
 	b.WriteString("# <RecordName>/sparse holds optional structures present with their mandatory members.\n")
 	b.WriteString("# Regenerate with: go test ./iri/ -run TestGoldenEncodings -update-golden\n")
-	b.WriteString("# These pin the output of the shared li/asn1 codec so a codec change has to\n")
+	b.WriteString("# These pin the output of the shared encoder so an encoder change has to\n")
 	b.WriteString("# show which records it altered. Do not edit by hand.\n")
 	for _, name := range names {
 		fmt.Fprintf(&b, "%s %s\n", name, encodings[name])

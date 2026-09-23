@@ -326,7 +326,7 @@ func TestAnAbsentOptionalLeafIsNotTooShort(t *testing.T) {
 // The SUCI and TAI leaves are registered before any record carries them, so nothing
 // in the table above reaches them yet. This checks the registration itself is live —
 // including through a pointer, which is a shape the constraint tables had never seen
-// before li/asn1 gained pointer support.
+// before optional members could be declared as pointers.
 //
 // A malformed SUCI is a wrong target identity in a well-formed record, so these are
 // the constraints where a dead registration would cost the most.
