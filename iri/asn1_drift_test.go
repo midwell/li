@@ -508,3 +508,195 @@ func TestKnownDefectsDoNotGrow(t *testing.T) {
 		"remove it and lower the count, and if you have added one, say why in the commit. "+
 		"CONFORMANCE.md is where they are written up.", verb, got, want)
 }
+
+// declaredAbsentNested is declaredAbsent for the structures below a record, and for the
+// CHOICE alternatives this package does not model: the module members they do not
+// model, each with the reason. The categories are declaredAbsent's; there is no payload
+// table for a nested type, so none cites one.
+var declaredAbsentNested = map[string]map[string]string{
+	"Location": {
+		"positioningInfo":        "DEFERRED: li/iri.Location models only locationInfo.currentLocation; the deeper detail is a documented deferral",
+		"locationPresenceReport": "DEFERRED: as positioningInfo",
+		"fourGPositioningInfo":   "N/A: an EPS location form; this project implements no EPS access",
+		"fourGLocationInfo":      "N/A: an EPS location form; this project implements no EPS access",
+		"iMSLocation":            "N/A: IMS location; this project implements no IMS element",
+	},
+	"LocationInfo": {
+		"userLocation":      "DEFERRED: li/iri.LocationInfo models only currentLocation; the userLocation subtree is a documented deferral",
+		"geoInfo":           "DEFERRED: as userLocation",
+		"rATType":           "DEFERRED: as userLocation; the records that report a RAT type carry it at their own rATType member",
+		"timeZone":          "DEFERRED: as userLocation",
+		"additionalCellIDs": "DEFERRED: as userLocation",
+	},
+	"GTPTunnelInfo": {
+		"ePSGTPTunnels": "N/A: reports PDN connection events at an SGW/PGW, which this project does not implement",
+	},
+	"FiveGSGTPTunnels": {
+		"additionalULNGUUPTunnelInformation": "NOT HELD: the SMF manages a single default NG-U path and holds no additional uplink tunnel",
+		"dLRANTunnelInformation":             "NOT HELD: the SMF holds no downlink RAN tunnel and QoS flow description for the path it manages",
+	},
+	"UserIdentifiers": {
+		"ePSSubscriberIDs": "N/A: carries the EPS forms of the identities, for a UE with an EPS presence, which SD-Core's AMF never has",
+	},
+	// CHOICEs: alternatives, not members.
+	"PEI": {
+		"mACAddress": "N/A: the MAC-address and EUI-64 PEI forms belong to devices without an IMEI, reaching the core over wireline access this deployment does not provide; the AMF maps only the imei-/imeisv- forms",
+		"eUI64":      "N/A: as mACAddress",
+	},
+	"FiveGSSubscriberID": {
+		"sUCI": "UNTRACED: iri.Identifiers builds the list from the SUPI, PEI and GPSI only; whether the SUCI is reportable in the records carrying UserIdentifiers was not traced",
+	},
+}
+
+// TestASN1NestedTypeDrift is TestASN1RecordDrift for everything below a record: every
+// structure a record reaches, and every CHOICE whose alternatives it carries. It checks
+// both directions, as the record audit does — a module member this package neither
+// models nor declares absent fails, and so does a declared tag or optionality the
+// module does not define. The record audit stops at the record's own fields, so until
+// this existed a nested declaration was authority over nothing but itself.
+func TestASN1NestedTypeDrift(t *testing.T) {
+	sequences := sequenceFieldTypes(t)
+	choices := parseASN1Choices(t)
+
+	records := map[reflect.Type]bool{}
+	for _, sample := range goldenSamples() {
+		records[reflect.TypeOf(sample)] = true
+	}
+	arms := map[reflect.Type]bool{}
+	for _, typ := range modelledAlternatives["fiveGSSubscriberID"] {
+		arms[typ] = true
+	}
+
+	// Every struct type reachable from a record, other than the records and the
+	// FiveGSSubscriberID arms, which are CHOICEs and are audited as such below.
+	nested := map[reflect.Type]bool{}
+	var reach func(typ reflect.Type)
+	reach = func(typ reflect.Type) {
+		for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice {
+			typ = typ.Elem()
+		}
+		if typ.Kind() != reflect.Struct || nested[typ] {
+			return
+		}
+		if !records[typ] && !arms[typ] {
+			nested[typ] = true
+		}
+		for i := range typ.NumField() {
+			reach(typ.Field(i).Type)
+		}
+	}
+	for typ := range records {
+		reach(typ)
+	}
+	for _, alts := range modelledAlternatives {
+		for _, typ := range alts {
+			reach(typ)
+		}
+	}
+	for _, want := range []string{
+		"SUCI", "FTEID", "Location", "LocationInfo", "GTPTunnelInfo", "FiveGSGTPTunnels", "PLMNID",
+		"TAI", "SNSSAI", "UserIdentifiers", "FiveGSSubscriberIDs", "FiveGGUTI", "SMFServingNetwork",
+		"AMFID", "PDUSessionResourceInformation",
+	} {
+		found := false
+		for typ := range nested {
+			found = found || typ.Name() == want
+		}
+		if !found {
+			t.Errorf("%s is not reached from any record, so this audit no longer covers it", want)
+		}
+	}
+
+	audited := map[string]bool{}
+	for typ := range nested {
+		name := typ.Name()
+		fields, ok := sequences[name]
+		if !ok {
+			t.Errorf("%s has no SEQUENCE in %s", name, asn1ModulePath)
+			continue
+		}
+		audited[name] = true
+		byTag := map[int]asn1TypedField{}
+		for _, f := range fields {
+			byTag[f.tag] = f
+		}
+		modelled := map[string]bool{}
+		for i := range typ.NumField() {
+			sf := typ.Field(i)
+			d := declaration(sf)
+			if !d.hasTag {
+				continue
+			}
+			f, ok := byTag[d.tag]
+			if !ok {
+				t.Errorf("%s.%s is declared [%d], which %s does not define", name, sf.Name, d.tag, name)
+				continue
+			}
+			modelled[f.name] = true
+			if d.optional != f.optional {
+				t.Errorf("%s.%s is declared optional=%v; the module's %s [%d] is optional=%v",
+					name, sf.Name, d.optional, f.name, f.tag, f.optional)
+			}
+		}
+		for _, f := range fields {
+			_, declared := declaredAbsentNested[name][f.name]
+			switch {
+			case modelled[f.name] && declared:
+				t.Errorf("stale declaration: %s/%s is declared absent but is modelled", name, f.name)
+			case !modelled[f.name] && !declared:
+				t.Errorf("%s/%s [%d] is defined by the module, neither modelled nor declared absent",
+					name, f.name, f.tag)
+			}
+		}
+	}
+
+	// The CHOICEs. XIRIEvent is the record audit's, which is scoped to the records this
+	// package emits; the module's other events are not this package's to declare.
+	for choice, types := range modelledAlternatives {
+		if choice == "xiriEvent" {
+			continue
+		}
+		module := choiceModules[choice]
+		audited[module] = true
+		modelled := map[string]bool{}
+		for _, typ := range types {
+			for _, alt := range choices[module] {
+				if name, named := alternativeNames[typ]; (named && alt.name == name) || (!named && alt.typeName == typ.Name()) {
+					modelled[alt.name] = true
+				}
+			}
+		}
+		if len(modelled) != len(types) {
+			t.Errorf("%s: %d Go alternatives map to %d module alternatives", module, len(types), len(modelled))
+		}
+		for _, alt := range choices[module] {
+			_, declared := declaredAbsentNested[module][alt.name]
+			switch {
+			case modelled[alt.name] && declared:
+				t.Errorf("stale declaration: %s/%s is declared absent but is modelled", module, alt.name)
+			case !modelled[alt.name] && !declared:
+				t.Errorf("%s/%s [%d] is an alternative the module defines, neither modelled nor declared absent",
+					module, alt.name, alt.tag)
+			}
+		}
+	}
+
+	for name, members := range declaredAbsentNested {
+		if !audited[name] {
+			t.Errorf("declaredAbsentNested names %s, which this audit does not reach", name)
+			continue
+		}
+		for member := range members {
+			found := false
+			for _, f := range sequences[name] {
+				found = found || f.name == member
+			}
+			for _, alt := range choices[name] {
+				found = found || alt.name == member
+			}
+			if !found {
+				t.Errorf("stale declaration: %s/%s is declared absent but the module does not define it", name, member)
+			}
+		}
+	}
+}
