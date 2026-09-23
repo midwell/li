@@ -64,21 +64,24 @@ func TestUEEndpointAbsentAddress(t *testing.T) {
 	}
 }
 
-// TestUEEndpointRoundTripsEveryAlternative checks each arm of the CHOICE survives
-// encode and decode inside a real record with its concrete type intact.
-func TestUEEndpointRoundTripsEveryAlternative(t *testing.T) {
-	ctx := NewContext()
+// TestUEEndpointCarriesEveryAlternative checks each arm of the CHOICE is carried
+// inside a real record under its own tag: uEEndpoint [9] { arm [n] address }.
+func TestUEEndpointCarriesEveryAlternative(t *testing.T) {
+	v6 := IPv6Address(net.ParseIP("2001:db8::1").To16())
 	tests := []struct {
 		name string
 		addr any
+		want string // uEEndpoint [9], then the arm's identifier and length
+		body []byte
+		fix  string
 	}{
-		{"ipv4", IPv4Address{10, 45, 0, 2}},
-		{"ipv6", IPv6Address(net.ParseIP("2001:db8::1").To16())},
-		{"mac", MACAddress{0x02, 0x42, 0xac, 0x11, 0x00, 0x02}},
+		{"ipv4", IPv4Address{10, 45, 0, 2}, "a9068104", []byte{10, 45, 0, 2}, "304481050413120f01a23ba939a111810f323632303139383736353433323130850105a60981010182040a141e28870101a90681040a2d00028c08696e7465726e65748f0102"},
+		{"ipv6", v6, "a9128210", v6, "305081050413120f01a247a945a111810f323632303139383736353433323130850105a60981010182040a141e28870101a912821020010db80000000000000000000000018c08696e7465726e65748f0102"},
+		{"mac", MACAddress{0x02, 0x42, 0xac, 0x11, 0x00, 0x02}, "a9088306", []byte{0x02, 0x42, 0xac, 0x11, 0x00, 0x02}, "304681050413120f01a23da93ba111810f323632303139383736353433323130850105a60981010182040a141e28870101a90883060242ac1100028c08696e7465726e65748f0102"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			in := SMFStartOfInterceptionWithEstablishedPDUSession{
+			der := assertEncodes(t, SMFStartOfInterceptionWithEstablishedPDUSession{
 				SUPI:           IMSI("262019876543210"),
 				PDUSessionID:   5,
 				GTPTunnelID:    FTEID{TEID: 1, IPv4Address: []byte{10, 20, 30, 40}},
@@ -86,39 +89,11 @@ func TestUEEndpointRoundTripsEveryAlternative(t *testing.T) {
 				UEEndpoint:     []any{tc.addr},
 				DNN:            DNN("internet"),
 				RequestType:    SMRequestExisting,
-			}
-			der, err := EncodeXIRI(ctx, in)
-			if err != nil {
-				t.Fatalf("EncodeXIRI: %v", err)
-			}
-			var got XIRIPayload
-			if _, err := ctx.Decode(der, &got); err != nil {
-				t.Fatalf("Decode: %v", err)
-			}
-			rec, ok := got.Event.(SMFStartOfInterceptionWithEstablishedPDUSession)
-			if !ok {
-				t.Fatalf("decoded as %T", got.Event)
-			}
-			if len(rec.UEEndpoint) != 1 {
-				t.Fatalf("uEEndpoint has %d entries, want 1", len(rec.UEEndpoint))
-			}
-			if gotType, wantType := typeName(rec.UEEndpoint[0]), typeName(tc.addr); gotType != wantType {
-				t.Errorf("alternative decoded as %s, want %s", gotType, wantType)
+			}, tc.fix)
+			if !containsTLV(der, tc.want, tc.body) {
+				t.Errorf("uEEndpoint does not carry %s as %s: % x", tc.name, tc.want, der)
 			}
 		})
-	}
-}
-
-func typeName(v any) string {
-	switch v.(type) {
-	case IPv4Address:
-		return "IPv4Address"
-	case IPv6Address:
-		return "IPv6Address"
-	case MACAddress:
-		return "MACAddress"
-	default:
-		return "unknown"
 	}
 }
 
@@ -126,32 +101,18 @@ func typeName(v any) string {
 // dual-stack session can report both families. The SMF only tracks one address
 // today, but the record shape is the specification's, not the SMF's.
 func TestUEEndpointCarriesMultipleAddresses(t *testing.T) {
-	ctx := NewContext()
-	in := SMFStartOfInterceptionWithEstablishedPDUSession{
+	v6 := IPv6Address(net.ParseIP("2001:db8::1").To16())
+	der := assertEncodes(t, SMFStartOfInterceptionWithEstablishedPDUSession{
 		SUPI:           IMSI("262019876543210"),
 		PDUSessionID:   5,
 		PDUSessionType: PDUSessionTypeIPv4v6,
-		UEEndpoint: []any{
-			IPv4Address{10, 45, 0, 2},
-			IPv6Address(net.ParseIP("2001:db8::1").To16()),
-		},
-		DNN:         DNN("internet"),
-		RequestType: SMRequestExisting,
-	}
-	der, err := EncodeXIRI(ctx, in)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	rec := got.Event.(SMFStartOfInterceptionWithEstablishedPDUSession) //nolint:errcheck // asserted above by construction
-	if len(rec.UEEndpoint) != 2 {
-		t.Fatalf("uEEndpoint has %d entries, want 2", len(rec.UEEndpoint))
-	}
-	if typeName(rec.UEEndpoint[0]) != "IPv4Address" || typeName(rec.UEEndpoint[1]) != "IPv6Address" {
-		t.Errorf("order not preserved: %s then %s", typeName(rec.UEEndpoint[0]), typeName(rec.UEEndpoint[1]))
+		UEEndpoint:     []any{IPv4Address{10, 45, 0, 2}, v6},
+		DNN:            DNN("internet"),
+		RequestType:    SMRequestExisting,
+	}, "305081050413120f01a247a945a111810f323632303139383736353433323130850105a603810100870103a91881040a2d0002821020010db80000000000000000000000018c08696e7465726e65748f0102")
+	// [9] of 24 octets: the IPv4 arm (6), then the IPv6 arm (18), in the order given.
+	if !containsTLV(der, "a918"+"81040a2d0002"+"8210", v6) {
+		t.Errorf("uEEndpoint does not carry both families in order: % x", der)
 	}
 }
 
@@ -178,7 +139,6 @@ func TestStartOfInterceptionRefusesEmptyEndpoint(t *testing.T) {
 // establishment record, so an absent address must omit the field rather than emit
 // it empty — and the record must still encode, unlike the mandatory case above.
 func TestEstablishmentOmitsAbsentEndpoint(t *testing.T) {
-	ctx := NewContext()
 	base := SMFPDUSessionEstablishment{
 		SUPI:           IMSI("262019876543210"),
 		PDUSessionID:   5,
@@ -187,34 +147,18 @@ func TestEstablishmentOmitsAbsentEndpoint(t *testing.T) {
 		DNN:            DNN("internet"),
 		RequestType:    SMRequestInitial,
 	}
-	without, err := EncodeXIRI(ctx, base)
-	if err != nil {
-		t.Fatalf("EncodeXIRI without endpoint: %v", err)
-	}
+	without := assertEncodes(t, base, "303c81050413120f01a233a631a111810f323632303139383736353433323130850105a60981010182040a141e288701018c08696e7465726e65748f0101")
 
 	withAddr := base
 	withAddr.UEEndpoint = UEEndpoint(net.ParseIP("10.45.0.2"))
-	with, err := EncodeXIRI(ctx, withAddr)
-	if err != nil {
-		t.Fatalf("EncodeXIRI with endpoint: %v", err)
-	}
+	with := assertEncodes(t, withAddr, "304481050413120f01a23ba639a111810f323632303139383736353433323130850105a60981010182040a141e28870101a90681040a2d00028c08696e7465726e65748f0101")
 
 	if len(without) >= len(with) {
 		t.Errorf("absent endpoint encoding (%d bytes) is not smaller than present (%d) — "+
 			"the optional field is being emitted empty rather than omitted", len(without), len(with))
 	}
-
-	var got XIRIPayload
-	if _, err := ctx.Decode(with, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	rec := got.Event.(SMFPDUSessionEstablishment) //nolint:errcheck // asserted by construction
-	if len(rec.UEEndpoint) != 1 {
-		t.Fatalf("uEEndpoint has %d entries, want 1", len(rec.UEEndpoint))
-	}
-	v4, ok := rec.UEEndpoint[0].(IPv4Address)
-	if !ok || !bytes.Equal(v4, IPv4Address{10, 45, 0, 2}) {
-		t.Errorf("uEEndpoint[0] = %#v, want IPv4Address 10.45.0.2", rec.UEEndpoint[0])
+	if !containsTLV(with, "a9068104", []byte{10, 45, 0, 2}) {
+		t.Errorf("uEEndpoint is not [9] { iPv4Address [1] 10.45.0.2 }: % x", with)
 	}
 }
 
@@ -222,8 +166,7 @@ func TestEstablishmentOmitsAbsentEndpoint(t *testing.T) {
 // about: gTPTunnelID carries the serving UPF's address and uEEndpoint carries the
 // subject's. Reporting one as the other would answer a question nobody asked.
 func TestEndpointIsNotTheTunnelEndpoint(t *testing.T) {
-	ctx := NewContext()
-	rec := SMFPDUSessionEstablishment{
+	der := assertEncodes(t, SMFPDUSessionEstablishment{
 		SUPI:           IMSI("262019876543210"),
 		PDUSessionID:   5,
 		GTPTunnelID:    FTEID{TEID: 1, IPv4Address: []byte{192, 168, 252, 3}}, // UPF N3
@@ -231,25 +174,14 @@ func TestEndpointIsNotTheTunnelEndpoint(t *testing.T) {
 		UEEndpoint:     UEEndpoint(net.ParseIP("10.45.0.2")), // the subject
 		DNN:            DNN("internet"),
 		RequestType:    SMRequestInitial,
+	}, "304481050413120f01a23ba639a111810f323632303139383736353433323130850105a6098101018204c0a8fc03870101a90681040a2d00028c08696e7465726e65748f0101")
+	// gTPTunnelID [6] { tEID [1] 1, iPv4Address [2] c0 a8 fc 03 }.
+	if !containsTLV(der, "a609810101"+"8204", []byte{192, 168, 252, 3}) {
+		t.Errorf("gTPTunnelID does not carry the UPF's address: % x", der)
 	}
-	der, err := EncodeXIRI(ctx, rec)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	out := got.Event.(SMFPDUSessionEstablishment) //nolint:errcheck // asserted by construction
-	if !bytes.Equal(out.GTPTunnelID.IPv4Address, []byte{192, 168, 252, 3}) {
-		t.Errorf("gTPTunnelID address = % x, want c0 a8 fc 03", out.GTPTunnelID.IPv4Address)
-	}
-	v4, _ := out.UEEndpoint[0].(IPv4Address)
-	if !bytes.Equal(v4, IPv4Address{10, 45, 0, 2}) {
-		t.Errorf("uEEndpoint = % x, want 0a 2d 00 02", v4)
-	}
-	if bytes.Equal(v4, out.GTPTunnelID.IPv4Address) {
-		t.Error("uEEndpoint and gTPTunnelID carry the same address; they are different endpoints")
+	// uEEndpoint [9] { iPv4Address [1] 0a 2d 00 02 }.
+	if !containsTLV(der, "a9068104", []byte{10, 45, 0, 2}) {
+		t.Errorf("uEEndpoint does not carry the subject's address: % x", der)
 	}
 }
 

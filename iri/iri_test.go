@@ -5,6 +5,7 @@ package iri
 
 import (
 	"bytes"
+	"encoding/hex"
 	"net"
 	"os"
 	"path/filepath"
@@ -29,44 +30,36 @@ func sampleRegistration() AMFRegistration {
 	}
 }
 
-func TestEncodeDecodeXIRI(t *testing.T) {
-	ctx := NewContext()
-
-	der, err := EncodeXIRI(ctx, sampleRegistration())
+// assertEncodes pins a record's complete encoding. The expected bytes are fixtures:
+// captured from the vendored codec this encoder replaced, and compared byte for byte
+// ever since. A decode round trip cannot stand in for this — it still passes when
+// encode and decode change together, which is exactly the failure that corrupts a
+// receiver while looking healthy from in here.
+func assertEncodes(t *testing.T, event any, want string) []byte {
+	t.Helper()
+	der, err := EncodeXIRI(NewContext(), event)
 	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
+		t.Fatalf("EncodeXIRI(%T): %v", event, err)
 	}
-	if len(der) == 0 {
-		t.Fatal("empty encoding")
+	if got := hex.EncodeToString(der); got != want {
+		t.Errorf("%T encoding changed\n got  %s\n want %s", event, got, want)
 	}
+	return der
+}
 
-	// Round-trip: decode back into an XIRIPayload and check the event.
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
+// containsTLV reports whether der carries the element whose identifier and length
+// octets are header, followed by content. Used where the assertion is about one member
+// and a hand-derived element states it more plainly than a whole-record fixture.
+func containsTLV(der []byte, header string, content []byte) bool {
+	h, err := hex.DecodeString(header)
+	if err != nil {
+		panic(err)
 	}
-	if !bytes.Equal(got.OID, xIRIPayloadOID) {
-		t.Errorf("OID = % x, want % x", got.OID, xIRIPayloadOID)
-	}
-	reg, ok := got.Event.(AMFRegistration)
-	if !ok {
-		t.Fatalf("event decoded as %T, want AMFRegistration", got.Event)
-	}
-	if reg.RegistrationType != RegTypeInitial || reg.RegistrationResult != RegResult3GPPAccess {
-		t.Errorf("enums: type=%d result=%d", reg.RegistrationType, reg.RegistrationResult)
-	}
-	if supi, ok := reg.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
-		t.Errorf("SUPI = %#v, want IMSI 262019876543210", reg.SUPI)
-	}
-	if pei, ok := reg.PEI.(IMEI); !ok || pei != IMEI("35342500000001") {
-		t.Errorf("PEI = %#v, want IMEI 35342500000001", reg.PEI)
-	}
-	if gpsi, ok := reg.GPSI.(MSISDN); !ok || gpsi != MSISDN("4915123456789") {
-		t.Errorf("GPSI = %#v, want MSISDN 4915123456789", reg.GPSI)
-	}
-	if reg.GUTI != (FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 200, AMFSetID: 1, AMFPointer: 0, FiveGTMSI: 3735928559}) {
-		t.Errorf("GUTI mismatch: %+v", reg.GUTI)
-	}
+	return bytes.Contains(der, append(h, content...))
+}
+
+func TestEncodeXIRI(t *testing.T) {
+	der := assertEncodes(t, sampleRegistration(), "306381050413120f01a25aa158810101820101a411810f323632303139383736353433323130a610810e3335333432353030303030303031a70f810d34393135313233343536373839a81a810332363282023031830200c8840101850100860500deadbeef")
 
 	// Dump the DER for an independent structural check (openssl asn1parse).
 	out := filepath.Join(os.TempDir(), "li_xiri_amfreg.der")
@@ -77,186 +70,85 @@ func TestEncodeDecodeXIRI(t *testing.T) {
 }
 
 // TestAbsentOptionalChoice verifies that absent (nil) optional CHOICE fields are
-// omitted, not encoded — exercising the bundled li/asn1 nil-safety patch.
+// omitted, not encoded.
 func TestAbsentOptionalChoice(t *testing.T) {
-	ctx := NewContext()
 	reg := sampleRegistration()
 	reg.PEI = nil  // optional, absent
 	reg.GPSI = nil // optional, absent
 
-	der, err := EncodeXIRI(ctx, reg)
-	if err != nil {
-		t.Fatalf("EncodeXIRI with absent optionals: %v", err)
-	}
+	der := assertEncodes(t, reg, "304081050413120f01a237a135810101820101a411810f323632303139383736353433323130a81a810332363282023031830200c8840101850100860500deadbeef")
 	// Absent optionals must shrink the encoding versus the all-present sample.
-	//nolint:errcheck // test
-	full, _ := EncodeXIRI(ctx, sampleRegistration())
+	full := assertEncodes(t, sampleRegistration(), "306381050413120f01a25aa158810101820101a411810f323632303139383736353433323130a610810e3335333432353030303030303031a70f810d34393135313233343536373839a81a810332363282023031830200c8840101850100860500deadbeef")
 	if len(der) >= len(full) {
 		t.Errorf("absent-optional encoding (%d) not smaller than full (%d)", len(der), len(full))
 	}
-
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	r, ok := got.Event.(AMFRegistration)
-	if !ok {
-		t.Fatalf("event decoded as %T", got.Event)
-	}
-	if r.PEI != nil || r.GPSI != nil {
-		t.Errorf("omitted optionals decoded non-nil: PEI=%#v GPSI=%#v", r.PEI, r.GPSI)
-	}
-	// Mandatory fields must still be present and correct.
-	if supi, ok := r.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
-		t.Errorf("SUPI = %#v, want IMSI", r.SUPI)
-	}
 }
 
-func TestDeregistrationRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	dereg := AMFDeregistration{
+func TestDeregistrationEncoding(t *testing.T) {
+	assertEncodes(t, AMFDeregistration{
 		DeregistrationDirection: DirUEInitiated,
 		AccessType:              AccessThreeGPP,
 		SUPI:                    IMSI("262019876543210"),
 		GUTI:                    FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 200, AMFSetID: 1, FiveGTMSI: 42},
-	}
-	der, err := EncodeXIRI(ctx, dereg)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	r, ok := got.Event.(AMFDeregistration)
-	if !ok {
-		t.Fatalf("event decoded as %T, want AMFDeregistration", got.Event)
-	}
-	if r.DeregistrationDirection != DirUEInitiated || r.AccessType != AccessThreeGPP {
-		t.Errorf("enums: dir=%d access=%d", r.DeregistrationDirection, r.AccessType)
-	}
-	if supi, ok := r.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
-		t.Errorf("SUPI = %#v", r.SUPI)
-	}
-	if r.GUTI.MCC != "262" {
-		t.Errorf("GUTI not round-tripped: %+v", r.GUTI)
-	}
+	}, "303c81050413120f01a233a231810102820101a311810f323632303139383736353433323130a716810332363282023031830200c884010185010086012a")
 }
 
-func TestStartOfInterceptionRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	soi := AMFStartOfInterceptionWithRegisteredUE{
+func TestStartOfInterceptionEncoding(t *testing.T) {
+	assertEncodes(t, AMFStartOfInterceptionWithRegisteredUE{
 		RegistrationResult: RegResult3GPPAccess,
 		RegistrationType:   RegTypeInitial,
 		SUPI:               IMSI("262019876543210"),
 		GUTI:               FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 7},
-	}
-	der, err := EncodeXIRI(ctx, soi)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	r, ok := got.Event.(AMFStartOfInterceptionWithRegisteredUE)
-	if !ok {
-		t.Fatalf("event decoded as %T, want AMFStartOfInterceptionWithRegisteredUE", got.Event)
-	}
-	if r.RegistrationResult != RegResult3GPPAccess || r.RegistrationType != RegTypeInitial {
-		t.Errorf("enums: result=%d type=%d", r.RegistrationResult, r.RegistrationType)
-	}
+	}, "303b81050413120f01a232a430810101820101a411810f323632303139383736353433323130a815810332363282023031830101840101850100860107")
 }
 
-// TestEventDiscrimination confirms each event decodes back to its own Go type
-// via the XIRIEvent CHOICE (no cross-talk between record kinds).
+// TestEventDiscrimination confirms each event is carried under its own XIRIEvent
+// alternative (no cross-talk between record kinds): the identifier octets after the
+// event [2] wrapper are the record's tag.
 func TestEventDiscrimination(t *testing.T) {
-	ctx := NewContext()
 	cases := []struct {
 		name  string
 		event any
-		check func(any) bool
+		want  string
 	}{
-		{"registration", sampleRegistration(), func(e any) bool { _, ok := e.(AMFRegistration); return ok }},
-		{"deregistration", AMFDeregistration{DeregistrationDirection: DirNetworkInitiated, AccessType: AccessBoth}, func(e any) bool { _, ok := e.(AMFDeregistration); return ok }},
-		{"startOfInterception", AMFStartOfInterceptionWithRegisteredUE{RegistrationResult: RegResult3GPPAccess, SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFStartOfInterceptionWithRegisteredUE); return ok }},
-		{"smfStartOfInterception", SMFStartOfInterceptionWithEstablishedPDUSession{SUPI: IMSI("1"), PDUSessionID: 5, PDUSessionType: PDUSessionTypeIPv4, UEEndpoint: UEEndpoint(net.ParseIP("10.45.0.2")), DNN: "internet", RequestType: SMRequestExisting}, func(e any) bool { _, ok := e.(SMFStartOfInterceptionWithEstablishedPDUSession); return ok }},
-		{"identifierAssociation", AMFIdentifierAssociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFIdentifierAssociation); return ok }},
-		{"identifierDeassociation", AMFIdentifierDeassociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, func(e any) bool { _, ok := e.(AMFIdentifierDeassociation); return ok }},
+		{"registration", sampleRegistration(), "306381050413120f01a25aa158810101820101a411810f323632303139383736353433323130a610810e3335333432353030303030303031a70f810d34393135313233343536373839a81a810332363282023031830200c8840101850100860500deadbeef"},
+		{"deregistration", AMFDeregistration{DeregistrationDirection: DirNetworkInitiated, AccessType: AccessBoth}, "301181050413120f01a208a206810101820103"},
+		{"startOfInterception", AMFStartOfInterceptionWithRegisteredUE{RegistrationResult: RegResult3GPPAccess, SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, "302a81050413120f01a221a41f810101a403810131a815810332363282023031830100840100850100860100"},
+		{"smfStartOfInterception", SMFStartOfInterceptionWithEstablishedPDUSession{SUPI: IMSI("1"), PDUSessionID: 5, PDUSessionType: PDUSessionTypeIPv4, UEEndpoint: UEEndpoint(net.ParseIP("10.45.0.2")), DNN: "internet", RequestType: SMRequestExisting}, "303081050413120f01a227a925a103810131850105a603810100870101a90681040a2d00028c08696e7465726e65748f0102"},
+		{"identifierAssociation", AMFIdentifierAssociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, "302a81050413120f01a221bf3e1ea103810131a515810332363282023031830100840100850100860100a600"},
+		{"identifierDeassociation", AMFIdentifierDeassociation{SUPI: IMSI("1"), GUTI: FiveGGUTI{MCC: "262", MNC: "01"}}, "302981050413120f01a220bf813a1ca103810131a515810332363282023031830100840100850100860100"},
 	}
 	for _, tc := range cases {
-		der, err := EncodeXIRI(ctx, tc.event)
-		if err != nil {
-			t.Fatalf("%s: encode: %v", tc.name, err)
-		}
-		var got XIRIPayload
-		if _, err := ctx.Decode(der, &got); err != nil {
-			t.Fatalf("%s: decode: %v", tc.name, err)
-		}
-		if !tc.check(got.Event) {
-			t.Errorf("%s: decoded as %T", tc.name, got.Event)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			assertEncodes(t, tc.event, tc.want)
+		})
 	}
 }
 
-// TestIdentifierAssociationRoundTrip round-trips both identifier-association
-// records. Their XIRIEvent tags (62 and 186) exceed 30, so this is also the
-// codec's high-tag-number (long-form) coverage: the identifier octet is
-// context+constructed+0x1f = 0xBF, followed by the base-128 tag continuation.
-func TestIdentifierAssociationRoundTrip(t *testing.T) {
-	ctx := NewContext()
+// TestIdentifierAssociationEncoding covers both identifier-association records. Their
+// XIRIEvent tags (62 and 186) exceed 30, so this is also the high-tag-number
+// (long-form) coverage: the identifier octet is context+constructed+0x1f = 0xBF,
+// followed by the base-128 tag continuation.
+func TestIdentifierAssociationEncoding(t *testing.T) {
 	guti := FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 42}
 
-	assoc := AMFIdentifierAssociation{
+	der := assertEncodes(t, AMFIdentifierAssociation{
 		SUPI: IMSI("262019876543210"),
 		PEI:  IMEI("35342500000001"),
 		GPSI: MSISDN("4915123456789"),
 		GUTI: guti,
-	}
-	der, err := EncodeXIRI(ctx, assoc)
-	if err != nil {
-		t.Fatalf("association encode: %v", err)
-	}
+	}, "305b81050413120f01a252bf3e4fa111810f323632303139383736353433323130a310810e3335333432353030303030303031a40f810d34393135313233343536373839a51581033236328202303183010184010185010086012aa600")
 	// The [62] alternative must appear on the wire in high-tag-number long form:
 	// 0xBF (context|constructed|0x1f) followed by 0x3E (=62 in one octet).
 	if !bytes.Contains(der, []byte{0xBF, 0x3E}) {
 		t.Errorf("association DER missing high-tag-number form for [62]: % x", der)
 	}
-	var g1 XIRIPayload
-	if _, decErr := ctx.Decode(der, &g1); decErr != nil {
-		t.Fatalf("association decode: %v", decErr)
-	}
-	a, ok := g1.Event.(AMFIdentifierAssociation)
-	if !ok {
-		t.Fatalf("event decoded as %T, want AMFIdentifierAssociation", g1.Event)
-	}
-	if supi, isIMSI := a.SUPI.(IMSI); !isIMSI || supi != "262019876543210" {
-		t.Errorf("association SUPI = %#v", a.SUPI)
-	}
-	if a.GUTI != guti {
-		t.Errorf("association GUTI = %+v, want %+v", a.GUTI, guti)
-	}
 
 	// Deassociation: tag 186 = 1×128 + 58, so two continuation octets 0x81 0x3A
 	// after the 0xBF introducer.
-	deassoc := AMFIdentifierDeassociation{SUPI: IMSI("262019876543210"), GUTI: guti}
-	der, err = EncodeXIRI(ctx, deassoc)
-	if err != nil {
-		t.Fatalf("deassociation encode: %v", err)
-	}
+	der = assertEncodes(t, AMFIdentifierDeassociation{SUPI: IMSI("262019876543210"), GUTI: guti}, "303781050413120f01a22ebf813a2aa111810f323632303139383736353433323130a51581033236328202303183010184010185010086012a")
 	if !bytes.Contains(der, []byte{0xBF, 0x81, 0x3A}) {
 		t.Errorf("deassociation DER missing high-tag-number form for [186]: % x", der)
-	}
-	var g2 XIRIPayload
-	if _, err := ctx.Decode(der, &g2); err != nil {
-		t.Fatalf("deassociation decode: %v", err)
-	}
-	d, ok := g2.Event.(AMFIdentifierDeassociation)
-	if !ok {
-		t.Fatalf("event decoded as %T, want AMFIdentifierDeassociation", g2.Event)
-	}
-	if supi, ok := d.SUPI.(IMSI); !ok || supi != "262019876543210" || d.GUTI != guti {
-		t.Errorf("deassociation = %#v guti %+v", d.SUPI, d.GUTI)
 	}
 }
 
@@ -273,6 +165,18 @@ func sampleEstablishment() SMFPDUSessionEstablishment {
 	}
 }
 
+// recordContents is a record's own encoding — its members, without the XIRIPayload
+// and event [2] wrappers around it.
+func recordContents(t *testing.T, emit func(*builder)) []byte {
+	t.Helper()
+	var b builder
+	emit(&b)
+	if b.err != nil {
+		t.Fatalf("emit: %v", b.err)
+	}
+	return b.buf
+}
+
 // TestIdentifierRecordMandatoryTags pins the field tags of the two identifier
 // records against TS 33.128. Both were wrong, and a round-trip through our own
 // codec could not see it: the encoder and decoder agreed with each other.
@@ -286,32 +190,25 @@ func sampleEstablishment() SMFPDUSessionEstablishment {
 // Asserting on the encoded tags is what catches this class; a decode assertion
 // cannot.
 func TestIdentifierRecordMandatoryTags(t *testing.T) {
-	ctx := NewContext()
 	guti := FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 42}
 
-	// Encode the records bare rather than wrapped: XIRIPayload carries its own
-	// event [2], so a tag check over the wrapped bytes cannot tell that apart from
-	// a sUCI [2] inside the record.
-	assoc, err := ctx.Encode(AMFIdentifierAssociation{
+	// The records' own contents rather than the wrapped payload: XIRIPayload carries
+	// its own event [2], so a tag check over the wrapped bytes cannot tell that apart
+	// from a sUCI [2] inside the record.
+	assoc := recordContents(t, AMFIdentifierAssociation{
 		SUPI:     IMSI("262019876543210"),
 		GUTI:     guti,
 		Location: Location{LocationInfo: LocationInfo{CurrentLocation: true}},
-	})
-	if err != nil {
-		t.Fatalf("encode association: %v", err)
-	}
+	}.emit)
 	// location [6] constructed: context|constructed|6 = 0xA6.
 	if !bytes.Contains(assoc, []byte{0xA6}) {
 		t.Errorf("association is missing mandatory location [6]: % x", assoc)
 	}
 
-	deassoc, err := ctx.Encode(AMFIdentifierDeassociation{
+	deassoc := recordContents(t, AMFIdentifierDeassociation{
 		SUPI: IMSI("262019876543210"),
 		GUTI: guti,
-	})
-	if err != nil {
-		t.Fatalf("encode deassociation: %v", err)
-	}
+	}.emit)
 	// gUTI [5] constructed = 0xA5. [2] is sUCI in this record, so the GUTI must
 	// not be emitted there as it once was.
 	if !bytes.Contains(deassoc, []byte{0xA5}) {
@@ -322,121 +219,40 @@ func TestIdentifierRecordMandatoryTags(t *testing.T) {
 	}
 }
 
-func TestSMFEstablishmentRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	der, err := EncodeXIRI(ctx, sampleEstablishment())
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	r, ok := got.Event.(SMFPDUSessionEstablishment)
-	if !ok {
-		t.Fatalf("event decoded as %T, want SMFPDUSessionEstablishment", got.Event)
-	}
-	if r.PDUSessionID != 5 || r.PDUSessionType != PDUSessionTypeIPv4 || r.DNN != "internet" || r.RequestType != SMRequestInitial {
-		t.Errorf("scalars: id=%d type=%d dnn=%q req=%d", r.PDUSessionID, r.PDUSessionType, r.DNN, r.RequestType)
-	}
-	if r.GTPTunnelID.TEID != 3735928559 || !bytes.Equal(r.GTPTunnelID.IPv4Address, []byte{10, 0, 0, 1}) {
-		t.Errorf("FTEID: %+v", r.GTPTunnelID)
-	}
-	if r.SNSSAI.SliceServiceType != 1 || !bytes.Equal(r.SNSSAI.SliceDifferentiator, []byte{0x00, 0x00, 0x7b}) {
-		t.Errorf("SNSSAI: %+v", r.SNSSAI)
-	}
-	if supi, ok := r.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
-		t.Errorf("SUPI: %#v", r.SUPI)
-	}
+func TestSMFEstablishmentEncoding(t *testing.T) {
+	assertEncodes(t, sampleEstablishment(), "304d81050413120f01a244a642a111810f323632303139383736353433323130850105a60d810500deadbeef82040a000001870101a808810101820300007b8c08696e7465726e65748f0101900101")
 }
 
-func TestSMFModificationAndReleaseRoundTrip(t *testing.T) {
-	ctx := NewContext()
-
-	mod := SMFPDUSessionModification{SUPI: IMSI("262019876543210"), RequestType: SMRequestModification, PDUSessionID: 5}
-	der, err := EncodeXIRI(ctx, mod)
-	if err != nil {
-		t.Fatalf("modification encode: %v", err)
-	}
-	var g1 XIRIPayload
-	if _, decErr := ctx.Decode(der, &g1); decErr != nil {
-		t.Fatalf("modification decode: %v", decErr)
-	}
-	if m, ok := g1.Event.(SMFPDUSessionModification); !ok || m.RequestType != SMRequestModification || m.PDUSessionID != 5 {
-		t.Errorf("modification: %#v", g1.Event)
-	}
-
-	rel := SMFPDUSessionRelease{SUPI: IMSI("262019876543210"), PDUSessionID: 5, UplinkVolume: 1024, DownlinkVolume: 8192}
-	der, err = EncodeXIRI(ctx, rel)
-	if err != nil {
-		t.Fatalf("release encode: %v", err)
-	}
-	var g2 XIRIPayload
-	if _, err := ctx.Decode(der, &g2); err != nil {
-		t.Fatalf("release decode: %v", err)
-	}
-	r, ok := g2.Event.(SMFPDUSessionRelease)
-	if !ok || r.PDUSessionID != 5 || r.UplinkVolume != 1024 || r.DownlinkVolume != 8192 {
-		t.Errorf("release: %#v", g2.Event)
-	}
+func TestSMFModificationAndReleaseEncoding(t *testing.T) {
+	assertEncodes(t, SMFPDUSessionModification{
+		SUPI: IMSI("262019876543210"), RequestType: SMRequestModification, PDUSessionID: 5,
+	}, "302481050413120f01a21ba719a111810f3236323031393837363534333231308801058b0105")
+	assertEncodes(t, SMFPDUSessionRelease{
+		SUPI: IMSI("262019876543210"), PDUSessionID: 5, UplinkVolume: 1024, DownlinkVolume: 8192,
+	}, "302981050413120f01a220a81ea111810f3236323031393837363534333231308401058702040088022000")
 }
 
-func TestLocationUpdateRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	lu := AMFLocationUpdate{
+func TestLocationUpdateEncoding(t *testing.T) {
+	assertEncodes(t, AMFLocationUpdate{
 		SUPI: IMSI("262019876543210"),
 		GUTI: FiveGGUTI{MCC: "262", MNC: "01", AMFRegionID: 1, AMFSetID: 1, FiveGTMSI: 9},
-	}
-	der, err := EncodeXIRI(ctx, lu)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	r, ok := got.Event.(AMFLocationUpdate)
-	if !ok {
-		t.Fatalf("event decoded as %T, want AMFLocationUpdate", got.Event)
-	}
-	if supi, ok := r.SUPI.(IMSI); !ok || supi != IMSI("262019876543210") {
-		t.Errorf("SUPI = %#v", r.SUPI)
-	}
-	if r.GUTI.MCC != "262" {
-		t.Errorf("GUTI not round-tripped: %+v", r.GUTI)
-	}
+	}, "303781050413120f01a22ea32ca111810f323632303139383736353433323130a515810332363282023031830101840101850100860109a600")
 }
 
-func TestUnsuccessfulProcedureRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	up := AMFUnsuccessfulProcedure{
+func TestUnsuccessfulProcedureEncoding(t *testing.T) {
+	der := assertEncodes(t, AMFUnsuccessfulProcedure{
 		FailedProcedureType: FailedRegistration,
 		FailureCause:        FiveGMMCause(7),
 		SUPI:                IMSI("262019876543210"),
-	}
-	der, err := EncodeXIRI(ctx, up)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	r, ok := got.Event.(AMFUnsuccessfulProcedure)
-	if !ok {
-		t.Fatalf("event decoded as %T, want AMFUnsuccessfulProcedure", got.Event)
-	}
-	if r.FailedProcedureType != FailedRegistration {
-		t.Errorf("failedProcedureType = %d", r.FailedProcedureType)
-	}
-	if c, ok := r.FailureCause.(FiveGMMCause); !ok || c != 7 {
-		t.Errorf("failureCause = %#v, want FiveGMMCause(7)", r.FailureCause)
+	}, "302681050413120f01a21da51b810101a203810107a411810f323632303139383736353433323130")
+	// failureCause [2] EXPLICIT around fiveGMMCause [1] 7.
+	if !containsTLV(der, "a203810107", nil) {
+		t.Errorf("failureCause is not [2] { [1] 7 }: % x", der)
 	}
 }
 
 // TestMissingMandatoryErrors verifies that a nil MANDATORY field is a loud error,
-// not a silently truncated record (the li/asn1 patch returns an error rather
-// than omitting or panicking).
+// not a silently truncated record.
 func TestMissingMandatoryErrors(t *testing.T) {
 	ctx := NewContext()
 	reg := sampleRegistration()

@@ -4,33 +4,12 @@
 package iri
 
 import (
-	"bytes"
+	"encoding/hex"
 	"testing"
 )
 
 func sampleIdentifiers() UserIdentifiers {
 	return Identifiers(IMSI("262019876543210"), IMEISV("3534250000000151"), MSISDN("4915123456789"))
-}
-
-// supiOf digs the SUPI back out of a decoded UserIdentifiers. It exists to prove
-// the nested CHOICE survives a round trip with its concrete types intact — a
-// decode that returned the right bytes under the wrong Go types would still be
-// wrong at every call site that reads them.
-func supiOf(t *testing.T, u UserIdentifiers) IMSI {
-	t.Helper()
-	for _, id := range u.FiveGS.IDs {
-		arm, ok := id.(SubscriberSUPI)
-		if !ok {
-			continue
-		}
-		imsi, ok := arm.Value.(IMSI)
-		if !ok {
-			t.Fatalf("sUPI arm holds %T, want IMSI", arm.Value)
-		}
-		return imsi
-	}
-	t.Fatalf("no sUPI arm in %#v", u.FiveGS.IDs)
-	return ""
 }
 
 // TestUserIdentifiersNesting is the assertion the whole UserIdentifiers modelling
@@ -40,37 +19,21 @@ func supiOf(t *testing.T, u UserIdentifiers) IMSI {
 // leaves flat would emit one level too few, produce bytes that decode against a
 // laxer reader, and be rejected by the published module.
 func TestUserIdentifiersNesting(t *testing.T) {
-	ctx := NewContext()
-	rec := AMFUEServiceAccept{
+	der := assertEncodes(t, AMFUEServiceAccept{
 		UserIdentifiers:        sampleIdentifiers(),
 		ServiceMessageIdentity: ServiceAcceptIdentity{0x4E},
-	}
-	der, err := EncodeXIRI(ctx, rec)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
+	}, "305081050413120f01a247bf811343a13ca13aa138a111810f323632303139383736353433323130a312821033353334323530303030303030313531a40f810d34393135313233343536373839a20382014e")
 
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	out, ok := got.Event.(AMFUEServiceAccept)
-	if !ok {
-		t.Fatalf("decoded as %T, want AMFUEServiceAccept", got.Event)
-	}
-	if n := len(out.UserIdentifiers.FiveGS.IDs); n != 3 {
-		t.Fatalf("decoded %d identifiers, want 3: %#v", n, out.UserIdentifiers.FiveGS.IDs)
-	}
-	if supi := supiOf(t, out.UserIdentifiers); supi != IMSI("262019876543210") {
-		t.Errorf("SUPI = %q, want 262019876543210", supi)
-	}
-	// Order follows the CHOICE's tag order, so two records for the same subscriber
-	// are byte-comparable.
-	if _, ok := out.UserIdentifiers.FiveGS.IDs[1].(SubscriberPEI); !ok {
-		t.Errorf("identifier 1 is %T, want SubscriberPEI", out.UserIdentifiers.FiveGS.IDs[1])
-	}
-	if _, ok := out.UserIdentifiers.FiveGS.IDs[2].(SubscriberGPSI); !ok {
-		t.Errorf("identifier 2 is %T, want SubscriberGPSI", out.UserIdentifiers.FiveGS.IDs[2])
+	// userIdentifiers [1] { fiveGSSubscriberIDs [1] { fiveGSSubscriberID [1] {
+	//   sUPI [1] { iMSI [1] }, pEI [3] { iMEISV [2] }, gPSI [4] { mSISDN [1] } } } },
+	// in the CHOICE's tag order, so two records for the same subscriber are
+	// byte-comparable.
+	want := "a13c" + "a13a" + "a138" +
+		"a111" + "810f" + hex.EncodeToString([]byte("262019876543210")) +
+		"a312" + "8210" + hex.EncodeToString([]byte("3534250000000151")) +
+		"a40f" + "810d" + hex.EncodeToString([]byte("4915123456789"))
+	if !containsTLV(der, want, nil) {
+		t.Errorf("userIdentifiers is not nested three levels deep in tag order: % x", der)
 	}
 }
 
@@ -88,9 +51,8 @@ func TestIdentifiersSkipsAbsentLeaves(t *testing.T) {
 	}
 }
 
-func TestSMFUnsuccessfulProcedureRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	rec := SMFUnsuccessfulProcedure{
+func TestSMFUnsuccessfulProcedureEncoding(t *testing.T) {
+	der := assertEncodes(t, SMFUnsuccessfulProcedure{
 		FailedProcedureType: SMFFailedPDUSessionEstablishment,
 		FailureCause:        FiveGSMCause(0x1a), // insufficient resources
 		Initiator:           InitiatorNetwork,
@@ -101,78 +63,32 @@ func TestSMFUnsuccessfulProcedureRoundTrip(t *testing.T) {
 		DNN:                 DNN("internet"),
 		RequestType:         SMRequestInitial,
 		AccessType:          AccessThreeGPP,
-	}
-	der, err := EncodeXIRI(ctx, rec)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	out, ok := got.Event.(SMFUnsuccessfulProcedure)
-	if !ok {
-		t.Fatalf("decoded as %T", got.Event)
-	}
-	if out.FailedProcedureType != SMFFailedPDUSessionEstablishment {
-		t.Errorf("failedProcedureType = %d", out.FailedProcedureType)
-	}
-	if out.FailureCause != FiveGSMCause(0x1a) {
-		t.Errorf("failureCause = %d, want 26", out.FailureCause)
-	}
-	if out.Initiator != InitiatorNetwork {
-		t.Errorf("initiator = %d, want network(2)", out.Initiator)
-	}
-	if supi, ok := out.SUPI.(IMSI); !ok || supi != "262019876543210" {
-		t.Errorf("SUPI = %#v", out.SUPI)
+	}, "305f81050413120f01a256aa5481010182011a830102a511810f323632303139383736353433323130a712821033353334323530303030303030313531a80f810d343931353132333435363738398901058c08696e7465726e65748f0101900101")
+	// failedProcedureType [1] 1, failureCause [2] 26, initiator [3] network(2).
+	if !containsTLV(der, "810101"+"82011a"+"830102", nil) {
+		t.Errorf("mandatory members are not [1] 1, [2] 26, [3] 2 in order: % x", der)
 	}
 }
 
 // TestSMFUnsuccessfulProcedureMandatoryOnly: the three mandatory members alone
 // must encode, since that is all some rejection sites know.
 func TestSMFUnsuccessfulProcedureMandatoryOnly(t *testing.T) {
-	ctx := NewContext()
-	rec := SMFUnsuccessfulProcedure{
+	assertEncodes(t, SMFUnsuccessfulProcedure{
 		FailedProcedureType: SMFFailedPDUSessionRelease,
 		FailureCause:        FiveGSMCause(0x2b),
 		Initiator:           InitiatorNetwork,
-	}
-	der, err := EncodeXIRI(ctx, rec)
-	if err != nil {
-		t.Fatalf("EncodeXIRI with mandatory members only: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	out := got.Event.(SMFUnsuccessfulProcedure) //nolint:errcheck // asserted by construction
-	if out.FailedProcedureType != SMFFailedPDUSessionRelease || out.SUPI != nil {
-		t.Errorf("round trip = %+v", out)
-	}
+	}, "301481050413120f01a20baa0981010382012b830102")
 }
 
-func TestAMFUEServiceAcceptRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	rec := AMFUEServiceAccept{
+func TestAMFUEServiceAcceptEncoding(t *testing.T) {
+	der := assertEncodes(t, AMFUEServiceAccept{
 		UserIdentifiers:        sampleIdentifiers(),
 		ServiceMessageIdentity: ServiceAcceptIdentity{0x4E},
 		ServiceType:            []byte{0x01},
-	}
-	der, err := EncodeXIRI(ctx, rec)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	out := got.Event.(AMFUEServiceAccept) //nolint:errcheck // asserted by construction
-	id, ok := out.ServiceMessageIdentity.(ServiceAcceptIdentity)
-	if !ok {
-		t.Fatalf("serviceMessageIdentity = %T, want ServiceAcceptIdentity", out.ServiceMessageIdentity)
-	}
-	if !bytes.Equal(id, []byte{0x4E}) {
-		t.Errorf("serviceMessageIdentity = % x, want 4e", id)
+	}, "305381050413120f01a24abf811346a13ca13aa138a111810f323632303139383736353433323130a312821033353334323530303030303030313531a40f810d34393135313233343536373839a20382014e830101")
+	// serviceMessageIdentity [2] EXPLICIT around serviceAccept [2] 0x4E.
+	if !containsTLV(der, "a20382014e", nil) {
+		t.Errorf("serviceMessageIdentity is not [2] { [2] 4e }: % x", der)
 	}
 }
 
@@ -180,7 +96,6 @@ func TestAMFUEServiceAcceptRoundTrip(t *testing.T) {
 // passes these through without parsing, so a byte the AMF saw must be the byte the
 // MDF sees. A codec that helpfully normalised one would change evidence.
 func TestOpaquePayloadsAreCopiedVerbatim(t *testing.T) {
-	ctx := NewContext()
 	// Deliberately awkward: leading and trailing zero bytes, and a 0x00 run that a
 	// string-oriented codec might truncate.
 	//
@@ -199,49 +114,35 @@ func TestOpaquePayloadsAreCopiedVerbatim(t *testing.T) {
 	target := RANTargetToSourceContainer{0x00, 0xDE, 0xAD, 0x00}
 	source := RANSourceToTargetContainer{0xBE, 0xEF, 0x00, 0x00}
 
+	// Each payload must appear on the wire as its own member's tag and length followed
+	// by exactly the bytes given — nothing normalised, trimmed or re-encoded.
 	t.Run("uEPolicy", func(t *testing.T) {
-		der, err := EncodeXIRI(ctx, AMFUEPolicyTransfer{SUPI: IMSI("262019876543210"), UEPolicy: policy})
-		if err != nil {
-			t.Fatalf("EncodeXIRI: %v", err)
-		}
-		var got XIRIPayload
-		if _, err := ctx.Decode(der, &got); err != nil {
-			t.Fatalf("Decode: %v", err)
-		}
-		out := got.Event.(AMFUEPolicyTransfer) //nolint:errcheck // asserted by construction
-		if !bytes.Equal(out.UEPolicy, policy) {
-			t.Errorf("uEPolicy = % x, want % x", out.UEPolicy, policy)
+		der := assertEncodes(t, AMFUEPolicyTransfer{SUPI: IMSI("262019876543210"), UEPolicy: policy}, "303281050413120f01a229bf811225a111810f323632303139383736353433323130861000ff00007f80000001020304feff007f")
+		if !containsTLV(der, "8610", policy) {
+			t.Errorf("uEPolicy [6] is not carried verbatim: % x", der)
 		}
 	})
 
 	t.Run("positioning payloads", func(t *testing.T) {
-		der, err := EncodeXIRI(ctx, AMFPositioningInfoTransfer{
+		der := assertEncodes(t, AMFPositioningInfoTransfer{
 			SUPI:             IMSI("262019876543210"),
 			NRPPaMessage:     nrppa,
 			LPPMessage:       lpp,
 			LCSCorrelationID: LCSCorrelationID("corr-1"),
-		})
-		if err != nil {
-			t.Fatalf("EncodeXIRI: %v", err)
+		}, "303381050413120f01a22abf6f27a111810f3236323031393837363534333231308605000102ff008703ab00cd8806636f72722d31")
+		if !containsTLV(der, "8605", nrppa) {
+			t.Errorf("nRPPaMessage [6] is not carried verbatim: % x", der)
 		}
-		var got XIRIPayload
-		if _, err := ctx.Decode(der, &got); err != nil {
-			t.Fatalf("Decode: %v", err)
+		if !containsTLV(der, "8703", lpp) {
+			t.Errorf("lPPMessage [7] is not carried verbatim: % x", der)
 		}
-		out := got.Event.(AMFPositioningInfoTransfer) //nolint:errcheck // asserted by construction
-		if !bytes.Equal(out.NRPPaMessage, nrppa) {
-			t.Errorf("nRPPaMessage = % x, want % x", out.NRPPaMessage, nrppa)
-		}
-		if !bytes.Equal(out.LPPMessage, lpp) {
-			t.Errorf("lPPMessage = % x, want % x", out.LPPMessage, lpp)
-		}
-		if out.LCSCorrelationID != "corr-1" {
-			t.Errorf("lcsCorrelationId = %q", out.LCSCorrelationID)
+		if !containsTLV(der, "8806", []byte("corr-1")) {
+			t.Errorf("lcsCorrelationId [8] is not carried verbatim: % x", der)
 		}
 	})
 
 	t.Run("handover containers", func(t *testing.T) {
-		der, err := EncodeXIRI(ctx, AMFRANHandoverRequest{
+		der := assertEncodes(t, AMFRANHandoverRequest{
 			UserIdentifiers:               sampleIdentifiers(),
 			AMFUENGAPID:                   1,
 			RANUENGAPID:                   2,
@@ -250,135 +151,104 @@ func TestOpaquePayloadsAreCopiedVerbatim(t *testing.T) {
 			PDUSessionResourceInformation: PDUSessionResourceInformation{PDUSessionID: 5},
 			TargetToSourceContainer:       target,
 			SourceToTargetContainer:       source,
-		})
-		if err != nil {
-			t.Fatalf("EncodeXIRI: %v", err)
+		}, "306981050413120f01a260bf725da13ca13aa138a111810f323632303139383736353433323130a312821033353334323530303030303030313531a40f810d34393135313233343536373839820101830102840101a503810111a603810105890400dead008b04beef0000")
+		if !containsTLV(der, "8904", target) {
+			t.Errorf("targetToSourceContainer [9] is not carried verbatim: % x", der)
 		}
-		var got XIRIPayload
-		if _, err := ctx.Decode(der, &got); err != nil {
-			t.Fatalf("Decode: %v", err)
+		if !containsTLV(der, "8b04", source) {
+			t.Errorf("sourceToTargetContainer [11] is not carried verbatim: % x", der)
 		}
-		out := got.Event.(AMFRANHandoverRequest) //nolint:errcheck // asserted by construction
-		if !bytes.Equal(out.TargetToSourceContainer, target) {
-			t.Errorf("targetToSourceContainer = % x, want % x", out.TargetToSourceContainer, target)
-		}
-		if !bytes.Equal(out.SourceToTargetContainer, source) {
-			t.Errorf("sourceToTargetContainer = % x, want % x", out.SourceToTargetContainer, source)
-		}
-		if cause, ok := out.HandoverCause.(CauseRadioNetwork); !ok || cause != 17 {
-			t.Errorf("handoverCause = %#v, want CauseRadioNetwork(17)", out.HandoverCause)
+		if !containsTLV(der, "a503810111", nil) {
+			t.Errorf("handoverCause is not [5] { radioNetwork [1] 17 }: % x", der)
 		}
 	})
 }
 
-func TestAMFRANHandoverCommandRoundTrip(t *testing.T) {
-	ctx := NewContext()
-	rec := AMFRANHandoverCommand{
+func TestAMFRANHandoverCommandEncoding(t *testing.T) {
+	der := assertEncodes(t, AMFRANHandoverCommand{
 		UserIdentifiers:         sampleIdentifiers(),
 		AMFUENGAPID:             1099511627775, // the top of the range
 		RANUENGAPID:             4294967295,
 		HandoverType:            HandoverIntra5GS,
 		TargetToSourceContainer: RANTargetToSourceContainer{0x01, 0x02},
-	}
-	der, err := EncodeXIRI(ctx, rec)
-	if err != nil {
-		t.Fatalf("EncodeXIRI: %v", err)
-	}
-	var got XIRIPayload
-	if _, err := ctx.Decode(der, &got); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	out := got.Event.(AMFRANHandoverCommand) //nolint:errcheck // asserted by construction
-	if out.AMFUENGAPID != 1099511627775 || out.RANUENGAPID != 4294967295 {
-		t.Errorf("NGAP ids did not survive: amf=%d ran=%d", out.AMFUENGAPID, out.RANUENGAPID)
-	}
-	if out.HandoverType != HandoverIntra5GS {
-		t.Errorf("handoverType = %d", out.HandoverType)
+	}, "306081050413120f01a257bf7154a13ca13aa138a111810f323632303139383736353433323130a312821033353334323530303030303030313531a40f810d34393135313233343536373839820600ffffffffff830500ffffffff84010185020102")
+	// The tops of both ranges need a leading zero octet to stay positive:
+	// aMFUENGAPID [2] 00 ff ff ff ff ff, rANUENGAPID [3] 00 ff ff ff ff.
+	if !containsTLV(der, "820600ffffffffff"+"830500ffffffff", nil) {
+		t.Errorf("NGAP ids at the top of their ranges are not encoded as expected: % x", der)
 	}
 }
 
-// TestHandoverCauseArms: every cause group must be distinguishable after decode,
-// since the group is half the meaning — "radio network: handover desirable" and
-// "misc: hardware failure" describe very different events.
+// TestHandoverCauseArms: every cause group must be distinguishable on the wire, since
+// the group is half the meaning — "radio network: handover desirable" and "misc:
+// hardware failure" describe very different events.
 func TestHandoverCauseArms(t *testing.T) {
-	ctx := NewContext()
-	arms := []any{
-		CauseRadioNetwork(1), CauseTransport(2), CauseNas(3), CauseProtocol(4), CauseMisc(5),
-	}
-	for _, arm := range arms {
-		rec := AMFRANHandoverRequest{
+	for _, tc := range []struct {
+		arm  any
+		want string // handoverCause [5] EXPLICIT around the arm's own tag
+	}{
+		{CauseRadioNetwork(1), "a503810101"},
+		{CauseTransport(2), "a503820102"},
+		{CauseNas(3), "a503830103"},
+		{CauseProtocol(4), "a503840104"},
+		{CauseMisc(5), "a503850105"},
+	} {
+		der, err := EncodeXIRI(NewContext(), AMFRANHandoverRequest{
 			UserIdentifiers:               sampleIdentifiers(),
 			AMFUENGAPID:                   1,
 			RANUENGAPID:                   2,
 			HandoverType:                  HandoverIntra5GS,
-			HandoverCause:                 arm,
+			HandoverCause:                 tc.arm,
 			PDUSessionResourceInformation: PDUSessionResourceInformation{PDUSessionID: 5},
 			TargetToSourceContainer:       RANTargetToSourceContainer{0x01},
 			SourceToTargetContainer:       RANSourceToTargetContainer{0x02},
-		}
-		der, err := EncodeXIRI(ctx, rec)
+		})
 		if err != nil {
-			t.Fatalf("EncodeXIRI(%T): %v", arm, err)
+			t.Fatalf("EncodeXIRI(%T): %v", tc.arm, err)
 		}
-		var got XIRIPayload
-		if _, err := ctx.Decode(der, &got); err != nil {
-			t.Fatalf("Decode(%T): %v", arm, err)
-		}
-		out := got.Event.(AMFRANHandoverRequest) //nolint:errcheck // asserted by construction
-		if gotArm, wantArm := out.HandoverCause, arm; gotArm != wantArm {
-			t.Errorf("cause arm %T decoded as %T (%v)", wantArm, gotArm, gotArm)
+		if !containsTLV(der, tc.want, nil) {
+			t.Errorf("cause arm %T is not carried as %s: % x", tc.arm, tc.want, der)
 		}
 	}
 }
 
-// TestNewRecordsDiscriminate: each new record must decode back to its own Go type
-// through the XIRIEvent CHOICE. Their tags are 10, 111, 113, 114, 146 and 147 —
-// all but the first use high-tag-number form, which is where a tag typo hides.
+// TestNewRecordsDiscriminate: each new record must be carried under its own
+// XIRIEvent alternative. Their tags are 10, 111, 113, 114, 146 and 147 — all but the
+// first use high-tag-number form, which is where a tag typo hides.
 func TestNewRecordsDiscriminate(t *testing.T) {
-	ctx := NewContext()
 	cases := []struct {
 		name  string
 		event any
-		check func(any) bool
+		want  string
 	}{
 		{"unsuccessfulSMProcedure", SMFUnsuccessfulProcedure{
 			FailedProcedureType: SMFFailedPDUSessionEstablishment, FailureCause: 1, Initiator: InitiatorNetwork,
-		}, func(e any) bool { _, ok := e.(SMFUnsuccessfulProcedure); return ok }},
+		}, "301481050413120f01a20baa09810101820101830102"},
 		{"positioningInfoTransfer", AMFPositioningInfoTransfer{
 			SUPI: IMSI("1"), LCSCorrelationID: "c",
-		}, func(e any) bool { _, ok := e.(AMFPositioningInfoTransfer); return ok }},
+		}, "301481050413120f01a20bbf6f08a103810131880163"},
 		{"handoverCommand", AMFRANHandoverCommand{
 			UserIdentifiers: sampleIdentifiers(), AMFUENGAPID: 1, RANUENGAPID: 2,
 			HandoverType: HandoverIntra5GS, TargetToSourceContainer: RANTargetToSourceContainer{0x01},
-		}, func(e any) bool { _, ok := e.(AMFRANHandoverCommand); return ok }},
+		}, "305681050413120f01a24dbf714aa13ca13aa138a111810f323632303139383736353433323130a312821033353334323530303030303030313531a40f810d34393135313233343536373839820101830102840101850101"},
 		{"handoverRequest", AMFRANHandoverRequest{
 			UserIdentifiers: sampleIdentifiers(), AMFUENGAPID: 1, RANUENGAPID: 2,
 			HandoverType: HandoverIntra5GS, HandoverCause: CauseRadioNetwork(1),
 			PDUSessionResourceInformation: PDUSessionResourceInformation{PDUSessionID: 5},
 			TargetToSourceContainer:       RANTargetToSourceContainer{0x01},
 			SourceToTargetContainer:       RANSourceToTargetContainer{0x02},
-		}, func(e any) bool { _, ok := e.(AMFRANHandoverRequest); return ok }},
+		}, "306381050413120f01a25abf7257a13ca13aa138a111810f323632303139383736353433323130a312821033353334323530303030303030313531a40f810d34393135313233343536373839820101830102840101a503810101a6038101058901018b0102"},
 		{"uePolicyTransfer", AMFUEPolicyTransfer{
 			// Sixteen octets: SIZE(16..65540), which the encoder checks.
 			SUPI: IMSI("1"), UEPolicy: make(UEPolicy, 16),
-		}, func(e any) bool { _, ok := e.(AMFUEPolicyTransfer); return ok }},
+		}, "302481050413120f01a21bbf811217a103810131861000000000000000000000000000000000"},
 		{"ueServiceAccept", AMFUEServiceAccept{
 			UserIdentifiers: sampleIdentifiers(), ServiceMessageIdentity: ServiceAcceptIdentity{0x4E},
-		}, func(e any) bool { _, ok := e.(AMFUEServiceAccept); return ok }},
+		}, "305081050413120f01a247bf811343a13ca13aa138a111810f323632303139383736353433323130a312821033353334323530303030303030313531a40f810d34393135313233343536373839a20382014e"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			der, err := EncodeXIRI(ctx, tc.event)
-			if err != nil {
-				t.Fatalf("encode: %v", err)
-			}
-			var got XIRIPayload
-			if _, err := ctx.Decode(der, &got); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if !tc.check(got.Event) {
-				t.Errorf("decoded as %T", got.Event)
-			}
+			assertEncodes(t, tc.event, tc.want)
 		})
 	}
 }
