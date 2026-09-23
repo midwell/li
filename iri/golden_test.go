@@ -629,7 +629,7 @@ func blankFirst(v reflect.Value, typ reflect.Type, field string) bool {
 
 func encodeGolden(t *testing.T, event any) string {
 	t.Helper()
-	der, err := EncodeXIRI(NewContext(), event)
+	der, err := EncodeXIRI(event)
 	if err != nil {
 		t.Fatalf("EncodeXIRI(%T): %v", event, err)
 	}
@@ -740,12 +740,11 @@ func TestGoldenEncodings(t *testing.T) {
 	}
 }
 
-// registeredRecordCount is the number of alternatives in NewContext's xiriEvent
+// registeredRecordCount is the number of alternatives in emit.go's xiriEvent
 // CHOICE. Adding a record type means adding a golden sample and bumping this.
 //
-// It is a count rather than a walk of the registry because asn1.Context keeps its
-// choice entries unexported, and widening that API to let a test introspect it
-// would be a change to the vendored codec for no runtime benefit.
+// It is a count rather than a walk of the CHOICE because the CHOICE is a type
+// switch, which nothing can enumerate.
 const registeredRecordCount = 17
 
 // TestGoldenCoversEveryRecord checks the golden set against the registry in both
@@ -777,7 +776,7 @@ func TestGoldenCoversEveryRecord(t *testing.T) {
 		t.Errorf("golden fixtures = %d, want %d records × 2 forms", n, registeredRecordCount)
 	}
 	for name, event := range goldenForms() {
-		if _, err := EncodeXIRI(NewContext(), event); err != nil {
+		if _, err := EncodeXIRI(event); err != nil {
 			t.Errorf("%s: sample is not an encodable xiriEvent alternative: %v", name, err)
 		}
 	}

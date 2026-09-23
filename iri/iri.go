@@ -5,11 +5,12 @@
 // Related Information payload carried in an X2 PDU (payload format 3GPP-33.128).
 //
 // The records are defined in the TS33128Payloads ASN.1 module
-// (DEFINITIONS IMPLICIT TAGS), encoded with BER/DER. We hand-write only the
-// subset of records the AMF/SMF POIs actually emit and encode them with the
-// bundled li/asn1 codec (BER + CHOICE; vendored from PromonLogicalis), mirroring SD-Core's house pattern of
-// typed structs + a reflective tag codec (cf. omec ngapType + aper, which are
-// PER and therefore not reusable for 33.128's BER).
+// (DEFINITIONS IMPLICIT TAGS), encoded with DER. We hand-write only the subset of
+// records the AMF/SMF POIs actually emit, as typed structs whose `asn1:"..."` tags
+// record the module's field tags, and encode them with explicit emitters over the
+// standard library's encoding/asn1 (emit.go). The struct tags are declarative:
+// asn1_drift_test.go audits them against the published module, and emit_tags_test.go
+// holds the emitters to them.
 //
 // This is the first vertical slice: the XIRIPayload wrapper and the
 // AMFRegistration event (mandatory fields plus the PEI/GPSI target-identifier
@@ -19,9 +20,6 @@ package iri
 import (
 	"fmt"
 	"net"
-	"reflect"
-
-	"github.com/omec-project/li/asn1"
 )
 
 // xIRIPayloadOID is the fixed RELATIVE-OID identifying an xIRI payload for
@@ -33,7 +31,7 @@ import (
 var xIRIPayloadOID = []byte{0x04, 0x13, 0x12, 0x0F, 0x01}
 
 // Target-identifier leaf types. They are distinct Go types (not bare strings)
-// so the CHOICE codec can tell the alternatives apart by reflect.Type.
+// so the CHOICE emitters can tell the alternatives apart by type.
 type (
 	IMSI   string // NumericString(6..15)
 	NAI    string // UTF8String
@@ -816,87 +814,10 @@ type XIRIPayload struct {
 	Event any    `asn1:"tag:2,explicit,choice:xiriEvent"`
 }
 
-// NewContext returns an asn1 context with the TS 33.128 CHOICE registrations
-// this package needs. Each AddChoice maps Go types to the IMPLICIT context tags
-// used by the corresponding ASN.1 CHOICE alternative.
-func NewContext() *asn1.Context {
-	ctx := asn1.NewContext()
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("supi", []asn1.Choice{
-		{Type: reflect.TypeOf(IMSI("")), Options: "tag:1"},
-		{Type: reflect.TypeOf(NAI("")), Options: "tag:2"},
-	})
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("pei", []asn1.Choice{
-		{Type: reflect.TypeOf(IMEI("")), Options: "tag:1"},
-		{Type: reflect.TypeOf(IMEISV("")), Options: "tag:2"},
-	})
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("gpsi", []asn1.Choice{
-		{Type: reflect.TypeOf(MSISDN("")), Options: "tag:1"},
-		{Type: reflect.TypeOf(NAI("")), Options: "tag:2"},
-	})
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("ueEndpointAddress", []asn1.Choice{
-		{Type: reflect.TypeOf(IPv4Address(nil)), Options: "tag:1"},
-		{Type: reflect.TypeOf(IPv6Address(nil)), Options: "tag:2"},
-		{Type: reflect.TypeOf(MACAddress(nil)), Options: "tag:3"},
-	})
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("amfFailureCause", []asn1.Choice{
-		{Type: reflect.TypeOf(FiveGMMCause(0)), Options: "tag:1"},
-		{Type: reflect.TypeOf(FiveGSMCause(0)), Options: "tag:2"},
-	})
-	// The arms are one-field structs, not the leaf types: each is a CHOICE, and a
-	// context tag on a CHOICE is explicit — see SubscriberSUPI.
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("fiveGSSubscriberID", []asn1.Choice{
-		{Type: reflect.TypeOf(SubscriberSUPI{}), Options: "tag:1"},
-		{Type: reflect.TypeOf(SubscriberPEI{}), Options: "tag:3"},
-		{Type: reflect.TypeOf(SubscriberGPSI{}), Options: "tag:4"},
-	})
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("serviceMessageIdentity", []asn1.Choice{
-		{Type: reflect.TypeOf(ServiceRequestIdentity(nil)), Options: "tag:1"},
-		{Type: reflect.TypeOf(ServiceAcceptIdentity(nil)), Options: "tag:2"},
-	})
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("handoverCause", []asn1.Choice{
-		{Type: reflect.TypeOf(CauseRadioNetwork(0)), Options: "tag:1"},
-		{Type: reflect.TypeOf(CauseTransport(0)), Options: "tag:2"},
-		{Type: reflect.TypeOf(CauseNas(0)), Options: "tag:3"},
-		{Type: reflect.TypeOf(CauseProtocol(0)), Options: "tag:4"},
-		{Type: reflect.TypeOf(CauseMisc(0)), Options: "tag:5"},
-	})
-	//nolint:errcheck // static registration; a malformed entry is caught by this package's tests
-	_ = ctx.AddChoice("xiriEvent", []asn1.Choice{
-		{Type: reflect.TypeOf(AMFRegistration{}), Options: "tag:1"},
-		{Type: reflect.TypeOf(AMFDeregistration{}), Options: "tag:2"},
-		{Type: reflect.TypeOf(AMFLocationUpdate{}), Options: "tag:3"},
-		{Type: reflect.TypeOf(AMFStartOfInterceptionWithRegisteredUE{}), Options: "tag:4"},
-		{Type: reflect.TypeOf(AMFUnsuccessfulProcedure{}), Options: "tag:5"},
-		{Type: reflect.TypeOf(SMFPDUSessionEstablishment{}), Options: "tag:6"},
-		{Type: reflect.TypeOf(SMFPDUSessionModification{}), Options: "tag:7"},
-		{Type: reflect.TypeOf(SMFPDUSessionRelease{}), Options: "tag:8"},
-		{Type: reflect.TypeOf(SMFStartOfInterceptionWithEstablishedPDUSession{}), Options: "tag:9"},
-		{Type: reflect.TypeOf(SMFUnsuccessfulProcedure{}), Options: "tag:10"},
-		// Identifier (de)association carry their real TS 33.128 XIRIEvent tags,
-		// which are > 30 and therefore encode in ASN.1 high-tag-number (long) form.
-		{Type: reflect.TypeOf(AMFIdentifierAssociation{}), Options: "tag:62"},
-		{Type: reflect.TypeOf(AMFPositioningInfoTransfer{}), Options: "tag:111"},
-		{Type: reflect.TypeOf(AMFRANHandoverCommand{}), Options: "tag:113"},
-		{Type: reflect.TypeOf(AMFRANHandoverRequest{}), Options: "tag:114"},
-		{Type: reflect.TypeOf(AMFUEPolicyTransfer{}), Options: "tag:146"},
-		{Type: reflect.TypeOf(AMFUEServiceAccept{}), Options: "tag:147"},
-		{Type: reflect.TypeOf(AMFIdentifierDeassociation{}), Options: "tag:186"},
-	})
-	return ctx
-}
-
 // EncodeXIRI wraps an xIRI event (e.g. AMFRegistration) in an XIRIPayload and
 // returns its DER encoding, suitable as the payload of an X2 PDU with payload
 // format 3GPP-33.128.
-func EncodeXIRI(ctx *asn1.Context, event any) ([]byte, error) {
+func EncodeXIRI(event any) ([]byte, error) {
 	if err := validateEvent(event); err != nil {
 		return nil, err
 	}
@@ -910,7 +831,7 @@ func EncodeXIRI(ctx *asn1.Context, event any) ([]byte, error) {
 		return nil, err
 	}
 
-	return ctx.Encode(XIRIPayload{OID: xIRIPayloadOID, Event: event})
+	return encodePayload(event)
 }
 
 // validateEvent refuses records whose encoding would be schema-valid but false.

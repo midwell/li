@@ -37,7 +37,7 @@ func sampleRegistration() AMFRegistration {
 // receiver while looking healthy from in here.
 func assertEncodes(t *testing.T, event any, want string) []byte {
 	t.Helper()
-	der, err := EncodeXIRI(NewContext(), event)
+	der, err := EncodeXIRI(event)
 	if err != nil {
 		t.Fatalf("EncodeXIRI(%T): %v", event, err)
 	}
@@ -254,11 +254,10 @@ func TestUnsuccessfulProcedureEncoding(t *testing.T) {
 // TestMissingMandatoryErrors verifies that a nil MANDATORY field is a loud error,
 // not a silently truncated record.
 func TestMissingMandatoryErrors(t *testing.T) {
-	ctx := NewContext()
 	reg := sampleRegistration()
 	reg.SUPI = nil // mandatory — must not be silently dropped
 
-	if _, err := EncodeXIRI(ctx, reg); err == nil {
+	if _, err := EncodeXIRI(reg); err == nil {
 		t.Fatal("expected an error encoding a record with a nil mandatory SUPI, got nil")
 	}
 }

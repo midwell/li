@@ -193,7 +193,7 @@ func TestHandoverCauseArms(t *testing.T) {
 		{CauseProtocol(4), "a503840104"},
 		{CauseMisc(5), "a503850105"},
 	} {
-		der, err := EncodeXIRI(NewContext(), AMFRANHandoverRequest{
+		der, err := EncodeXIRI(AMFRANHandoverRequest{
 			UserIdentifiers:               sampleIdentifiers(),
 			AMFUENGAPID:                   1,
 			RANUENGAPID:                   2,

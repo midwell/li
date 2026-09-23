@@ -341,8 +341,8 @@ func TestEveryMandatoryEnumeratedFieldRefusesZero(t *testing.T) {
 // TestNoTypeKeyedGuardRefusesAnOptionalCarrier is the direction that keeps the type-keyed map
 // honest, and the reason the six and the three are two mechanisms rather than one list.
 //
-// validateConstraints runs before ctx.Encode, so it walks the whole record and sees an unset
-// optional member as zero — before the codec would have omitted it. A type in mandatoryEnums
+// validateConstraints runs before the record is encoded, so it walks the whole record and sees
+// an unset optional member as zero — before the encoder would have omitted it. A type in mandatoryEnums
 // therefore refuses zero in *every* record carrying that type, including one where the member
 // is optional and zero is how absence is spelled. `AccessType` is optional in four emitted
 // records and mandatory in one; guarding it by type would refuse those four their absence,
@@ -490,8 +490,6 @@ func TestTheEnumSweepIsNotVacuous(t *testing.T) {
 // a record whose mandatory enumerated field is zero still encodes, and goes out for a receiver
 // to refuse. Group 3 flips these.
 func TestAZeroInEachMandatoryEnumeratedFieldIsRefused(t *testing.T) {
-	ctx := NewContext()
-
 	for _, s := range mandatoryEnumSweep(t) {
 		t.Run(s.key(), func(t *testing.T) {
 			sample := goldenSamples()[s.record]
@@ -507,7 +505,7 @@ func TestAZeroInEachMandatoryEnumeratedFieldIsRefused(t *testing.T) {
 			}
 			f.SetInt(0)
 
-			_, err := EncodeXIRI(ctx, v.Interface())
+			_, err := EncodeXIRI(v.Interface())
 
 			if why, excluded := unguardedMandatoryEnums[s.key()]; excluded {
 				if err != nil {
@@ -547,7 +545,6 @@ func TestAZeroInEachMandatoryEnumeratedFieldIsRefused(t *testing.T) {
 // ENUMERATED numbered from one, unset, must still encode *and* must be absent from the DER —
 // asserted as a strictly shorter encoding, since an omitted member takes its tag with it.
 func TestAnUnsetOptionalEnumeratedFieldStillEncodes(t *testing.T) {
-	ctx := NewContext()
 	enums := enumsNumberedFromOne(t)
 	sequences := sequenceFieldTypes(t)
 
@@ -588,7 +585,7 @@ func TestAnUnsetOptionalEnumeratedFieldStillEncodes(t *testing.T) {
 				}
 				field.SetInt(0)
 
-				der, err := EncodeXIRI(ctx, v.Interface())
+				der, err := EncodeXIRI(v.Interface())
 				if err != nil {
 					t.Fatalf("a record leaving its OPTIONAL %s unset was refused: %v — zero is "+
 						"how an unset optional enumerated member is spelled, and refusing it "+

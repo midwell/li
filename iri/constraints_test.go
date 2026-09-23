@@ -23,8 +23,6 @@ import (
 //
 // One case per kind of restriction: a size, a range, and a length-bounded string.
 func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
-	ctx := NewContext()
-
 	conformantPolicy := make(UEPolicy, 16)
 
 	for _, tc := range []struct {
@@ -268,7 +266,7 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := EncodeXIRI(ctx, tc.event)
+			_, err := EncodeXIRI(tc.event)
 			if err == nil {
 				t.Fatal("a record violating its own definition was encoded: a conformant mediation " +
 					"function discards it, this element believes it delivered, and no fault is " +
@@ -282,7 +280,7 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 	}
 
 	// And a conformant record still encodes: the check must not be a way of emitting nothing.
-	if _, err := EncodeXIRI(ctx, AMFUEPolicyTransfer{
+	if _, err := EncodeXIRI(AMFUEPolicyTransfer{
 		SUPI: IMSI("262019876543210"), UEPolicy: conformantPolicy,
 	}); err != nil {
 		t.Errorf("a conformant record was refused: %v", err)
@@ -298,7 +296,7 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 	// division rather than assuming it: HandoverCause is mandatory in this record, so the
 	// refusal arrives — in the codec's own words about a missing mandatory field, not in the
 	// constraint check's about a value outside an enumeration.
-	_, err := EncodeXIRI(ctx, AMFRANHandoverRequest{
+	_, err := EncodeXIRI(AMFRANHandoverRequest{
 		UserIdentifiers: sampleIdentifiers(),
 		AMFUENGAPID:     1,
 		RANUENGAPID:     2,
@@ -317,7 +315,7 @@ func TestARecordViolatingItsOwnDefinitionIsRefused(t *testing.T) {
 // so zero length is "not present" rather than "present and too short", and treating them the
 // same would make the validation itself the reason no record is delivered.
 func TestAnAbsentOptionalLeafIsNotTooShort(t *testing.T) {
-	if _, err := EncodeXIRI(NewContext(), AMFPositioningInfoTransfer{
+	if _, err := EncodeXIRI(AMFPositioningInfoTransfer{
 		SUPI: IMSI("262019876543210"),
 		// LCSCorrelationID omitted, which is what an element with none does.
 	}); err != nil {

@@ -122,7 +122,6 @@ func TestUEEndpointCarriesMultipleAddresses(t *testing.T) {
 // It encodes cleanly and no receiver rejects it, so nothing downstream would catch
 // this — which is exactly why the refusal lives on the encode path.
 func TestStartOfInterceptionRefusesEmptyEndpoint(t *testing.T) {
-	ctx := NewContext()
 	rec := SMFStartOfInterceptionWithEstablishedPDUSession{
 		SUPI:           IMSI("262019876543210"),
 		PDUSessionID:   5,
@@ -130,7 +129,7 @@ func TestStartOfInterceptionRefusesEmptyEndpoint(t *testing.T) {
 		DNN:            DNN("internet"),
 		RequestType:    SMRequestExisting,
 	}
-	if _, err := EncodeXIRI(ctx, rec); err == nil {
+	if _, err := EncodeXIRI(rec); err == nil {
 		t.Fatal("encoded a start-of-interception record with an empty uEEndpoint; want an error")
 	}
 }
@@ -197,7 +196,6 @@ func TestEndpointIsNotTheTunnelEndpoint(t *testing.T) {
 // record builders share, and enforcing it for only one of the two records leaves
 // it one careless edit from being false again.
 func TestEstablishmentRefusesPresentButEmptyEndpoint(t *testing.T) {
-	ctx := NewContext()
 	base := SMFPDUSessionEstablishment{
 		SUPI:           IMSI("262019876543210"),
 		PDUSessionID:   5,
@@ -208,21 +206,21 @@ func TestEstablishmentRefusesPresentButEmptyEndpoint(t *testing.T) {
 	}
 
 	// nil: the field is optional and absent, which is correct.
-	if _, err := EncodeXIRI(ctx, base); err != nil {
+	if _, err := EncodeXIRI(base); err != nil {
 		t.Fatalf("absent (nil) endpoint must still encode: %v", err)
 	}
 
 	// present but empty: refused.
 	empty := base
 	empty.UEEndpoint = []any{}
-	if _, err := EncodeXIRI(ctx, empty); err == nil {
+	if _, err := EncodeXIRI(empty); err == nil {
 		t.Error("encoded an establishment record with a present but empty uEEndpoint; want a refusal")
 	}
 
 	// populated: encodes.
 	full := base
 	full.UEEndpoint = UEEndpoint(net.ParseIP("10.45.0.2"))
-	if _, err := EncodeXIRI(ctx, full); err != nil {
+	if _, err := EncodeXIRI(full); err != nil {
 		t.Errorf("populated endpoint must encode: %v", err)
 	}
 }
