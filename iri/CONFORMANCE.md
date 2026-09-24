@@ -492,3 +492,20 @@ It cannot see an *implicit* conversion — a function declared to return `iri.Ac
 writes `return 0`, which `DeregistrationScope` deliberately does. The encode-time guard above is
 what covers those, and the two are complementary: one catches an unasserted correspondence, the
 other catches a value the enumeration does not define however it got there.
+
+### 8. `currentLoc` cannot be reported as `false` — OPEN, latent
+
+`LocationInfo.CurrentLocation` models `currentLoc [2] BOOLEAN OPTIONAL` as a plain `bool`, and
+the emitter writes it only when it is `true` (`emit.go`). So a `LocationInfo` saying the location
+it carries is *not* current is not expressible: `false` and absent encode identically. It is the
+same defect class as finding 2, in the field that finding's remedy was not applied to.
+
+It is latent rather than live. The AMF sets `CurrentLocation: true` in every record that carries a
+`Location`, and no record here reports a last-known location, so no delivered record has lost a
+value. It becomes live the day a location that is not current is reported.
+
+The remedy is finding 2's: declare the field as a pointer (`*bool`), which the emitter then writes
+exactly when it is non-nil. Not done in `li v0.10.0`, because that release replaced the encoder and
+was required to change no delivered byte. It is recorded here because the `li-iri-reporting`
+specification requires a field the encoder cannot represent to be recorded as a known defect,
+rather than left as a presence rule that happens to hold for the values seen so far.
